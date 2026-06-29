@@ -1,0 +1,19 @@
+{
+  "name": "agent-team",
+  "version": "0.1.0-alpha",
+  "private": true,
+  "description": "Agent Team Harness CLI core",
+  "author": {
+    "name": "Andrew Guzman"
+  },
+  "bin": {
+    "agent-team": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "license": "UNLICENSED"
+}

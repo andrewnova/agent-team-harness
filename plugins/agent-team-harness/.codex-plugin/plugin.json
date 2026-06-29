@@ -1,0 +1,18 @@
+{
+  "name": "agent-team-harness",
+  "version": "0.1.0-alpha",
+  "description": "Codex skill wrapper for the local Agent Team Harness CLI.",
+  "author": {
+    "name": "Andrew Guzman"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Team Harness",
+    "shortDescription": "Run Codex-led Claude/Codex teammate workflows.",
+    "longDescription": "Provides the Agent Team Harness Codex skill. The plugin is intentionally thin: Codex still operates the repo-local agent-team CLI, which owns canonical state, task routing, Claude channel requests, review gates, merge records, leases, proof artifacts, and final verification.",
+    "developerName": "Andrew Guzman",
+    "category": "Productivity",
+    "capabilities": ["skills"],
+    "defaultPrompt": "Use the Agent Team Harness to plan or run a Codex-led Claude/Codex teammate workflow."
+  }
+}

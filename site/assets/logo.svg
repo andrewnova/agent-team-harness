@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Team Harness logo</title>
+  <desc id="desc">Interlocking code brackets and connected teammate nodes around a central harness mark.</desc>
+  <defs>
+    <linearGradient id="cyan" x1="82" x2="430" y1="92" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6EF7FF"/>
+      <stop offset="1" stop-color="#20B6FF"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="352" x2="436" y1="104" y2="202" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFD166"/>
+      <stop offset="1" stop-color="#FF8A3D"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#101214"/>
+  <path d="M112 161 56 217l56 56" fill="none" stroke="url(#cyan)" stroke-width="35" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m400 161 56 56-56 56" fill="none" stroke="url(#cyan)" stroke-width="35" stroke-linecap="round" stroke-linejoin="round"/>
+  <g filter="url(#soft)">
+    <rect x="154" y="156" width="204" height="204" rx="50" fill="#171B1F" stroke="#E8EEF0" stroke-opacity=".18" stroke-width="4"/>
+    <path d="M214 256h84" stroke="#E8EEF0" stroke-width="30" stroke-linecap="round"/>
+    <path d="M298 256h1" stroke="url(#amber)" stroke-width="30" stroke-linecap="round"/>
+    <circle cx="182" cy="182" r="28" fill="#101214" stroke="#6EF7FF" stroke-width="14"/>
+    <circle cx="330" cy="330" r="28" fill="#101214" stroke="#FFD166" stroke-width="14"/>
+    <path d="M202 202 310 310" stroke="#E8EEF0" stroke-opacity=".36" stroke-width="12" stroke-linecap="round"/>
+  </g>
+  <path d="M176 386h160" stroke="#E8EEF0" stroke-opacity=".18" stroke-width="18" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,26 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = path.resolve(__dirname, "..", "..");
+
+test("public skill keeps Claude work mailbox-first and nonblocking", () => {
+  const skill = fs.readFileSync(
+    path.join(root, "plugins", "agent-team-harness", "skills", "agent-team-harness", "SKILL.md"),
+    "utf8"
+  );
+
+  assert.match(skill, /Hard transport rule/);
+  assert.match(skill, /do not use raw `ask_claude`/);
+  assert.match(skill, /Real work for Claude must be represented in harness state and delivered through mailbox-backed CLI flows/);
+  assert.match(skill, /The daemon exists to connect Codex and Claude through the durable mailbox/);
+});
+
+test("README explains daemon-backed mailbox delegation", () => {
+  const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+
+  assert.match(readme, /The receiver daemon is the bridge/);
+  assert.match(readme, /Do not delegate real Claude work through raw `ask_claude`/);
+  assert.match(readme, /raw live channel is for health checks, smoke tests, and low-level diagnostics only/);
+});

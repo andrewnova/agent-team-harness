@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Agent Team Harness</title>
+    <meta name="description" content="A local CLI for coordinating Codex and Claude Code as coding teammates with durable mailbox communication, task state, review gates, and proof.">
+    <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Agent Team Harness home">
+        <img src="assets/logo.svg" alt="" width="36" height="36">
+        <span>Agent Team Harness</span>
+      </a>
+      <nav aria-label="Primary">
+        <a href="#flow">Flow</a>
+        <a href="#install">Install</a>
+        <a href="#proof">Proof</a>
+        <a class="nav-button" href="https://github.com/andrewnova/agent-team-harness">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Alpha 0.1.0-alpha</p>
+          <h1 id="hero-title">Run Codex and Claude Code like a real agent team.</h1>
+          <p class="lede">
+            A local harness that routes work by strength, keeps communication durable,
+            and requires review plus proof before anything is called done.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#install">Install</a>
+            <a class="button secondary" href="https://github.com/andrewnova/agent-team-harness">View Source</a>
+          </div>
+          <p class="credit">Created and maintained by Andrew Guzman.</p>
+        </div>
+
+        <div class="terminal-card" aria-label="Agent Team Harness terminal preview">
+          <div class="terminal-top">
+            <span></span><span></span><span></span>
+            <strong>agent-team</strong>
+          </div>
+          <pre><code>$ agent-team start --name my-project --daemon
+✓ mailbox receiver active
+✓ managed Claude channel bridge ready
+✓ Claude teammate visible
+✓ Codex proof owner ready
+
+$ agent-team review request T-000001
+→ sent without blocking Codex
+
+$ agent-team verify final
+✓ reviews approved
+✓ browser proof attached
+✓ ready to close out</code></pre>
+        </div>
+      </section>
+
+      <section class="band intro" aria-label="Core promise">
+        <div>
+          <span class="stat">Mailbox first</span>
+          <p>Live channels are useful. Durable state is the truth.</p>
+        </div>
+        <div>
+          <span class="stat">Strength routed</span>
+          <p>Claude handles frontend polish. Codex owns backend, merge, and proof.</p>
+        </div>
+        <div>
+          <span class="stat">Proof gated</span>
+          <p>Done means reviewed, merged, verified, and recorded.</p>
+        </div>
+      </section>
+
+      <section class="section split" id="flow">
+        <div>
+          <p class="eyebrow">How It Works</p>
+          <h2>One harness. Two teammates. One source of truth.</h2>
+          <p>
+            Agent Team Harness keeps goals, tasks, leases, reviews, mailbox messages,
+            browser proof, computer proof, and closeout records in local project state.
+            Models can collaborate without making chat history the system of record.
+          </p>
+        </div>
+        <div class="flow-grid" aria-label="Workflow stages">
+          <article>
+            <span>01</span>
+            <h3>Plan</h3>
+            <p>Codex and Claude both weigh in before tasks are created.</p>
+          </article>
+          <article>
+            <span>02</span>
+            <h3>Route</h3>
+            <p>Frontend work goes to Claude; backend and proof stay with Codex.</p>
+          </article>
+          <article>
+            <span>03</span>
+            <h3>Review</h3>
+            <p>Each model checks the other before merge gates open.</p>
+          </article>
+          <article>
+            <span>04</span>
+            <h3>Verify</h3>
+            <p>Browser, computer-use, and command proof attach to task state.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section proof" id="proof">
+        <p class="eyebrow">Built For Real Work</p>
+        <h2>Designed to avoid the expensive failure mode: two smart models chatting forever.</h2>
+        <div class="proof-list">
+          <div>
+            <h3>Nonblocking Claude work</h3>
+            <p>Codex keeps working while Claude handles frontend implementation, critique, or long-context review.</p>
+          </div>
+          <div>
+            <h3>Semantic acknowledgements</h3>
+            <p>Requests require meaningful replies: what was received, what happens next, and what is blocked.</p>
+          </div>
+          <div>
+            <h3>Closeout reports</h3>
+            <p>Completion can include tasks, approvals, proof artifacts, warnings, screenshots, and self-heal notes.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section install" id="install">
+        <div>
+          <p class="eyebrow">Install</p>
+          <h2>Clone, install, and start from any project.</h2>
+        </div>
+        <pre><code>git clone https://github.com/andrewnova/agent-team-harness.git
+cd agent-team-harness
+./scripts/install-codex.sh
+
+cd /path/to/your/project
+agent-team doctor --fix --target my-project
+agent-team start --name my-project --project-dir "$PWD" --daemon</code></pre>
+      </section>
+    </main>
+
+    <footer>
+      <span>Agent Team Harness</span>
+      <span>Created by Andrew Guzman</span>
+    </footer>
+  </body>
+</html>
