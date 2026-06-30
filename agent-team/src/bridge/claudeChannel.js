@@ -30,7 +30,14 @@ const {
   claudeVersion
 } = require("./claudeChannel/auth");
 const { installBridge } = require("./claudeChannel/install");
-const { createLaunchId, waitForBootAck, waitForLaunchMarker, waitForMcpInitialized, waitForMcpStarted } = require("./claudeChannel/boot");
+const {
+  createLaunchId,
+  startupProofDiagnostics,
+  waitForBootAck,
+  waitForLaunchMarker,
+  waitForMcpInitialized,
+  waitForMcpStarted
+} = require("./claudeChannel/boot");
 const {
   codexSessionIdentity,
   codexTerminalLauncher,
@@ -58,6 +65,18 @@ function launchedIdentityConfidence(discovered, rename, recoveredEndpoint) {
   if (discovered && discovered.ok) return "launched_existing_endpoint";
   if (recoveredEndpoint && recoveredEndpoint.ok) return "recovered_project_endpoint";
   return "launch_unverified";
+}
+
+function compactEndpoint(endpoint) {
+  if (!endpoint || typeof endpoint !== "object") return null;
+  return {
+    target: endpointTarget(endpoint),
+    endpoint_id: endpoint.endpoint_id || endpoint.target || null,
+    display_name: endpoint.display_name || null,
+    project_dir: endpoint.project_dir || null,
+    started_at: endpoint.started_at || null,
+    pid: Number.isInteger(endpoint.pid) ? endpoint.pid : null
+  };
 }
 
 function diagnose(cwd, options = {}) {
@@ -128,9 +147,29 @@ function ensure(cwd, options = {}) {
           thread_ref: identity.token,
           strict_project_reuse: strictSessionIdentity
         }
-      : null
+        : null
   };
-  const persist = (record) => persistEnsure(cwd, { ...baseRecord, ...record });
+  const selectionBase = {
+    transport: "legacy_claude_channel_endpoint_registry",
+    display_name: name,
+    target,
+    project_dir: projectCwd,
+    strict_session_identity: strictSessionIdentity,
+    remembered_target: rememberedTarget || null,
+    allow_cross_project_reuse: Boolean(options.allow_cross_project_reuse),
+    fresh_claude: Boolean(options.fresh_claude)
+  };
+  const persist = (record) => {
+    const { endpoint_selection: endpointSelection, ...rest } = record;
+    return persistEnsure(cwd, {
+      ...baseRecord,
+      ...rest,
+      endpoint_selection: {
+        ...selectionBase,
+        ...(endpointSelection || {})
+      }
+    });
+  };
   const timeoutMs = options.timeout_ms || 45000;
   const pollMs = options.poll_ms || 1000;
   const initialStatus = channelStatus(cli.command, target, projectCwd);
@@ -145,6 +184,12 @@ function ensure(cwd, options = {}) {
       ok: smoke ? smoke.ok : true,
       action: smoke && !smoke.ok ? "reused_smoke_failed" : "reused",
       identity_confidence: rememberedTarget ? "remembered_endpoint_status_reused" : "target_status_reused",
+      endpoint_selection: {
+        strategy: rememberedTarget ? "remembered_target_status" : "target_status",
+        selected_target: initialEndpointTarget || initialParsedTarget || target,
+        selected_endpoint: compactEndpoint(initialEndpoint),
+        matched_display_name: initialEndpoint && initialEndpoint.display_name === name
+      },
       remembered_endpoint: rememberedTarget
         ? { ok: true, target: rememberedTarget, endpoint: initialEndpoint, status: initialStatus }
         : null,
@@ -206,6 +251,21 @@ function ensure(cwd, options = {}) {
           : strictSessionIdentity
             ? "thread_display_name_project_reused"
             : "same_project_endpoint_reused",
+      endpoint_selection: {
+        strategy:
+          reuseSource === "remembered_endpoint_id"
+            ? "remembered_endpoint_id"
+            : strictSessionIdentity
+              ? "thread_display_name_project_endpoint"
+              : "same_project_endpoint",
+        selected_target: finalTarget,
+        selected_endpoint: compactEndpoint(reusableProjectEndpoint.endpoint),
+        matched_display_name: reusableProjectEndpoint.endpoint && reusableProjectEndpoint.endpoint.display_name === name,
+        compatibility_note:
+          strictSessionIdentity && reuseSource !== "remembered_endpoint_id"
+            ? "strict thread identity limited endpoint reuse to matching display name"
+            : null
+      },
       action:
         smoke && !smoke.ok
           ? rename
@@ -241,6 +301,7 @@ function ensure(cwd, options = {}) {
       ok: false,
       action: "missing_claude_cli",
       reason: claude.reason,
+      endpoint_selection: { strategy: "preflight_missing_claude_cli" },
       initial_status: initialStatus,
       workspace_mismatch: initialMismatch,
       skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
@@ -254,6 +315,7 @@ function ensure(cwd, options = {}) {
       ok: false,
       action: "claude_auth_required",
       reason: "Claude Code auth is not logged in or cannot be verified",
+      endpoint_selection: { strategy: "preflight_claude_auth" },
       claude_path: claude.path,
       claude_auth: authStatus,
       auth_help: authHelp(projectCwd, options),
@@ -278,6 +340,7 @@ function ensure(cwd, options = {}) {
       ok: false,
       action: "invalid_launch_mode",
       reason: "launch_mode must be codex-terminal, visible, pty, or background",
+      endpoint_selection: { strategy: "preflight_invalid_launch_mode" },
       initial_status: initialStatus,
       workspace_mismatch: initialMismatch,
       remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
@@ -297,6 +360,7 @@ function ensure(cwd, options = {}) {
       ok: false,
       action: "start_failed",
       claude_path: claude.path,
+      endpoint_selection: { strategy: "launch_failed" },
       start: started,
       background: started.background,
       initial_status: initialStatus,
@@ -385,6 +449,12 @@ function ensure(cwd, options = {}) {
           }
         : null,
       identity_confidence: "fresh_launch_unverified_no_new_endpoint",
+      endpoint_selection: {
+        strategy: "fresh_new_endpoint_required",
+        selected_target: null,
+        selected_endpoint: null,
+        probe: discovered.probe || null
+      },
       launch_id: launchOptions.launch_id,
       launch_mode: started.mode,
       launch_marker: launchMarker,
@@ -403,6 +473,7 @@ function ensure(cwd, options = {}) {
       fresh_launch_probe: discovered.probe || null,
       command: started.command
     };
+    record.startup_proof = startupProofDiagnostics(cwd, launchOptions.launch_id);
     if (launchMarker.ok && !bootAck.ok) record.fallback_packet = createStartupPacket(cwd, { launch_id: launchOptions.launch_id, session: record });
     return persist(record);
   } else {
@@ -446,6 +517,23 @@ function ensure(cwd, options = {}) {
               ? "started_visible_channel_unverified"
             : "started_unreachable",
     target: finalTarget,
+    endpoint_selection: {
+      strategy: discovered && discovered.ok
+        ? options.fresh_claude
+          ? "fresh_new_endpoint"
+          : discovered.is_new
+            ? "launched_new_endpoint"
+            : "launched_existing_endpoint"
+        : recoveredEndpoint && recoveredEndpoint.ok
+          ? strictSessionIdentity
+            ? "post_launch_thread_display_name_project_endpoint"
+            : "post_launch_same_project_endpoint"
+          : "target_after_launch",
+      selected_target: finalTarget,
+      selected_endpoint: compactEndpoint(endpoint),
+      matched_display_name: endpoint && endpoint.display_name === name,
+      probe: discovered && discovered.probe ? discovered.probe : null
+    },
     delivery_ready: deliveryReady,
     visible_loaded: visibleLoaded,
     launch_mode: started.mode,
@@ -453,6 +541,7 @@ function ensure(cwd, options = {}) {
     mcp_start: mcpStart,
     mcp_init: mcpInit,
     boot_ack: bootAck,
+    startup_proof: startupProofDiagnostics(cwd, launchOptions.launch_id),
     claude_path: claude.path,
     channel_path: cli.path,
     start: started,

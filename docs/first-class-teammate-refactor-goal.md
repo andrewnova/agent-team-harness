@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 17 MCP server start proof implemented; next focus is real visible Terminal dogfood and first-party session registry cleanup
+Status: Active refactor charter; Phase 20 endpoint-selection and duplicate startup-proof diagnostics in progress
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -1412,3 +1412,56 @@ Next phase:
 - Sync the installed skill copy.
 - Run focused public/bridge/MCP tests, full `npm test`, and `git diff --check`.
 - Commit the Phase 17-19 visible startup hardening as one coherent checkpoint if verification stays green.
+
+### 2026-06-30 - Phase 20 Endpoint Selection and Duplicate Startup-Proof Diagnostics
+
+What changed:
+
+- `channel ensure` now persists an explicit `endpoint_selection` object in startup/session records.
+- Endpoint selection records identify the transport surface (`legacy_claude_channel_endpoint_registry`), strategy, display name, target, project directory, strict session identity state, remembered target, selected target, selected endpoint, and display-name match status.
+- `channel ensure` now records strategy names such as `remembered_endpoint_id`, `thread_display_name_project_endpoint`, `target_status`, `launched_new_endpoint`, `fresh_new_endpoint`, `fresh_new_endpoint_required`, `post_launch_thread_display_name_project_endpoint`, and `target_after_launch`.
+- Cockpit startup reconciliation now attaches `startup_proof` diagnostics that count durable launch marker, MCP start, MCP init, and boot ACK rows by launch id.
+- Cockpit still selects the latest durable startup proof row for readiness, but now renders duplicate proof rows as `duplicate-proof=...` diagnostics instead of letting duplicates be invisible state noise.
+- `Claude startup:` text now includes `endpoint-selection=<strategy>` and `duplicate-proof=<none|counts>`.
+- README, plugin skill, and public contract tests now document `endpoint_selection`, `startup_proof`, and duplicate-proof diagnostics.
+- Added regression coverage proving remembered endpoint-id reuse and launch/target selector strategies are explicit in bridge results.
+- Strengthened the late boot ACK cockpit regression so stale session history plus later duplicate MCP start/init rows still renders the latest selected proof and reports duplicates.
+
+Why it changed:
+
+- Phase 19 made visible startup state truthful, but the operator still had to infer how a Claude endpoint was chosen and whether duplicate MCP rows mattered.
+- The next simplification should not silently weaken Codex-thread isolation. A blind same-project fallback from strict display-name selection could attach a new Codex thread to an old Claude context, which violates the user requirement that old Codex threads resume old Claude threads while new Codex threads get new Claude chats.
+- The safer production move is to make endpoint selection fully visible first. Any later compatibility fallback must be explicit, named, and opt-in or carefully constrained.
+- Duplicate MCP process rows are real in dogfood, but they should be diagnostics, not readiness ambiguity.
+
+Files touched:
+
+- `agent-team/src/bridge/claudeChannel.js`
+- `agent-team/src/bridge/claudeChannel/boot.js`
+- `agent-team/src/cockpit.js`
+- `agent-team/tests/bridge-review-handoff-reground.test.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/cli-smoke.test.js --test-name-pattern "late Claude boot ACK|startup proof"` from repo root: CLI smoke file ran and 64 tests passed, including duplicate MCP proof diagnostics.
+- `node --test agent-team/tests/bridge-review-handoff-reground.test.js --test-name-pattern "CH-2c|CH-2d|CH-2e|CH-3 channel ensure starts"` from repo root: bridge test file ran and 35 tests passed, including endpoint-selection assertions.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+- `node --test agent-team/tests/mcp-claude-channel.test.js` from repo root: 6 tests passed.
+- `npm test` from `agent-team/`: 130 tests passed.
+- `git diff --check` from repo root: no whitespace errors.
+- `node agent-team/src/cli.js watch --once --no-live-channel` from repo root: live cockpit rendered `endpoint-selection=legacy-unrecorded`, `mcp-start=started`, `mcp=loaded`, `boot-ack=recorded`, and `duplicate-proof=mcp_start:2,mcp_init:2` for the latest pre-Phase-20 visible startup.
+
+Remaining architectural discomfort:
+
+- Endpoint selection is now visible but still uses the legacy endpoint registry for live steering readiness. This is acceptable as compatibility diagnostics for now, but the architecture satisfaction review should not pass until the team deliberately accepts or replaces that layer.
+- There is still no explicit opt-in compatibility fallback for strict display-name misses. That is intentionally not added until the safety contract for new-thread vs old-thread binding is sharper.
+
+Next phase:
+
+- Commit Phase 20 as a coherent checkpoint, then run an architecture satisfaction review pass to decide whether endpoint registry dependency is now an accepted compatibility diagnostic or needs a deeper replacement before marking the Codex goal complete.

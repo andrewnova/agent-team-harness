@@ -272,6 +272,10 @@ test("CH-2c default Claude session name is Codex-thread scoped and avoids unrela
     assert.equal(result.name, expectedName);
     assert.equal(result.session_identity.thread_ref, "019f0fc3-3dd");
     assert.equal(result.session_identity.strict_project_reuse, true);
+    assert.equal(result.endpoint_selection.strategy, "launched_new_endpoint");
+    assert.equal(result.endpoint_selection.strict_session_identity, true);
+    assert.equal(result.endpoint_selection.selected_target, "ep_thread");
+    assert.equal(result.endpoint_selection.matched_display_name, true);
     assert.equal(result.skipped_reuse, null);
     assert.equal(result.background.name, expectedName);
     assert.equal(result.endpoint.display_name, expectedName);
@@ -354,6 +358,10 @@ test("CH-2d channel ensure reuses prior same-thread endpoint id before display-n
     assert.equal(result.target, "ep_remembered");
     assert.equal(result.reuse_source, "remembered_endpoint_id");
     assert.equal(result.identity_confidence, "remembered_endpoint_id_reused");
+    assert.equal(result.endpoint_selection.strategy, "remembered_endpoint_id");
+    assert.equal(result.endpoint_selection.selected_target, "ep_remembered");
+    assert.equal(result.endpoint_selection.strict_session_identity, true);
+    assert.equal(result.endpoint_selection.transport, "legacy_claude_channel_endpoint_registry");
     assert.equal(result.remembered_endpoint.ok, true);
     assert.equal(result.remembered_endpoint.target, "ep_remembered");
   } finally {
@@ -424,6 +432,8 @@ test("CH-2e channel ensure handles empty display-name status before remembered e
     assert.equal(result.target, "ep_remembered");
     assert.equal(result.reuse_source, "remembered_endpoint_id");
     assert.equal(result.identity_confidence, "remembered_endpoint_id_reused");
+    assert.equal(result.endpoint_selection.strategy, "remembered_endpoint_id");
+    assert.equal(result.endpoint_selection.selected_target, "ep_remembered");
   } finally {
     process.env.PATH = previousPath;
     if (previousThread === undefined) delete process.env.CODEX_THREAD_ID;
@@ -472,6 +482,8 @@ test("CH-3 channel ensure starts Claude background session and waits for endpoin
     const result = bridge.ensure(cwd, { name: "codex-thread", timeout_ms: 1000, poll_ms: 10, launch_mode: "background" });
     assert.equal(result.ok, true);
     assert.equal(result.action, "started");
+    assert.equal(result.endpoint_selection.strategy, "target_after_launch");
+    assert.equal(result.endpoint_selection.selected_target, "codex-thread");
     assert.equal(result.background.id, "fake123");
     const session = readJson(paths.channelSessionPath(cwd));
     assert.equal(session.name, "codex-thread");

@@ -27,6 +27,9 @@ test("public skill keeps Claude work mailbox-first and nonblocking", () => {
   assert.match(skill, /launch-scoped server name/);
   assert.match(skill, /--mcp-config/);
   assert.match(skill, /fresh_launch_probe/);
+  assert.match(skill, /endpoint_selection/);
+  assert.match(skill, /startup_proof/);
+  assert.match(skill, /duplicate-proof/);
   assert.match(skill, /Claude startup:/);
   assert.match(skill, /mcp_start/);
   assert.match(skill, /mcp_init/);
@@ -64,6 +67,9 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /launch-scoped server name/);
   assert.match(readme, /--mcp-config/);
   assert.match(readme, /fresh_launch_probe/);
+  assert.match(readme, /endpoint_selection/);
+  assert.match(readme, /startup_proof/);
+  assert.match(readme, /duplicate-proof/);
   assert.match(readme, /Claude startup:/);
   assert.match(readme, /mcp_start/);
   assert.match(readme, /mcp_init/);

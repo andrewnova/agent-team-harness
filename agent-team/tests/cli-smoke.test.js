@@ -2268,6 +2268,13 @@ test("CLI smoke: cockpit reconciles late Claude boot ACK from durable startup lo
       name: "fresh-thread",
       launch_id: launchId,
       launch_mode: "visible",
+      endpoint_selection: {
+        strategy: "fresh_new_endpoint",
+        transport: "legacy_claude_channel_endpoint_registry",
+        strict_session_identity: true,
+        display_name: "fresh-thread",
+        selected_target: "ep_late"
+      },
       launch_marker: {
         ok: true,
         record: {
@@ -2299,6 +2306,37 @@ test("CLI smoke: cockpit reconciles late Claude boot ACK from durable startup lo
       updated_at: "2026-06-30T10:14:21.700Z"
     })}\n`
   );
+  for (const [pid, createdAt] of [
+    [2001, "2026-06-30T10:14:22.000Z"],
+    [2002, "2026-06-30T10:14:22.050Z"]
+  ]) {
+    fs.appendFileSync(
+      paths.channelMcpStartsPath(cwd),
+      `${JSON.stringify({
+        launch_id: launchId,
+        name: "fresh-thread",
+        project_dir: cwd,
+        harness_cwd: cwd,
+        source: "claude-mcp-process-started",
+        pid,
+        created_at: createdAt,
+        event: "mcp_started"
+      })}\n`
+    );
+    fs.appendFileSync(
+      paths.channelMcpInitsPath(cwd),
+      `${JSON.stringify({
+        launch_id: launchId,
+        name: "fresh-thread",
+        project_dir: cwd,
+        harness_cwd: cwd,
+        source: "claude-mcp-initialized",
+        pid,
+        created_at: createdAt.replace("22.", "23."),
+        event: "mcp_initialized"
+      })}\n`
+    );
+  }
   fs.appendFileSync(
     paths.channelBootAcksPath(cwd),
     `${JSON.stringify({
@@ -2315,6 +2353,13 @@ test("CLI smoke: cockpit reconciles late Claude boot ACK from durable startup lo
 
   const cockpit = JSON.parse(run(cwd, ["watch", "--once", "--json", "--no-live-channel"]).stdout);
   assert.equal(cockpit.claude_channel.session.launch_id, launchId);
+  assert.equal(cockpit.claude_channel.session.endpoint_selection.strategy, "fresh_new_endpoint");
+  assert.equal(cockpit.claude_channel.session.mcp_start.ok, true);
+  assert.equal(cockpit.claude_channel.session.mcp_start.record.pid, 2002);
+  assert.equal(cockpit.claude_channel.session.mcp_init.ok, true);
+  assert.equal(cockpit.claude_channel.session.startup_proof.has_duplicates, true);
+  assert.equal(cockpit.claude_channel.session.startup_proof.duplicates.mcp_start, 2);
+  assert.equal(cockpit.claude_channel.session.startup_proof.duplicates.mcp_init, 2);
   assert.equal(cockpit.claude_channel.session.boot_ack.ok, true);
   assert.equal(cockpit.claude_channel.session.boot_ack.record.source, "claude-boot-ack");
   const next = cockpit.next_actions.join("\n");
@@ -2322,7 +2367,9 @@ test("CLI smoke: cockpit reconciles late Claude boot ACK from durable startup lo
   assert.doesNotMatch(next, /Claude boot ACK missing/);
   assert.doesNotMatch(next, /channel startup-packet --launch-id launch_test_late_ack --text/);
   const cockpitText = run(cwd, ["watch", "--once", "--no-live-channel"]).stdout;
-  assert.match(cockpitText, /Claude startup: .*launch-marker=recorded mcp-start=missing mcp=missing boot-ack=recorded/);
+  assert.match(cockpitText, /Claude startup: .*endpoint-selection=fresh_new_endpoint/);
+  assert.match(cockpitText, /Claude startup: .*launch-marker=recorded mcp-start=started mcp=loaded boot-ack=recorded/);
+  assert.match(cockpitText, /duplicate-proof=mcp_start:2,mcp_init:2/);
 });
 
 test("CLI smoke: channel startup-packet renders copy-paste Claude recovery packet", () => {

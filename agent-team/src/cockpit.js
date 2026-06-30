@@ -23,7 +23,8 @@ const {
   latestBootAck,
   latestLaunchMarker,
   latestMcpInitialized,
-  latestMcpStarted
+  latestMcpStarted,
+  startupProofDiagnostics
 } = require("./bridge/claudeChannel/boot");
 
 const ACTIVE_STATUSES = new Set(["planning", "ready", "claimed", "implementing", "review", "merge", "verifying", "handoff", "human", "blocked"]);
@@ -139,7 +140,8 @@ function reconcileStartupProof(cwd, session) {
     launch_marker: reconcileProof(session.launch_marker, latestLaunchMarker(cwd, launchId)),
     mcp_start: reconcileProof(session.mcp_start, latestMcpStarted(cwd, launchId)),
     mcp_init: reconcileProof(session.mcp_init, latestMcpInitialized(cwd, launchId)),
-    boot_ack: reconcileProof(session.boot_ack, latestBootAck(cwd, launchId))
+    boot_ack: reconcileProof(session.boot_ack, latestBootAck(cwd, launchId)),
+    startup_proof: startupProofDiagnostics(cwd, launchId)
   };
 }
 
@@ -169,6 +171,8 @@ function channelSession(cwd) {
     mcp_start: session.mcp_start,
     mcp_init: session.mcp_init,
     boot_ack: session.boot_ack,
+    startup_proof: session.startup_proof,
+    endpoint_selection: session.endpoint_selection,
     fallback_packet: session.fallback_packet,
     session_source: useHistory ? "history_latest" : "session",
     identity_confidence: session.identity_confidence,
@@ -265,13 +269,27 @@ function channelStartupLine(channel) {
   const mcpStart = !launchAttempted ? "n/a" : channel.mcp_start && channel.mcp_start.ok ? "started" : "missing";
   const mcp = !launchAttempted ? "n/a" : channel.mcp_init && channel.mcp_init.ok ? "loaded" : "missing";
   const bootAck = !launchAttempted ? "n/a" : channel.boot_ack && channel.boot_ack.ok ? "recorded" : "missing";
+  const endpointSelection =
+    channel.endpoint_selection && channel.endpoint_selection.strategy
+      ? channel.endpoint_selection.strategy
+      : launchAttempted
+        ? "legacy-unrecorded"
+        : "n/a";
+  const duplicateProof =
+    channel.startup_proof && channel.startup_proof.has_duplicates
+      ? Object.entries(channel.startup_proof.duplicates)
+          .map(([key, count]) => `${key}:${count}`)
+          .join(",")
+      : "none";
   return [
     `source=${channel.session_source || "unknown"}`,
     `confidence=${channel.identity_confidence || "unknown"}`,
+    `endpoint-selection=${endpointSelection}`,
     `launch-marker=${marker}`,
     `mcp-start=${mcpStart}`,
     `mcp=${mcp}`,
     `boot-ack=${bootAck}`,
+    `duplicate-proof=${duplicateProof}`,
     `reuse=${channel.reuse_source || "n/a"}`,
     `remembered=${rememberedEndpointLine(channel.remembered_endpoint)}`,
     startupProbeLine(probe)

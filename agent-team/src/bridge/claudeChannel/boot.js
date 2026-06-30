@@ -123,12 +123,15 @@ function recordMcpStarted(cwd, input = {}) {
   };
 }
 
-function latestByLaunchId(file, launchId) {
+function recordsByLaunchId(file, launchId) {
   if (!launchId) return null;
   return readJsonl(file)
     .filter((row) => row.launch_id === launchId)
-    .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
-    .at(-1) || null;
+    .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+}
+
+function latestByLaunchId(file, launchId) {
+  return recordsByLaunchId(file, launchId)?.at(-1) || null;
 }
 
 function latestLaunchMarker(cwd, launchId) {
@@ -145,6 +148,29 @@ function latestMcpInitialized(cwd, launchId) {
 
 function latestMcpStarted(cwd, launchId) {
   return latestByLaunchId(paths.channelMcpStartsPath(cwd), launchId);
+}
+
+function startupProofDiagnostics(cwd, launchId) {
+  const rows = {
+    launch_marker: recordsByLaunchId(paths.channelLaunchMarkersPath(cwd), launchId) || [],
+    mcp_start: recordsByLaunchId(paths.channelMcpStartsPath(cwd), launchId) || [],
+    mcp_init: recordsByLaunchId(paths.channelMcpInitsPath(cwd), launchId) || [],
+    boot_ack: recordsByLaunchId(paths.channelBootAcksPath(cwd), launchId) || []
+  };
+  const counts = Object.fromEntries(Object.entries(rows).map(([key, value]) => [key, value.length]));
+  const duplicates = Object.fromEntries(Object.entries(counts).filter(([, count]) => count > 1));
+  return {
+    launch_id: launchId,
+    counts,
+    duplicates,
+    has_duplicates: Object.keys(duplicates).length > 0,
+    selected: {
+      launch_marker: rows.launch_marker.at(-1) || null,
+      mcp_start: rows.mcp_start.at(-1) || null,
+      mcp_init: rows.mcp_init.at(-1) || null,
+      boot_ack: rows.boot_ack.at(-1) || null
+    }
+  };
 }
 
 function waitForRecord(readFn, cwd, launchId, timeoutMs = 0, pollMs = 100) {
@@ -184,6 +210,7 @@ module.exports = {
   recordLaunchMarker,
   recordMcpInitialized,
   recordMcpStarted,
+  startupProofDiagnostics,
   waitForBootAck,
   waitForMcpInitialized,
   waitForMcpStarted,
