@@ -110,7 +110,9 @@ agent-team verify final
 
 The mailbox is the durable communication truth. The managed Claude channel bridge is installed by the harness and is useful for startup, health checks, and explicit smoke tests, but normal development coordination should not depend on a synchronous reply window.
 
-The receiver daemon is the bridge that makes Codex and Claude feel connected without blocking either model. It watches mailbox traffic, records receipt ACKs, surfaces semantic ACK/reply requirements, immediately wakes the visible Claude channel for Claude-bound requests when a live endpoint exists, shows check-ins in cockpit, and lets Codex import Claude's answer when it arrives.
+The receiver daemon is the bridge that makes Codex and Claude feel connected without blocking either model. It watches mailbox traffic, records receipt ACKs, surfaces semantic ACK/reply requirements, immediately wakes the visible Claude channel for Claude-bound requests when a live endpoint exists, queues Codex wake payloads for Claude-to-Codex messages, shows check-ins in cockpit, and lets Codex import Claude's answer when it arrives.
+
+For Claude-to-Codex traffic, the daemon writes wake payloads under `.agent-team/comms/codex-wake/` and can invoke `AGENT_TEAM_CODEX_WAKE_COMMAND` with the payload path. The mailbox remains the source of truth; the wake stream is the local real-time delivery adapter for Codex surfaces that can consume it.
 
 Do not delegate real Claude work through raw `ask_claude` or a direct live-channel wait. Planning, implementation, review, refactor, and debugging work should go through mailbox-backed harness commands such as `plan claude`, `review request`, `channel steer`, or `mailbox send --to claude --kind request --reply-required`. The raw live channel is for health checks, smoke tests, low-level diagnostics, and the daemon's short wake-up copy; the mailbox reply remains the completion truth.
 

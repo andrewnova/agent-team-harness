@@ -701,6 +701,74 @@ test("CLI smoke: daemon wakes live Claude when a Claude-bound mailbox request la
   assert.equal(events[0].detail.result_state, "wake_sent_reply_pending");
 });
 
+test("CLI smoke: daemon queues and delivers Codex wake payloads for Claude check-ins", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const payloadPathFile = path.join(cwd, "codex-wake-payload-path.txt");
+  const fakeWake = path.join(binDir, "codex-wake");
+  writeExecutable(fakeWake, [
+    "#!/bin/sh",
+    "printf '%s\\n' \"$1\" > \"$FAKE_PAYLOAD_PATH_FILE\"",
+    "exit 0"
+  ]);
+  const env = {
+    ...process.env,
+    AGENT_TEAM_CODEX_WAKE_COMMAND: fakeWake,
+    FAKE_PAYLOAD_PATH_FILE: payloadPathFile
+  };
+  run(cwd, ["init"], env);
+  const checkin = JSON.parse(
+    run(
+      cwd,
+      [
+        "mailbox",
+        "send",
+        "--from",
+        "claude",
+        "--to",
+        "codex",
+        "--kind",
+        "checkin",
+        "--task",
+        "T-000456",
+        "--subject",
+        "Realtime Codex ping",
+        "--body",
+        "Claude has a useful update while Codex is busy."
+      ],
+      env
+    ).stdout
+  );
+
+  const daemon = JSON.parse(run(cwd, ["daemon", "run", "--once", "--roles", "codex"], env).stdout);
+  assert.equal(daemon.ok, true);
+  assert.equal(daemon.messages.length, 1);
+  assert.equal(daemon.messages[0].id, checkin.message.id);
+  assert.equal(daemon.messages[0].codex_push.required, true);
+  assert.equal(daemon.messages[0].codex_push.attempted, true);
+  assert.equal(daemon.messages[0].codex_push.result_state, "delivered");
+
+  const payloadPath = fs.readFileSync(payloadPathFile, "utf8").trim();
+  const payload = JSON.parse(fs.readFileSync(payloadPath, "utf8"));
+  assert.equal(payload.event, "codex_mailbox_wake");
+  assert.equal(payload.message.id, checkin.message.id);
+  assert.equal(payload.message.to, "codex");
+  assert.match(payload.body_preview, /useful update/);
+
+  const wakeRows = fs
+    .readFileSync(path.join(cwd, ".agent-team", "comms", "codex-wake", "wake.jsonl"), "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line));
+  assert.equal(wakeRows.length, 1);
+  assert.equal(wakeRows[0].message_id, checkin.message.id);
+
+  const events = JSON.parse(run(cwd, ["events", "--type", "daemon.codex_push_attempted"], env).stdout).events;
+  assert.equal(events.length, 1);
+  assert.equal(events[0].detail.message_id, checkin.message.id);
+  assert.equal(events[0].detail.result_state, "delivered");
+});
+
 test("CLI smoke: duplicate deterministic receipt ACK ids do not create cockpit noise", () => {
   const cwd = tempRoot();
   run(cwd, ["init"]);

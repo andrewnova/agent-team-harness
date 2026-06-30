@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const paths = require("./paths");
-const { ensureDir, exists, readJson, writeJson, writeText } = require("./fsutil");
+const { ensureDir, exists, readJson, writeJson, writeText, appendJsonl } = require("./fsutil");
 const state = require("./state");
 const { appendMessage, listMessages, watchInbox, compactMessage } = require("./mailbox");
 const { findCli, parseJsonOutput, shellQuote } = require("./bridge/claudeChannel/utils");
@@ -14,6 +14,7 @@ const RESPONSE_KINDS = new Set(["reply", RECEIPT_ACK_KIND]);
 const ACK_EXEMPT_KINDS = new Set(["heartbeat", ...RESPONSE_KINDS]);
 const LIVE_PUSH_TIMEOUT_MS = 1200;
 const LIVE_PUSH_TRANSPORT_TIMEOUT_MS = 4000;
+const CODEX_WAKE_TIMEOUT_MS = 4000;
 const LIVE_PUSH_SENT_STATES = new Set(["answered", "needs_user", "declined", "wake_sent_reply_pending", "wake_sent"]);
 
 function normalizeRoles(value) {
@@ -65,8 +66,22 @@ function livePushRequired(message, semantic) {
   return Boolean(message && message.to === "claude" && semantic);
 }
 
+function codexPushRequired(message) {
+  return Boolean(
+    message &&
+      message.to === "codex" &&
+      message.from !== "codex" &&
+      message.kind !== RECEIPT_ACK_KIND &&
+      message.kind !== "heartbeat"
+  );
+}
+
 function livePushEnabled(options = {}) {
   return options.live_push !== false && process.env.AGENT_TEAM_DAEMON_LIVE_PUSH !== "0";
+}
+
+function codexPushEnabled(options = {}) {
+  return options.codex_push !== false && process.env.AGENT_TEAM_DAEMON_CODEX_PUSH !== "0";
 }
 
 function safeFileToken(value) {
@@ -75,6 +90,18 @@ function safeFileToken(value) {
 
 function livePushPromptPath(cwd, message) {
   return path.join(paths.rootDir(cwd), "comms", "claude-channel", `wake-${safeFileToken(message.id)}.md`);
+}
+
+function codexWakeDir(cwd) {
+  return path.join(paths.commsDir(cwd), "codex-wake");
+}
+
+function codexWakeLogPath(cwd) {
+  return path.join(codexWakeDir(cwd), "wake.jsonl");
+}
+
+function codexWakePayloadPath(cwd, message) {
+  return path.join(codexWakeDir(cwd), `wake-${safeFileToken(message.id)}.json`);
 }
 
 function readMessageBody(cwd, message) {
@@ -270,6 +297,89 @@ function attemptClaudeLivePush(cwd, runId, message, semantic, options = {}) {
   return detail;
 }
 
+function codexWakePayload(cwd, message, semantic) {
+  return {
+    event: "codex_mailbox_wake",
+    created_at: new Date().toISOString(),
+    cwd,
+    mailbox_path: path.relative(cwd, paths.mailboxPath(cwd)),
+    message: compactMessage(message),
+    semantic_ack_required: semantic,
+    body_preview: readMessageBody(cwd, message).slice(0, 1200)
+  };
+}
+
+function attemptCodexPush(cwd, runId, message, semantic, options = {}) {
+  if (!codexPushRequired(message)) return { required: false };
+  const payloadPath = codexWakePayloadPath(cwd, message);
+  const payload = codexWakePayload(cwd, message, semantic);
+  writeJson(payloadPath, payload);
+  appendJsonl(codexWakeLogPath(cwd), {
+    wake_id: `wake_${message.id}`,
+    created_at: payload.created_at,
+    message_id: message.id,
+    from: message.from,
+    to: message.to,
+    kind: message.kind,
+    task_id: message.task_id,
+    goal_id: message.goal_id,
+    subject: message.subject,
+    payload_path: path.relative(cwd, payloadPath)
+  });
+
+  const command = options.codex_wake_command || process.env.AGENT_TEAM_CODEX_WAKE_COMMAND;
+  const baseDetail = {
+    required: true,
+    message_id: message.id,
+    task_id: message.task_id,
+    goal_id: message.goal_id,
+    payload_path: path.relative(cwd, payloadPath),
+    wake_log_path: path.relative(cwd, codexWakeLogPath(cwd))
+  };
+  if (!codexPushEnabled(options)) {
+    const detail = {
+      ...baseDetail,
+      attempted: false,
+      queued: true,
+      skipped: true,
+      result_state: "queued_push_disabled",
+      reason: "Codex push disabled"
+    };
+    recordDaemonEvent(cwd, runId, "daemon.codex_push_queued", detail);
+    return detail;
+  }
+  if (!command) {
+    const detail = {
+      ...baseDetail,
+      attempted: false,
+      queued: true,
+      result_state: "queued_no_adapter",
+      reason: "no Codex wake adapter configured"
+    };
+    recordDaemonEvent(cwd, runId, "daemon.codex_push_queued", detail);
+    return detail;
+  }
+  const result = spawnSync(command, [payloadPath], {
+    cwd,
+    encoding: "utf8",
+    timeout: options.codex_wake_timeout_ms || CODEX_WAKE_TIMEOUT_MS
+  });
+  const detail = {
+    ...baseDetail,
+    attempted: true,
+    queued: true,
+    command,
+    timeout_ms: options.codex_wake_timeout_ms || CODEX_WAKE_TIMEOUT_MS,
+    result_state: result.status === 0 ? "delivered" : "failed",
+    exit_code: result.status,
+    stdout: (result.stdout || "").trim().slice(0, 800),
+    stderr: (result.stderr || "").trim().slice(0, 800),
+    error: result.error ? result.error.message : undefined
+  };
+  recordDaemonEvent(cwd, runId, "daemon.codex_push_attempted", detail);
+  return detail;
+}
+
 function findReceiptAck(cwd, message) {
   if (!message) return null;
   return (
@@ -374,6 +484,7 @@ function handleMessages(cwd, runId, messages, options = {}) {
     const semantic = semanticAckRequired(message);
     const receiptAck = ensureReceiptAck(cwd, runId, message, semantic);
     const livePush = attemptClaudeLivePush(cwd, runId, message, semantic, options);
+    const codexPush = attemptCodexPush(cwd, runId, message, semantic, options);
     const detail = {
       message_id: message.id,
       from: message.from,
@@ -389,6 +500,7 @@ function handleMessages(cwd, runId, messages, options = {}) {
       semantic_ack_required: semantic,
       semantic_ack_instruction: semantic ? semanticAckInstruction(message) : undefined,
       live_push: livePush.required ? livePush : undefined,
+      codex_push: codexPush.required ? codexPush : undefined,
       task_id: message.task_id,
       goal_id: message.goal_id
     };
@@ -399,7 +511,8 @@ function handleMessages(cwd, runId, messages, options = {}) {
       receipt_ack: receiptAck,
       semantic_ack_required: semantic,
       semantic_ack_instruction: detail.semantic_ack_instruction,
-      live_push: livePush.required ? livePush : undefined
+      live_push: livePush.required ? livePush : undefined,
+      codex_push: codexPush.required ? codexPush : undefined
     });
   }
   if (options.onMessages && handled.length) options.onMessages(handled);
@@ -427,9 +540,11 @@ function daemonStatus(cwd) {
     stale_pid: Boolean(pid_record && !running),
     active_runs,
     session_push: {
-      native_model_ui_push: false,
+      native_model_ui_push: Boolean(process.env.AGENT_TEAM_CODEX_WAKE_COMMAND),
       live_channel_wake: true,
-      reason: "Codex/Claude native chat panes do not expose a stable bidirectional push API; the receiver daemon wakes visible Claude through claude-channel when a Claude-bound mailbox request lands.",
+      codex_wake_adapter: process.env.AGENT_TEAM_CODEX_WAKE_COMMAND || null,
+      codex_wake_stream: path.relative(cwd, codexWakeLogPath(cwd)),
+      reason: "The receiver daemon wakes visible Claude through claude-channel and queues Codex-bound wake payloads for a Codex-side MCP/app adapter.",
       mailbox_push: "durable mailbox is truth; receiver daemon immediately attempts live Claude wake for Claude-bound semantic requests",
       fallback_waiter: "await reply --request-id <id>"
     },
@@ -651,5 +766,7 @@ module.exports = {
   semanticAckRequired,
   semanticAckInstruction,
   processAlive,
-  attemptClaudeLivePush
+  attemptClaudeLivePush,
+  attemptCodexPush,
+  codexPushRequired
 };

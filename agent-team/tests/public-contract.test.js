@@ -15,6 +15,8 @@ test("public skill keeps Claude work mailbox-first and nonblocking", () => {
   assert.match(skill, /do not use raw `ask_claude`/);
   assert.match(skill, /Real work for Claude must be represented in harness state and delivered through mailbox-backed CLI flows/);
   assert.match(skill, /The daemon exists to connect Codex and Claude through the durable mailbox/);
+  assert.match(skill, /Codex wake payloads/);
+  assert.match(skill, /AGENT_TEAM_CODEX_WAKE_COMMAND/);
 });
 
 test("README explains daemon-backed mailbox delegation", () => {
@@ -23,5 +25,7 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /The receiver daemon is the bridge/);
   assert.match(readme, /Do not delegate real Claude work through raw `ask_claude`/);
   assert.match(readme, /immediately wakes the visible Claude channel/);
+  assert.match(readme, /queues Codex wake payloads/);
+  assert.match(readme, /AGENT_TEAM_CODEX_WAKE_COMMAND/);
   assert.match(readme, /short wake-up copy; the mailbox reply remains the completion truth/);
 });
