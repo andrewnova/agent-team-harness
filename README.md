@@ -155,6 +155,10 @@ agent-team channel mcp status --mcp-scope user
 
 This is the migration target for replacing the managed `claude-channel-cli` bridge on the normal path. The daemon now writes the first-party outbox first and uses the legacy bridge as compatibility fallback. Until real visible-Claude dogfood is complete, the legacy bridge remains the supported startup/smoke compatibility path.
 
+The MCP server uses standard stdio newline-delimited JSON-RPC. It waits until Claude sends the MCP `notifications/initialized` lifecycle event before emitting queued Claude Channel notifications, so queued outbox items cannot corrupt the startup handshake.
+
+For clean teammate launches, `--fresh-claude` requires a genuinely new same-project channel endpoint. If no new endpoint appears, the harness reports `fresh_start_no_new_endpoint` instead of silently reusing or renaming an old Claude session.
+
 ## Project Layout
 
 ```text

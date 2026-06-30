@@ -1811,8 +1811,10 @@ test("CLI smoke: channel mcp install registers first-party Claude MCP locally", 
   assert.equal(fs.existsSync(path.join(binDir, "agent-team-claude-mcp")), true);
   assert.equal(installed.setup_mcp.path, path.join(projectDir, ".mcp.json"));
   const config = JSON.parse(fs.readFileSync(path.join(projectDir, ".mcp.json"), "utf8"));
+  assert.equal(config.mcpServers["agent-team-claude"].type, "stdio");
   assert.equal(config.mcpServers["agent-team-claude"].command, installed.wrapper.path);
   assert.deepEqual(config.mcpServers["agent-team-claude"].args, []);
+  assert.deepEqual(config.mcpServers["agent-team-claude"].env, {});
 
   const status = JSON.parse(
     run(cwd, [
@@ -1941,6 +1943,75 @@ test("CLI smoke: start auto-ensures a named Claude side", () => {
   assert.equal(start.claude_channel_startup.action, "started");
   assert.equal(start.claude_channel.name, "codex-thread");
   assert.equal(start.question, "Do you want Planning Mode or Dev Mode?");
+});
+
+test("CLI smoke: fresh Claude start does not reuse or rename an old endpoint", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const launchFile = path.join(cwd, "launched");
+  const oldEndpointJson =
+    "'{\"targets\":[{\"target\":\"ep_old\",\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1}]}'";
+  writeExecutable(path.join(binDir, "claude-channel"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  printf '%s\\n' '{\"target\":\"ep_old\",\"endpoint\":{\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "  exit 0",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    `  printf '%s\\n' ${oldEndpointJson}`,
+    "  exit 0",
+    "fi",
+    "if [ \"$1\" = \"rename\" ]; then",
+    "  echo 'rename should not be called for --fresh-claude old endpoint reuse' >&2",
+    "  exit 12",
+    "fi",
+    "exit 1"
+  ]);
+  writeExecutable(path.join(binDir, "claude"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
+    "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
+    "  exit 0",
+    "fi",
+    "touch \"$FAKE_LAUNCH_FILE\"",
+    "echo 'backgrounded - fake123 - fresh-thread'",
+    "exit 0"
+  ]);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    FAKE_ENDPOINT_PID: String(process.pid),
+    FAKE_LAUNCH_FILE: launchFile
+  };
+  const result = spawnSync(
+    process.execPath,
+    [
+      cli,
+      "start",
+      "--name",
+      "fresh-thread",
+      "--fresh-claude",
+      "--strict-claude",
+      "--timeout-ms",
+      "100",
+      "--poll-ms",
+      "10",
+      "--launch-mode",
+      "background"
+    ],
+    {
+      cwd,
+      env,
+      encoding: "utf8"
+    }
+  );
+  assert.equal(result.status, 1);
+  const start = JSON.parse(result.stdout);
+  assert.equal(fs.existsSync(launchFile), true);
+  assert.equal(start.claude_channel_startup.ok, false);
+  assert.equal(start.claude_channel_startup.action, "fresh_start_no_new_endpoint");
+  assert.equal(start.claude_channel_startup.discovered.reason, "no_new_endpoint_after_fresh_launch");
+  assert.match(start.claude_channel_startup.reason, /no new same-project Claude channel endpoint appeared/);
 });
 
 test("CLI smoke: start can launch Claude from an explicit project directory", () => {

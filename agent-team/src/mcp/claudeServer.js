@@ -9,29 +9,38 @@ function argValue(args, name, fallback = null) {
 }
 
 function encodeFrame(message) {
-  const body = Buffer.from(JSON.stringify(message), "utf8");
-  return Buffer.concat([
-    Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "utf8"),
-    body
-  ]);
+  return Buffer.from(`${JSON.stringify(message)}\n`, "utf8");
 }
 
 function decodeFrames(buffer) {
   const messages = [];
   let remaining = buffer;
   while (true) {
-    const headerEnd = remaining.indexOf("\r\n\r\n");
-    if (headerEnd === -1) break;
-    const header = remaining.slice(0, headerEnd).toString("utf8");
-    const match = header.match(/content-length:\s*(\d+)/i);
-    if (!match) throw new Error("Missing Content-Length header");
-    const length = Number(match[1]);
-    const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + length;
-    if (remaining.length < bodyEnd) break;
-    const body = remaining.slice(bodyStart, bodyEnd).toString("utf8");
-    messages.push(JSON.parse(body));
-    remaining = remaining.slice(bodyEnd);
+    if (!remaining.length) break;
+
+    const text = remaining.toString("utf8");
+    if (/^Content-Length:/i.test(text)) {
+      const headerEnd = remaining.indexOf("\r\n\r\n");
+      if (headerEnd === -1) break;
+      const header = remaining.slice(0, headerEnd).toString("utf8");
+      const match = header.match(/content-length:\s*(\d+)/i);
+      if (!match) throw new Error("Missing Content-Length header");
+      const length = Number(match[1]);
+      const bodyStart = headerEnd + 4;
+      const bodyEnd = bodyStart + length;
+      if (remaining.length < bodyEnd) break;
+      const body = remaining.slice(bodyStart, bodyEnd).toString("utf8");
+      messages.push(JSON.parse(body));
+      remaining = remaining.slice(bodyEnd);
+      continue;
+    }
+
+    const lineEnd = remaining.indexOf("\n");
+    if (lineEnd === -1) break;
+    const line = remaining.slice(0, lineEnd).toString("utf8").trim();
+    remaining = remaining.slice(lineEnd + 1);
+    if (!line) continue;
+    messages.push(JSON.parse(line));
   }
   return { messages, remaining };
 }
@@ -57,7 +66,9 @@ function failure(id, code, message) {
 
 function handleRequest(cwd, message) {
   if (!message || message.jsonrpc !== "2.0") return failure(null, -32600, "Invalid JSON-RPC request");
-  if (message.method === "initialize") return success(message.id, initializeResult());
+  if (message.method === "initialize") {
+    return success(message.id, initializeResult({ protocol_version: message.params?.protocolVersion }));
+  }
   if (message.method === "tools/list") return success(message.id, { tools: toolDefinitions() });
   if (message.method === "tools/call") {
     const params = message.params || {};
@@ -76,14 +87,8 @@ function runServer(options = {}) {
   let buffer = Buffer.alloc(0);
   let outboxWatcher = null;
 
-  const close = () => {
-    input.removeAllListeners("data");
-    input.removeAllListeners("end");
-    if (outboxWatcher) outboxWatcher.close();
-    outboxWatcher = null;
-  };
-
-  if (watchOutbox) {
+  const startOutboxWatcher = () => {
+    if (!watchOutbox || outboxWatcher) return;
     outboxWatcher = watchChannelOutbox(
       cwd,
       (notification) => {
@@ -94,7 +99,14 @@ function runServer(options = {}) {
         interval_ms: Number(argValue(args, "--outbox-interval-ms", "1000")) || 1000
       }
     );
-  }
+  };
+
+  const close = () => {
+    input.removeAllListeners("data");
+    input.removeAllListeners("end");
+    if (outboxWatcher) outboxWatcher.close();
+    outboxWatcher = null;
+  };
 
   input.on("data", (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
@@ -109,6 +121,13 @@ function runServer(options = {}) {
     buffer = parsed.remaining;
     for (const message of parsed.messages) {
       try {
+        if (message?.method === "notifications/initialized") {
+          startOutboxWatcher();
+          continue;
+        }
+        if (!Object.prototype.hasOwnProperty.call(message, "id")) {
+          continue;
+        }
         output.write(encodeFrame(handleRequest(cwd, message)));
       } catch (error) {
         output.write(encodeFrame(failure(message.id, -32000, error.message)));

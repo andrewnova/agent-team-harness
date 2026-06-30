@@ -663,3 +663,55 @@ Remaining architectural discomfort:
 Next phase:
 
 - Run or capture a real visible-Claude dogfood proof for `agent-team-claude-mcp`, then convert the remaining cockpit receipt timeline and Codex wake adapter gaps into the next implementation phase.
+
+### 2026-06-30 - Phase 5 Real MCP Protocol Fix And Honest Fresh Launch Semantics
+
+What changed:
+
+- Switched `agent-team-claude-mcp` stdio transport to standard newline-delimited JSON-RPC instead of private `Content-Length` frames.
+- Kept backwards-compatible frame decoding for existing fake tests while making emitted server responses compatible with Claude Code's real MCP runner.
+- Delayed first-party Claude Channel outbox watching until Claude sends MCP `notifications/initialized`, so queued channel notifications cannot appear before the MCP handshake completes.
+- Ignored client notifications without replying, and echoed the client's requested MCP protocol version in `initialize`.
+- Normalized Claude MCP config entries to Claude's native shape: `type: "stdio"`, `command`, `args`, and `env`.
+- Tightened MCP install idempotence so stale config missing `type` or `env` is repaired instead of treated as already configured.
+- Fixed `--fresh-claude` startup discovery: a fresh launch now requires a genuinely new same-project endpoint. If no new endpoint appears, startup reports `fresh_start_no_new_endpoint` and does not reuse or rename an old session.
+- Added regression tests for the real protocol/lifecycle failure and the fresh-launch false-positive failure.
+- Updated the README first-party MCP section with the stdio framing and fresh endpoint invariants.
+
+Why it changed:
+
+- Real dogfood disproved the test-only protocol: `claude mcp get agent-team-claude` could not connect while the tests were green, because the server spoke a private frame format instead of MCP stdio JSON lines.
+- A queued outbox watcher at process startup risked corrupting MCP initialization by emitting channel notifications too early.
+- The visible launch dogfood exposed a second false confidence bug: `--fresh-claude` launched a Terminal tab but then accepted and renamed an old endpoint, which violates the user's hard rule that visible Claude attach failures must not be hidden.
+
+Files touched:
+
+- `agent-team/src/mcp/claudeServer.js`
+- `agent-team/src/mcp/claudeInstall.js`
+- `agent-team/src/bridge/claudeChannel/status.js`
+- `agent-team/src/bridge/claudeChannel.js`
+- `agent-team/tests/mcp-claude-channel.test.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `README.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test tests/mcp-claude-channel.test.js` from `agent-team/`: 6 tests passed.
+- Direct stdio JSON-line smoke against `/Users/andrewguzman/.local/bin/agent-team-claude-mcp`: initialize and tools/list returned successfully.
+- `node agent-team/src/cli.js channel mcp install --mcp-scope user`: rewrote `/Users/andrewguzman/.claude.json` with the normalized `stdio` MCP entry.
+- `node agent-team/src/cli.js channel mcp status --mcp-scope user`: `ok: true`, wrapper exists, config matches expected entry.
+- `claude mcp get agent-team-claude` outside sandbox: `Status: Connected`.
+- `node --test tests/cli-smoke.test.js --test-name-pattern "fresh Claude|channel mcp|start auto|explicit project|cockpit reports loaded"` from `agent-team/`: 55 tests passed.
+- Dogfood mailbox ping `msg_mr0d0fd8_4559ef32` was queued through durable mailbox and cockpit showed daemon receipt plus first-party Claude MCP outbox state.
+
+Remaining architectural discomfort:
+
+- True visible-Claude dogfood is still not complete: a fresh visible launch did not produce a new channel endpoint in the observed run, and the fixed harness now correctly treats that as `fresh_start_no_new_endpoint` instead of success.
+- The legacy `claude-channel-cli` endpoint layer is still involved in visible session discovery and startup proof; the first-party MCP path is connected, but visible session identity still depends on the legacy endpoint registry.
+- Cockpit still shows counts rather than the full per-message human receipt timeline.
+- Codex wake is still queued-payload plus optional command; Track 2 needs a first-party Codex MCP/wake adapter.
+
+Next phase:
+
+- Continue Track 2 with a first-party Codex MCP/wake adapter scaffold, then tighten visible Claude launch/session identity so the first-party MCP path plus endpoint discovery can prove a real fresh visible teammate without relying on endpoint-name luck.

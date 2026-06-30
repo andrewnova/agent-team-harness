@@ -244,7 +244,9 @@ function ensure(cwd, options = {}) {
       skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null
     });
   }
-  const discovered = waitForStartedEndpoint(cli.command, projectCwd, beforeList, timeoutMs, pollMs);
+  const discovered = waitForStartedEndpoint(cli.command, projectCwd, beforeList, timeoutMs, pollMs, {
+    require_new: Boolean(options.fresh_claude)
+  });
   let rename = null;
   let finalStatus = null;
   let endpoint = discovered.ok ? discovered.endpoint : null;
@@ -277,6 +279,23 @@ function ensure(cwd, options = {}) {
         ? discovered.status
         : waitForReachable(cli.command, discovered.target, projectCwd, timeoutMs, pollMs);
     finalTarget = discovered.target;
+  } else if (options.fresh_claude) {
+    return persist({
+      ok: false,
+      action: "fresh_start_no_new_endpoint",
+      reason: "Claude launch command completed, but no new same-project Claude channel endpoint appeared. Existing endpoints were intentionally not reused because --fresh-claude was requested.",
+      launch_mode: started.mode,
+      claude_path: claude.path,
+      channel_path: cli.path,
+      start: started,
+      background: started.background,
+      initial_status: initialStatus,
+      workspace_mismatch: initialMismatch,
+      skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
+      before_list: beforeList,
+      discovered,
+      command: started.command
+    });
   } else {
     recoveredEndpoint = findReachableProjectEndpoint(
       cli.command,

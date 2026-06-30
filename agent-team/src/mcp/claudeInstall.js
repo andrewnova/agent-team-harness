@@ -31,16 +31,20 @@ function readConfig(file) {
 
 function serverConfig(wrapperPath) {
   return {
+    type: "stdio",
     command: wrapperPath,
-    args: []
+    args: [],
+    env: {}
   };
 }
 
 function sameServerConfig(actual, expected) {
   return Boolean(
     actual &&
+      actual.type === expected.type &&
       actual.command === expected.command &&
-      JSON.stringify(actual.args || []) === JSON.stringify(expected.args || [])
+      JSON.stringify(actual.args || []) === JSON.stringify(expected.args || []) &&
+      JSON.stringify(actual.env) === JSON.stringify(expected.env)
   );
 }
 

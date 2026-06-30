@@ -164,7 +164,7 @@ function waitForReachable(cliCommand, target, cwd, timeoutMs, pollMs) {
   return latest;
 }
 
-function waitForStartedEndpoint(cliCommand, cwd, beforeList, timeoutMs, pollMs) {
+function waitForStartedEndpoint(cliCommand, cwd, beforeList, timeoutMs, pollMs, options = {}) {
   if (!beforeList || !beforeList.ok) {
     return { ok: false, reason: "list_unavailable", list: beforeList };
   }
@@ -176,7 +176,9 @@ function waitForStartedEndpoint(cliCommand, cwd, beforeList, timeoutMs, pollMs) 
     latestList = listTargets(cliCommand, cwd);
     const projectTargets = targetsFromList(latestList).filter((endpoint) => sameProject(endpoint, cwd)).sort(newestFirst);
     const newTargets = projectTargets.filter((endpoint) => !beforeIds.has(endpointTarget(endpoint)));
-    const candidates = [...newTargets, ...projectTargets.filter((endpoint) => beforeIds.has(endpointTarget(endpoint)))];
+    const candidates = options.require_new
+      ? newTargets
+      : [...newTargets, ...projectTargets.filter((endpoint) => beforeIds.has(endpointTarget(endpoint)))];
     for (const endpoint of candidates) {
       const target = endpointTarget(endpoint);
       if (!target) continue;
@@ -195,7 +197,12 @@ function waitForStartedEndpoint(cliCommand, cwd, beforeList, timeoutMs, pollMs) 
     if (Date.now() >= deadline) break;
     sleepMs(Math.min(pollMs, Math.max(1, deadline - Date.now())));
   } while (Date.now() < deadline);
-  return { ok: false, status: latestStatus, list: latestList };
+  return {
+    ok: false,
+    reason: options.require_new ? "no_new_endpoint_after_fresh_launch" : "no_reachable_endpoint_after_launch",
+    status: latestStatus,
+    list: latestList
+  };
 }
 
 function findReachableProjectEndpoint(cliCommand, cwd, listResult, options = {}) {

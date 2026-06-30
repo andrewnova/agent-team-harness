@@ -185,7 +185,7 @@ test("Claude MCP stdio server initializes, lists tools, and writes mailbox messa
   assert.equal(loadMessage(cwd, checkins[0].id, { include_body: true }).body, "test 123 from Claude");
 });
 
-test("Claude MCP stdio server emits queued Agent Team channel notifications", () => {
+test("Claude MCP stdio server waits for initialized before emitting queued Agent Team channel notifications", () => {
   const cwd = tempRoot();
   const server = path.join(__dirname, "..", "src", "mcp", "claudeServer.js");
   const message = appendMessage(cwd, {
@@ -197,8 +197,21 @@ test("Claude MCP stdio server emits queued Agent Team channel notifications", ()
   }).message;
   queueChannelNotification(cwd, message);
 
-  const result = spawnSync(process.execPath, [server, "--cwd", cwd], {
+  const initializeOnly = spawnSync(process.execPath, [server, "--cwd", cwd], {
     input: encodeFrame({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+    encoding: "buffer"
+  });
+  assert.equal(initializeOnly.status, 0, initializeOnly.stderr.toString("utf8"));
+  const initializedOnlyDecoded = decodeFrames(initializeOnly.stdout);
+  assert.equal(initializedOnlyDecoded.messages.length, 1);
+  assert.equal(initializedOnlyDecoded.messages[0].id, 1);
+  assert.equal(listDeliveredNotifications(cwd).length, 0);
+
+  const result = spawnSync(process.execPath, [server, "--cwd", cwd], {
+    input: Buffer.concat([
+      encodeFrame({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } }),
+      encodeFrame({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })
+    ]),
     encoding: "buffer"
   });
   assert.equal(result.status, 0, result.stderr.toString("utf8"));
@@ -207,6 +220,7 @@ test("Claude MCP stdio server emits queued Agent Team channel notifications", ()
   const initialize = decoded.messages.find((row) => row.id === 1);
   assert.ok(notification, "expected queued Claude channel notification");
   assert.ok(initialize, "expected initialize response");
+  assert.equal(initialize.result.protocolVersion, "2024-11-05");
   assert.equal(notification.params.meta.mailbox_message_id, message.id);
   assert.match(notification.params.content, /hello visible Claude/);
   assert.equal(listDeliveredNotifications(cwd).length, 1);
