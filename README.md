@@ -45,8 +45,9 @@ The installer:
 - installs an `agent-team` wrapper into `~/.local/bin`,
 - installs the Codex skill into `${CODEX_HOME:-~/.codex}/skills/agent-team-harness`,
 - installs pinned `claude-channel-cli@0.3.0` into `~/.local/share/agent-team`,
-- writes `claude-channel` and `claude-channel-server` wrappers into `~/.local/bin`,
-- attempts user-scope Claude MCP registration so the bridge works from any project,
+- writes `claude-channel`, `claude-channel-server`, and `agent-team-claude-mcp` wrappers into `~/.local/bin`,
+- registers the first-party `agent-team-claude` MCP server in Claude Code config,
+- attempts legacy Claude channel MCP registration so the compatibility bridge works from any project,
 - validates the bundled plugin manifest,
 - runs the Node test suite.
 
@@ -63,6 +64,7 @@ Offline or minimal install:
 ```bash
 ./scripts/install-codex.sh --skip-channel
 agent-team channel install
+agent-team channel mcp install
 ```
 
 ## Quickstart
@@ -116,7 +118,7 @@ The receiver daemon is the bridge that makes Codex and Claude feel connected wit
 
 For Claude-to-Codex traffic, the daemon writes wake payloads under `.agent-team/comms/codex-wake/` and can invoke `AGENT_TEAM_CODEX_WAKE_COMMAND` with the payload path. The mailbox remains the source of truth; the wake stream is the local real-time delivery adapter for Codex surfaces that can consume it.
 
-`agent-team cockpit` and `agent-team watch` show Codex wake totals, delivered counts, missing-adapter queues, and the wake stream path so operators can see whether Claude-to-Codex messages are landing in real time.
+`agent-team cockpit` and `agent-team watch` show Claude MCP outbox totals, MCP-emitted counts, legacy fallback counts, Codex wake totals, missing-adapter queues, and the wake stream path so operators can see whether teammate messages are moving in real time.
 
 Do not delegate real Claude work through raw `ask_claude` or a direct live-channel wait. Planning, implementation, review, refactor, and debugging work should go through mailbox-backed harness commands such as `plan claude`, `review request`, `channel steer`, or `mailbox send --to claude --kind request --reply-required`. The raw live channel is for health checks, smoke tests, low-level diagnostics, and the daemon's short wake-up copy; the mailbox reply remains the completion truth.
 
@@ -142,9 +144,16 @@ agent-team review import T-000001 --request-id req_...
 
 ## First-Party Claude MCP Channel
 
-The repo now includes an experimental first-party Claude MCP server at `agent-team-claude-mcp`. It declares the Agent Team Claude Channel, watches `.agent-team/comms/claude-mcp/outbox.jsonl`, emits queued `notifications/claude/channel` wake-ups, exposes mailbox-backed tools for ACKs, replies, check-ins, status, and task opening, and writes Claude responses through the same durable mailbox as the CLI.
+The repo includes an experimental first-party Claude MCP server at `agent-team-claude-mcp`. It declares the Agent Team Claude Channel, watches `.agent-team/comms/claude-mcp/outbox.jsonl`, emits queued `notifications/claude/channel` wake-ups, exposes mailbox-backed tools for ACKs, replies, check-ins, status, and task opening, and writes Claude responses through the same durable mailbox as the CLI.
 
-This is the migration target for replacing the managed `claude-channel-cli` bridge on the normal path. The daemon now writes the first-party outbox first and uses the legacy bridge as compatibility fallback. Until installer/registration and real visible-Claude dogfood are complete, the legacy bridge remains the supported live startup/smoke path.
+Install or inspect the first-party Claude MCP registration directly:
+
+```bash
+agent-team channel mcp install --mcp-scope user
+agent-team channel mcp status --mcp-scope user
+```
+
+This is the migration target for replacing the managed `claude-channel-cli` bridge on the normal path. The daemon now writes the first-party outbox first and uses the legacy bridge as compatibility fallback. Until real visible-Claude dogfood is complete, the legacy bridge remains the supported startup/smoke compatibility path.
 
 ## Project Layout
 

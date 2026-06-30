@@ -6,6 +6,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const { tempRoot, backendTaskInput, frontendTaskInput, frontendContract, writeExecutable } = require("./helpers");
 const { processAlive, clearDaemonPidRecord } = require("../src/daemon");
 const paths = require("../src/paths");
+const { deliverQueuedNotifications } = require("../src/mcp/claudeChannel");
 
 const cli = path.join(__dirname, "..", "src", "cli.js");
 
@@ -830,7 +831,7 @@ test("CLI smoke: daemon live-wakes visible Claude for non-heartbeat notify messa
     .map((line) => JSON.parse(line));
   assert.equal(mcpRows.length, 1);
   assert.equal(mcpRows[0].message_id, notify.message.id);
-  assert.match(mcpRows[0].notification.params.content[0].text, /hi/);
+  assert.match(mcpRows[0].notification.params.content, /hi/);
 });
 
 test("CLI smoke: daemon queues first-party Claude MCP notifications without legacy channel session", () => {
@@ -869,6 +870,49 @@ test("CLI smoke: daemon queues first-party Claude MCP notifications without lega
     .map((line) => JSON.parse(line));
   assert.equal(mcpRows.length, 1);
   assert.equal(mcpRows[0].message_id, notify.message.id);
+});
+
+test("CLI smoke: cockpit renders first-party Claude MCP outbox state", () => {
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  const notify = JSON.parse(
+    run(cwd, [
+      "mailbox",
+      "send",
+      "--from",
+      "codex",
+      "--to",
+      "claude",
+      "--kind",
+      "notify",
+      "--subject",
+      "Visible first-party wake",
+      "--body",
+      "show this in the MCP outbox"
+    ]).stdout
+  );
+  run(cwd, ["daemon", "run", "--once", "--roles", "claude"], {
+    ...process.env,
+    AGENT_TEAM_DAEMON_LEGACY_LIVE_PUSH: "0"
+  });
+
+  const queued = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"]).stdout);
+  assert.equal(queued.daemon.claude_mcp.queued_total, 1);
+  assert.equal(queued.daemon.claude_mcp.waiting_for_mcp_server, 1);
+  assert.equal(queued.daemon.claude_mcp.mcp_emitted, 0);
+  assert.equal(queued.daemon.claude_mcp.recent[0].message_id, notify.message.id);
+  assert.equal(queued.daemon.claude_mcp.recent[0].state, "queued_for_mcp_server");
+  let cockpitText = run(cwd, ["cockpit", "--no-live-channel"]).stdout;
+  assert.match(cockpitText, /Claude MCP: queued=1 waiting=1 mcp-emitted=0/);
+  assert.match(cockpitText, /## Claude MCP Outbox/);
+
+  deliverQueuedNotifications(cwd, () => {});
+  const emitted = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"]).stdout);
+  assert.equal(emitted.daemon.claude_mcp.waiting_for_mcp_server, 0);
+  assert.equal(emitted.daemon.claude_mcp.mcp_emitted, 1);
+  assert.equal(emitted.daemon.claude_mcp.recent[0].state, "mcp_emitted");
+  cockpitText = run(cwd, ["cockpit", "--no-live-channel"]).stdout;
+  assert.match(cockpitText, /Claude MCP: queued=1 waiting=0 mcp-emitted=1/);
 });
 
 test("CLI smoke: daemon queues and delivers Codex wake payloads for Claude check-ins", () => {
@@ -1741,6 +1785,65 @@ test("CLI smoke: channel install manages the Claude channel bridge below the har
   assert.equal(status.ok, false);
   assert.equal(status.source, "managed");
   assert.equal(status.path, installed.claude_channel.path);
+});
+
+test("CLI smoke: channel mcp install registers first-party Claude MCP locally", () => {
+  const cwd = tempRoot();
+  const projectDir = tempRoot();
+  const binDir = tempRoot();
+  const installed = JSON.parse(
+    run(cwd, [
+      "channel",
+      "mcp",
+      "install",
+      "--bin-dir",
+      binDir,
+      "--mcp-scope",
+      "local",
+      "--project-dir",
+      projectDir
+    ]).stdout
+  );
+  assert.equal(installed.ok, true);
+  assert.equal(installed.ready, true);
+  assert.equal(installed.package, "agent-team-claude-mcp");
+  assert.equal(installed.server_name, "agent-team-claude");
+  assert.equal(fs.existsSync(path.join(binDir, "agent-team-claude-mcp")), true);
+  assert.equal(installed.setup_mcp.path, path.join(projectDir, ".mcp.json"));
+  const config = JSON.parse(fs.readFileSync(path.join(projectDir, ".mcp.json"), "utf8"));
+  assert.equal(config.mcpServers["agent-team-claude"].command, installed.wrapper.path);
+  assert.deepEqual(config.mcpServers["agent-team-claude"].args, []);
+
+  const status = JSON.parse(
+    run(cwd, [
+      "channel",
+      "mcp",
+      "status",
+      "--bin-dir",
+      binDir,
+      "--mcp-scope",
+      "local",
+      "--project-dir",
+      projectDir
+    ]).stdout
+  );
+  assert.equal(status.ok, true);
+  assert.equal(status.configured, true);
+
+  const second = JSON.parse(
+    run(cwd, [
+      "channel",
+      "mcp",
+      "install",
+      "--bin-dir",
+      binDir,
+      "--mcp-scope",
+      "local",
+      "--project-dir",
+      projectDir
+    ]).stdout
+  );
+  assert.equal(second.setup_mcp.idempotent, true);
 });
 
 test("CLI smoke: doctor --fix installs the bridge and keeps remaining readiness issues honest", () => {

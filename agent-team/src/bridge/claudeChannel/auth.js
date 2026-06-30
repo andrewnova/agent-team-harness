@@ -7,6 +7,7 @@ const {
   redactSensitiveDiagnostics,
   shellQuote
 } = require("./utils");
+const { MCP_SERVER_NAME } = require("../../mcp/claudeInstall");
 
 function authLoginArgs(options = {}) {
   const args = ["auth", "login"];
@@ -69,14 +70,16 @@ function channelsFlagCheck(claude, cli, cwd) {
   const pluginRoot = cli.ok ? pluginRootFromCli(cli) : null;
   const baseArgs = [];
   if (pluginRoot) baseArgs.push("--plugin-dir", pluginRoot);
+  const devChannelArgs = ["--dangerously-load-development-channels", `server:${MCP_SERVER_NAME}`, "--dangerously-load-development-channels", "server:claude-channel-cli"];
+  const approvedChannelArgs = ["--channels", `server:${MCP_SERVER_NAME}`, "--channels", "server:claude-channel-cli"];
   const checks = [
     {
       mode: "development",
-      args: [...baseArgs, "--dangerously-load-development-channels", "server:claude-channel-cli", "--version"]
+      args: [...baseArgs, ...devChannelArgs, "--version"]
     },
     {
       mode: "approved",
-      args: [...baseArgs, "--channels", "server:claude-channel-cli", "--version"]
+      args: [...baseArgs, ...approvedChannelArgs, "--version"]
     }
   ];
   const results = checks.map((check) => {

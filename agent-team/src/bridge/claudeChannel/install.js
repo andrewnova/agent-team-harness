@@ -159,5 +159,7 @@ module.exports = {
   managedBinDir,
   managedCliPath,
   managedServerPath,
+  commandResult,
+  writeWrapper,
   installBridge
 };

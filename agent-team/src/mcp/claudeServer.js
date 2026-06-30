@@ -123,6 +123,10 @@ function runServer(options = {}) {
 }
 
 if (require.main === module) {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    process.stdout.write("agent-team-claude-mcp [--cwd <project-root>] [--no-watch-outbox] [--outbox-interval-ms <ms>]\n");
+    process.exit(0);
+  }
   runServer();
 }
 

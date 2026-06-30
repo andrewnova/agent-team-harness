@@ -58,6 +58,7 @@ const { createBridge } = require("./bridge");
 const { cockpitSnapshot, renderCockpit } = require("./cockpit");
 const database = require("./db");
 const { daemonStatus, startDaemon, stopDaemon, runDaemon } = require("./daemon");
+const { installClaudeMcp, statusClaudeMcp } = require("./mcp/claudeInstall");
 const {
   appendMessage,
   appendMessagesBatch,
@@ -173,7 +174,9 @@ Commands:
   db rebuild
   db query --sql <select>
   bridge <manual|mock|claude-channel> --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>]
-  channel install [--version <version>] [--tools-dir <path>] [--bin-dir <path>] [--mcp-scope user|local] [--no-setup-mcp] [--require-setup-mcp]
+  channel install [--version <version>] [--tools-dir <path>] [--bin-dir <path>] [--mcp-scope user|local] [--no-setup-mcp] [--require-setup-mcp] [--no-first-party-mcp]
+  channel mcp install [--bin-dir <path>] [--mcp-scope user|local] [--project-dir <path>] [--no-setup-mcp] [--require-setup-mcp]
+  channel mcp status [--bin-dir <path>] [--mcp-scope user|local] [--project-dir <path>]
   channel list
   channel ensure [--name <name>] [--target <target>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--timeout-ms <ms>] [--poll-ms <ms>] [--launch-mode <codex-terminal|visible|pty|background>] [--codex-terminal-launcher <path>] [--visible-app <app>] [--plugin-dir <path>] [--effort <level>] [--permission-mode <mode>] [--smoke] [--smoke-timeout-ms <ms>] [--approved-channel] [--no-chrome]
   channel auth [login] [--claudeai|--console] [--email <email>] [--sso] [--timeout-ms <ms>]
@@ -319,6 +322,16 @@ function channelInstallOptions(args) {
   };
 }
 
+function firstPartyMcpOptions(args) {
+  return {
+    bin_dir: argValue(args, "--bin-dir"),
+    mcp_scope: argValue(args, "--mcp-scope", "user"),
+    project_dir: argValue(args, "--project-dir"),
+    setup_mcp: !hasFlag(args, "--no-setup-mcp"),
+    setup_mcp_required: hasFlag(args, "--require-setup-mcp")
+  };
+}
+
 function channelDoctor(cwd, args) {
   const adapter = createBridge("claude-channel");
   const options = {
@@ -327,13 +340,18 @@ function channelDoctor(cwd, args) {
     smoke_timeout_ms: optionalNumberArg(args, "--smoke-timeout-ms")
   };
   let install = null;
+  let firstPartyMcp = statusClaudeMcp(cwd, firstPartyMcpOptions(args));
   let result = adapter.diagnose(cwd, options);
   if (hasFlag(args, "--fix") && result.claude_channel_cli && !result.claude_channel_cli.ok) {
     install = adapter.install(cwd, channelInstallOptions(args));
+    firstPartyMcp = installClaudeMcp(cwd, firstPartyMcpOptions(args));
     result = adapter.diagnose(cwd, options);
+  } else if (hasFlag(args, "--fix") && !firstPartyMcp.ok) {
+    firstPartyMcp = installClaudeMcp(cwd, firstPartyMcpOptions(args));
   }
   return {
     ...result,
+    first_party_mcp: firstPartyMcp,
     fix_attempted: Boolean(install),
     install
   };
@@ -1608,8 +1626,29 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   if (command === "channel" && subcommand === "install") {
     const adapter = createBridge("claude-channel");
     const result = adapter.install(cwd, channelInstallOptions(rest));
+    const firstParty = hasFlag(rest, "--no-first-party-mcp")
+      ? {
+          ok: true,
+          skipped: true,
+          reason: "--no-first-party-mcp"
+        }
+      : installClaudeMcp(cwd, firstPartyMcpOptions(rest));
+    print({
+      ...result,
+      first_party_mcp: firstParty
+    });
+    return result.ok && firstParty.ok ? 0 : 1;
+  }
+  if (command === "channel" && subcommand === "mcp" && rest[0] === "install") {
+    const mcpArgs = rest.slice(1);
+    const result = installClaudeMcp(cwd, firstPartyMcpOptions(mcpArgs));
     print(result);
     return result.ok ? 0 : 1;
+  }
+  if (command === "channel" && subcommand === "mcp" && rest[0] === "status") {
+    const mcpArgs = rest.slice(1);
+    print(statusClaudeMcp(cwd, firstPartyMcpOptions(mcpArgs)));
+    return 0;
   }
   if (command === "channel" && subcommand === "status") {
     const adapter = createBridge("claude-channel");

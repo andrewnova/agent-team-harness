@@ -17,6 +17,7 @@ const { listRefactorOffers } = require("./refactorLoop");
 const { listSelfHealRecommendations } = require("./feedback");
 const { listMessages, compactMessage, mailboxDiagnostics } = require("./mailbox");
 const { daemonStatus, receiptAckRequired, findReceiptAck, semanticAckRequired } = require("./daemon");
+const { listQueuedNotifications, listDeliveredNotifications } = require("./mcp/claudeChannel");
 
 const ACTIVE_STATUSES = new Set(["planning", "ready", "claimed", "implementing", "review", "merge", "verifying", "handoff", "human", "blocked"]);
 
@@ -310,6 +311,40 @@ function codexWakeState(cwd) {
   };
 }
 
+function claudeMcpState(cwd) {
+  const queued = listQueuedNotifications(cwd);
+  const emitted = listDeliveredNotifications(cwd);
+  const emittedIds = new Set(emitted.map((row) => row.notification_id));
+  const waiting = queued.filter((row) => !emittedIds.has(row.notification_id));
+  const firstPartyEvents = state.listEvents(cwd, { type: "daemon.claude_mcp_notification_queued", limit: 100 });
+  const legacyAttempts = state.listEvents(cwd, { type: "daemon.live_push_attempted", limit: 100 });
+  const legacySkips = state.listEvents(cwd, { type: "daemon.live_push_skipped", limit: 100 });
+  const legacyFallback = legacyAttempts.filter((event) => event.detail && event.detail.transport === "claude-channel-cli").length;
+  const legacyBlocked = legacySkips.filter((event) => {
+    const detail = event.detail || {};
+    return detail.transport === "claude-channel-cli" && ["legacy_no_session", "legacy_cli_unavailable", "legacy_live_push_disabled", "live_push_disabled"].includes(detail.result_state);
+  }).length;
+  return {
+    outbox_path: path.relative(cwd, paths.claudeMcpOutboxPath(cwd)),
+    deliveries_path: path.relative(cwd, paths.claudeMcpDeliveriesPath(cwd)),
+    queued_total: queued.length,
+    waiting_for_mcp_server: waiting.length,
+    mcp_emitted: emitted.length,
+    first_party_events: firstPartyEvents.length,
+    legacy_fallback_attempts: legacyFallback,
+    legacy_blocked: legacyBlocked,
+    recent: queued.slice(-5).map((row) => ({
+      notification_id: row.notification_id,
+      message_id: row.message_id,
+      task_id: row.task_id,
+      goal_id: row.goal_id,
+      kind: row.kind,
+      state: emittedIds.has(row.notification_id) ? "mcp_emitted" : "queued_for_mcp_server",
+      created_at: row.created_at
+    }))
+  };
+}
+
 function mailboxState(cwd, tasks = []) {
   const diagnostics = mailboxDiagnostics(cwd);
   const messages = listMessages(cwd);
@@ -514,6 +549,7 @@ function cockpitSnapshot(cwd, options = {}) {
   const mailbox = mailboxState(cwd, tasks);
   const daemon = daemonStatus(cwd);
   const codexWake = codexWakeState(cwd);
+  const claudeMcp = claudeMcpState(cwd);
   const session = channelSession(cwd);
   const target = options.target || (session && (session.target || session.name));
   const channelCwd = (session && session.project_dir) || cwd;
@@ -675,6 +711,7 @@ function cockpitSnapshot(cwd, options = {}) {
       pid_record: daemon.pid_record,
       session_push: daemon.session_push,
       codex_wake: codexWake,
+      claude_mcp: claudeMcp,
       active_runs: daemon.active_runs.map((run) => ({
         run_id: run.run_id,
         status: run.status,
@@ -754,6 +791,7 @@ function renderCockpit(snapshot) {
     `Claude agents: ${agentsLine}`,
     `Receiver daemon: ${snapshot.daemon.running ? "running" : "not-running"} active-runs=${snapshot.daemon.active_runs.length}${snapshot.daemon.stale_pid ? " stale-pid=true" : ""}`,
     `Session push: ${snapshot.daemon.session_push && snapshot.daemon.session_push.native_model_ui_push ? "native" : "mailbox-daemon"} fallback=${snapshot.daemon.session_push ? snapshot.daemon.session_push.fallback_waiter : "await reply --request-id <id>"}`,
+    `Claude MCP: queued=${snapshot.daemon.claude_mcp.queued_total} waiting=${snapshot.daemon.claude_mcp.waiting_for_mcp_server} mcp-emitted=${snapshot.daemon.claude_mcp.mcp_emitted} legacy-fallback=${snapshot.daemon.claude_mcp.legacy_fallback_attempts} legacy-blocked=${snapshot.daemon.claude_mcp.legacy_blocked} outbox=${snapshot.daemon.claude_mcp.outbox_path}`,
     `Codex wake: total=${snapshot.daemon.codex_wake.total} delivered=${snapshot.daemon.codex_wake.delivered} queued-no-adapter=${snapshot.daemon.codex_wake.queued_no_adapter} failed=${snapshot.daemon.codex_wake.failed} adapter=${snapshot.daemon.codex_wake.adapter_configured ? "configured" : "missing"} stream=${snapshot.daemon.codex_wake.stream_path}`,
     `Queues: requests=${snapshot.claude_channel.queues.requests} responses=${snapshot.claude_channel.queues.responses} pending=${snapshot.claude_channel.queues.pending.length}${snapshot.claude_channel.queues.stale_completed_pending ? ` completed-stale=${snapshot.claude_channel.queues.stale_completed_pending}` : ""}`,
     `Mailbox: total=${snapshot.mailbox.total} codex-unread=${snapshot.mailbox.codex_unread} claude-unread=${snapshot.mailbox.claude_unread} pending-receipts=${snapshot.mailbox.pending_receipt_ack} pending-replies=${snapshot.mailbox.pending_reply_required}${snapshot.mailbox.stale_completed_unread || snapshot.mailbox.stale_completed_receipt_ack || snapshot.mailbox.stale_completed_reply_required ? ` completed-stale=${snapshot.mailbox.stale_completed_unread + snapshot.mailbox.stale_completed_receipt_ack + snapshot.mailbox.stale_completed_reply_required}` : ""}${snapshot.mailbox.duplicate_receipt_acks_collapsed ? ` receipt-duplicates-collapsed=${snapshot.mailbox.duplicate_receipt_acks_collapsed}` : ""} malformed=${snapshot.mailbox.diagnostics.malformed_total}`,
@@ -832,6 +870,12 @@ function renderCockpit(snapshot) {
     ...(snapshot.daemon.codex_wake.recent.length
       ? snapshot.daemon.codex_wake.recent.map((wake) => `- ${wake.message_id}${wake.task_id ? ` ${wake.task_id}` : ""} ${wake.from}->${wake.to}/${wake.kind} ${wake.result_state}: ${wake.subject || wake.payload_path}`)
       : [`- No wake payloads yet (${snapshot.daemon.codex_wake.stream_path})`]),
+    "",
+    "## Claude MCP Outbox",
+    "",
+    ...(snapshot.daemon.claude_mcp.recent.length
+      ? snapshot.daemon.claude_mcp.recent.map((row) => `- ${row.message_id}${row.task_id ? ` ${row.task_id}` : ""} ${row.kind} ${row.state}: ${row.notification_id}`)
+      : [`- No first-party Claude MCP wake-ups yet (${snapshot.daemon.claude_mcp.outbox_path})`]),
     "",
     "## Claude Pending Inbox",
     "",

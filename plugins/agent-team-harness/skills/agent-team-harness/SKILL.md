@@ -293,6 +293,7 @@ Expected setup:
 
 ```bash
 node agent-team/src/cli.js channel install
+node agent-team/src/cli.js channel mcp status
 node agent-team/src/cli.js doctor --fix --target codex-agent-team-harness
 node agent-team/src/cli.js channel ensure --name codex-agent-team-harness
 node agent-team/src/cli.js channel ensure --name my-project --project-dir /path/to/project --fresh-claude

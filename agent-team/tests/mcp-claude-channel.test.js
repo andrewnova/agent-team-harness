@@ -25,7 +25,7 @@ function parseToolResponse(response) {
 test("Claude MCP channel declares the Agent Team channel and reply tools", () => {
   const init = initializeResult({ version: "test" });
   assert.equal(init.serverInfo.name, "agent-team-claude");
-  assert.equal(init.capabilities.experimental["claude/channel"].channels[0].id, CHANNEL_ID);
+  assert.deepEqual(init.capabilities.experimental["claude/channel"], {});
   assert.match(init.instructions, /mailbox is the source of truth/i);
 
   const tools = toolDefinitions();
@@ -52,8 +52,8 @@ test("Claude MCP channel notification preserves mailbox identity and body", () =
   assert.equal(notification.method, "notifications/claude/channel");
   assert.equal(notification.params.meta.channel, CHANNEL_ID);
   assert.equal(notification.params.meta.mailbox_message_id, message.id);
-  assert.equal(notification.params.meta.mailbox_truth, true);
-  const text = notification.params.content[0].text;
+  assert.equal(notification.params.meta.mailbox_truth, "true");
+  const text = notification.params.content;
   assert.match(text, new RegExp(message.id));
   assert.match(text, /Mailbox is the source of truth/);
   assert.match(text, /test 123/);
@@ -84,8 +84,9 @@ test("Claude MCP outbox queues and delivers channel notifications exactly once",
   assert.equal(first.count, 1);
   assert.equal(emitted[0].notification.method, "notifications/claude/channel");
   assert.equal(emitted[0].notification.params.meta.mailbox_message_id, message.id);
-  assert.match(emitted[0].notification.params.content[0].text, /outbox body/);
+  assert.match(emitted[0].notification.params.content, /outbox body/);
   assert.equal(listDeliveredNotifications(cwd).length, 1);
+  assert.equal(listDeliveredNotifications(cwd)[0].result_state, "mcp_emitted");
 
   const second = deliverQueuedNotifications(cwd, () => {
     throw new Error("should not emit already delivered notification");
@@ -207,6 +208,6 @@ test("Claude MCP stdio server emits queued Agent Team channel notifications", ()
   assert.ok(notification, "expected queued Claude channel notification");
   assert.ok(initialize, "expected initialize response");
   assert.equal(notification.params.meta.mailbox_message_id, message.id);
-  assert.match(notification.params.content[0].text, /hello visible Claude/);
+  assert.match(notification.params.content, /hello visible Claude/);
   assert.equal(listDeliveredNotifications(cwd).length, 1);
 });

@@ -4,9 +4,10 @@ const { appendMessage, ackMessage, listMessages, loadMessage, compactMessage } =
 const paths = require("../paths");
 const { appendJsonl, ensureDir } = require("../fsutil");
 const state = require("../state");
+const { MCP_SERVER_NAME } = require("./claudeInstall");
 
 const CHANNEL_ID = "agent-team";
-const SERVER_NAME = "agent-team-claude";
+const SERVER_NAME = MCP_SERVER_NAME;
 
 function packageVersion() {
   try {
@@ -110,16 +111,7 @@ function initializeResult(options = {}) {
     capabilities: {
       tools: {},
       experimental: {
-        "claude/channel": {
-          version: 1,
-          channels: [
-            {
-              id: CHANNEL_ID,
-              name: "Agent Team",
-              description: "Live Agent Team mailbox wake-ups for visible Claude Code."
-            }
-          ]
-        }
+        "claude/channel": {}
       }
     }
   };
@@ -159,21 +151,16 @@ function channelNotification(cwd, message, options = {}) {
     jsonrpc: "2.0",
     method: "notifications/claude/channel",
     params: {
-      content: [
-        {
-          type: "text",
-          text: notificationText(cwd, message)
-        }
-      ],
+      content: notificationText(cwd, message),
       meta: {
-        channel: options.channel || CHANNEL_ID,
+        channel: String(options.channel || CHANNEL_ID),
         source: "agent-team-daemon",
-        mailbox_message_id: message.id,
-        request_id: message.request_id || null,
-        task_id: message.task_id || null,
-        goal_id: message.goal_id || null,
-        kind: message.request_kind || message.kind,
-        mailbox_truth: true
+        mailbox_message_id: String(message.id || ""),
+        request_id: String(message.request_id || ""),
+        task_id: String(message.task_id || ""),
+        goal_id: String(message.goal_id || ""),
+        kind: String(message.request_kind || message.kind || ""),
+        mailbox_truth: "true"
       }
     }
   };
@@ -269,7 +256,7 @@ function markNotificationDelivered(cwd, row) {
     task_id: row.task_id,
     goal_id: row.goal_id,
     delivered_at: new Date().toISOString(),
-    result_state: "delivered"
+    result_state: "mcp_emitted"
   });
 }
 

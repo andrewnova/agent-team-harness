@@ -25,10 +25,12 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /The receiver daemon is the bridge/);
   assert.match(readme, /Do not delegate real Claude work through raw `ask_claude`/);
   assert.match(readme, /queues first-party Claude MCP channel notifications/);
+  assert.match(readme, /agent-team channel mcp install/);
+  assert.match(readme, /MCP-emitted counts/);
   assert.match(readme, /legacy Claude channel wake as a compatibility fallback/);
   assert.match(readme, /queues Codex wake payloads/);
   assert.match(readme, /AGENT_TEAM_CODEX_WAKE_COMMAND/);
-  assert.match(readme, /cockpit` and `agent-team watch` show Codex wake totals/);
+  assert.match(readme, /cockpit` and `agent-team watch` show Claude MCP outbox totals/);
   assert.match(readme, /CODEX_THREAD_ID/);
   assert.match(readme, /short wake-up copy; the mailbox reply remains the completion truth/);
 });

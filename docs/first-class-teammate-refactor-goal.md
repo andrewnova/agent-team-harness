@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 3 daemon-to-Claude-MCP outbox wiring verified locally, full architecture review still open
+Status: Active refactor charter; Phase 4 first-party Claude MCP install/cockpit visibility verified locally, full architecture review still open
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -610,3 +610,56 @@ Remaining architectural discomfort:
 Next phase:
 
 - Add Claude MCP registration/install support for `agent-team-claude-mcp`, expose first-party delivery state in cockpit, then dogfood a visible Claude wake through the new path.
+
+### 2026-06-30 - Phase 4 First-Party Claude MCP Install And Cockpit Visibility
+
+What changed:
+
+- Added `agent-team/src/mcp/claudeInstall.js` so the harness can install the `agent-team-claude-mcp` wrapper and register the `agent-team-claude` MCP server in either user or local Claude Code MCP config.
+- Added `agent-team channel mcp install` and `agent-team channel mcp status` for direct first-party MCP setup and diagnostics.
+- Updated `agent-team channel install` and `doctor --fix` to include first-party MCP setup while preserving the legacy `claude-channel-cli` compatibility bridge.
+- Updated visible Claude startup flags to request both the first-party `server:agent-team-claude` channel and the legacy `server:claude-channel-cli` compatibility channel.
+- Corrected the Claude Channel notification shape to the official `params.content` string plus string-valued `params.meta` attributes.
+- Renamed the first-party server delivery proof from ambiguous "delivered" to `mcp_emitted` in the delivery log and cockpit language, because that proves the MCP server emitted the notification frame, not that visible Claude read it.
+- Added cockpit/watch visibility for the first-party Claude MCP outbox: queued, waiting for MCP server, MCP-emitted, legacy fallback attempts, and legacy blocked counts.
+
+Why it changed:
+
+- The first-party MCP path needed to become installable and inspectable, not only a test-only server.
+- Cockpit needed to show the transport chain in human terms so users can tell whether a message is queued, emitted by the MCP server, or only moving through legacy fallback.
+- The system must stop overstating proof: MCP frame emission is not the same thing as seen/ACK/replied by Claude.
+
+Files touched:
+
+- `agent-team/src/mcp/claudeInstall.js`
+- `agent-team/src/mcp/claudeChannel.js`
+- `agent-team/src/mcp/claudeServer.js`
+- `agent-team/src/bridge/claudeChannel/install.js`
+- `agent-team/src/bridge/claudeChannel/launcher.js`
+- `agent-team/src/bridge/claudeChannel/auth.js`
+- `agent-team/src/cli.js`
+- `agent-team/src/cockpit.js`
+- `agent-team/tests/mcp-claude-channel.test.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `scripts/install-codex.sh`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test tests/mcp-claude-channel.test.js tests/cli-smoke.test.js` from `agent-team/`: 60 tests passed.
+- `node --test tests/public-contract.test.js tests/mcp-claude-channel.test.js tests/cli-smoke.test.js` from `agent-team/`: 62 tests passed.
+- `npm test` from `agent-team/`: 113 tests passed.
+
+Remaining architectural discomfort:
+
+- No real visible-Claude dogfood transcript yet proves `server:agent-team-claude` appears and receives notifications in Claude Code UI.
+- Startup currently requests both first-party and legacy channel servers; this is intentionally conservative but still not the final "no wrapper normal path" state.
+- Cockpit now shows transport counts, but not a per-message receipt timeline with `Queued -> MCP emitted -> Seen -> ACK -> Reply -> Imported`.
+- Codex wake remains queued-payload plus optional command, not a first-class Codex MCP/app adapter.
+
+Next phase:
+
+- Run or capture a real visible-Claude dogfood proof for `agent-team-claude-mcp`, then convert the remaining cockpit receipt timeline and Codex wake adapter gaps into the next implementation phase.

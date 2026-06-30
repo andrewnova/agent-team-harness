@@ -8,6 +8,7 @@ const {
   findScriptCli,
   shellQuote
 } = require("./utils");
+const { MCP_SERVER_NAME } = require("../../mcp/claudeInstall");
 
 const DEFAULT_TEAMMATE_QUICKSTART = [
   "# Claude Teammate Quickstart",
@@ -161,11 +162,11 @@ function channelEnv(name, cwd) {
 function claudeSessionArgs(name, cwd, options, includeStartupPromptAsArg) {
   const args = [];
   if (options.plugin_dir) args.push("--plugin-dir", options.plugin_dir);
-  if (options.use_development_channel !== false) {
-    args.push("--dangerously-load-development-channels", "server:claude-channel-cli");
-  } else {
-    args.push("--channels", "server:claude-channel-cli");
-  }
+  const channelFlag = options.use_development_channel !== false ? "--dangerously-load-development-channels" : "--channels";
+  const channels = [];
+  if (options.use_first_party_mcp_channel !== false) channels.push(`server:${MCP_SERVER_NAME}`);
+  channels.push("server:claude-channel-cli");
+  for (const channel of channels) args.push(channelFlag, channel);
   if (options.chrome !== false) args.push("--chrome");
   args.push("--permission-mode", options.permission_mode || "auto");
   args.push("--effort", options.effort || "xhigh");
