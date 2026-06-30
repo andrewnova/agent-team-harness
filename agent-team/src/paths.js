@@ -161,6 +161,31 @@ function claudeMcpDeliveriesPath(cwd) {
   return path.join(claudeMcpDir(cwd), "deliveries.jsonl");
 }
 
+function codexMcpDir(cwd) {
+  return path.join(commsDir(cwd), "codex-mcp");
+}
+
+function codexMcpManifestPath(cwd) {
+  return path.join(codexMcpDir(cwd), "adapter.json");
+}
+
+function codexMcpReceiptsPath(cwd) {
+  return path.join(codexMcpDir(cwd), "receipts.jsonl");
+}
+
+function codexWakeDir(cwd) {
+  return path.join(commsDir(cwd), "codex-wake");
+}
+
+function codexWakeLogPath(cwd) {
+  return path.join(codexWakeDir(cwd), "wake.jsonl");
+}
+
+function codexWakePayloadPath(cwd, messageId) {
+  const safeId = String(messageId || "message").replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 120);
+  return path.join(codexWakeDir(cwd), `wake-${safeId}.json`);
+}
+
 function boardPath(cwd) {
   return path.join(rootDir(cwd), "projections", "board.md");
 }
@@ -238,6 +263,12 @@ module.exports = {
   claudeMcpDir,
   claudeMcpOutboxPath,
   claudeMcpDeliveriesPath,
+  codexMcpDir,
+  codexMcpManifestPath,
+  codexMcpReceiptsPath,
+  codexWakeDir,
+  codexWakeLogPath,
+  codexWakePayloadPath,
   boardPath,
   healthPath,
   taskProjectionPath,

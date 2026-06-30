@@ -59,6 +59,7 @@ const { cockpitSnapshot, renderCockpit } = require("./cockpit");
 const database = require("./db");
 const { daemonStatus, startDaemon, stopDaemon, runDaemon } = require("./daemon");
 const { installClaudeMcp, statusClaudeMcp } = require("./mcp/claudeInstall");
+const { installCodexMcp, statusCodexMcp } = require("./mcp/codexInstall");
 const {
   appendMessage,
   appendMessagesBatch,
@@ -116,6 +117,8 @@ Commands:
   codex-subagents import --json <file>
   codex-subagents list [--task <task>]
   codex-subagents show <import-id>
+  codex mcp install [--bin-dir <path>] [--no-setup-adapter]
+  codex mcp status [--bin-dir <path>]
   notice scan [--project-dir <path>] [--dir <path>]
   notice list [--status <new|acknowledged|applied|rejected|archived>] [--task <task>] [--limit <n>]
   notice show <notice-id>
@@ -329,6 +332,13 @@ function firstPartyMcpOptions(args) {
     project_dir: argValue(args, "--project-dir"),
     setup_mcp: !hasFlag(args, "--no-setup-mcp"),
     setup_mcp_required: hasFlag(args, "--require-setup-mcp")
+  };
+}
+
+function codexMcpOptions(args) {
+  return {
+    bin_dir: argValue(args, "--bin-dir"),
+    setup_adapter: !hasFlag(args, "--no-setup-adapter")
   };
 }
 
@@ -950,6 +960,17 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     const record = loadAgentTeamImport(cwd, importId);
     print(record ? { ok: true, import: record } : { ok: false, error: `Agent Teams import not found: ${importId}` });
     return record ? 0 : 1;
+  }
+  if (command === "codex" && subcommand === "mcp" && rest[0] === "install") {
+    const mcpArgs = rest.slice(1);
+    const result = installCodexMcp(cwd, codexMcpOptions(mcpArgs));
+    print(result);
+    return result.ok ? 0 : 1;
+  }
+  if (command === "codex" && subcommand === "mcp" && rest[0] === "status") {
+    const mcpArgs = rest.slice(1);
+    print(statusCodexMcp(cwd, codexMcpOptions(mcpArgs)));
+    return 0;
   }
   if (command === "codex-subagents" && subcommand === "import") {
     print(importCodexSubagents(cwd, readJsonArg(rest, cwd)));

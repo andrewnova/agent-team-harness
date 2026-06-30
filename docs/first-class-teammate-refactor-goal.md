@@ -715,3 +715,58 @@ Remaining architectural discomfort:
 Next phase:
 
 - Continue Track 2 with a first-party Codex MCP/wake adapter scaffold, then tighten visible Claude launch/session identity so the first-party MCP path plus endpoint discovery can prove a real fresh visible teammate without relying on endpoint-name luck.
+
+### 2026-06-30 - Phase 6 First-Party Codex MCP Wake Adapter
+
+What changed:
+
+- Added `agent-team-codex-mcp`, a Codex-facing stdio MCP server that reads Claude-to-Codex wake payloads, loads mailbox messages, ACKs messages as Codex, replies to Claude through the durable mailbox, and opens canonical task state.
+- Added `agent-team codex mcp install` and `agent-team codex mcp status`.
+- Added a local adapter manifest at `.agent-team/comms/codex-mcp/adapter.json` so the Codex-side wrapper, wake stream, receipts stream, and mailbox path are explicit.
+- Added Codex MCP receipts at `.agent-team/comms/codex-mcp/receipts.jsonl` plus a `daemon.codex_mcp_message_seen` event when Codex ACKs through the adapter.
+- Added cockpit JSON/text visibility for Codex MCP configured state, wrapper presence, manifest path, and pending wake count.
+- Updated the installer to write the `agent-team-codex-mcp` wrapper and updated README plus the public Codex skill contract.
+- Synced the installed skill copy at `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` to the repo skill.
+- Fixed the generic wrapper writer so local `.js` MCP server targets execute through Node instead of relying on executable file mode.
+
+Why it changed:
+
+- Codex wake payloads existed but were still a passive file stream. That made Claude-to-Codex real-time behavior feel opaque because Codex had no first-class adapter contract for reading, ACKing, and replying.
+- The harness needed a symmetrical first-party surface: Claude has `agent-team-claude-mcp`; Codex now has `agent-team-codex-mcp`.
+- The adapter remains honest: it does not pretend to wake this exact Codex UI by itself. It exposes the clean local MCP/read/reply contract that Codex surfaces, hooks, or future native wake mechanisms can consume.
+
+Files touched:
+
+- `agent-team/package.json`
+- `agent-team/src/bridge/claudeChannel/install.js`
+- `agent-team/src/cli.js`
+- `agent-team/src/cockpit.js`
+- `agent-team/src/paths.js`
+- `agent-team/src/mcp/codexChannel.js`
+- `agent-team/src/mcp/codexInstall.js`
+- `agent-team/src/mcp/codexServer.js`
+- `agent-team/tests/mcp-codex-channel.test.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `scripts/install-codex.sh`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test tests/mcp-codex-channel.test.js tests/mcp-claude-channel.test.js tests/cli-smoke.test.js` from `agent-team/`: 65 tests passed.
+- `node --test tests/public-contract.test.js tests/mcp-codex-channel.test.js tests/mcp-claude-channel.test.js tests/cli-smoke.test.js` from `agent-team/`: 67 tests passed.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+
+Remaining architectural discomfort:
+
+- Codex MCP exposes a clean local adapter, but it is still a pull/read surface unless a Codex-native MCP integration or local hook actively consumes it.
+- Cockpit now reports adapter presence and pending wake counts, but not a full per-message timeline such as `Queued -> Codex MCP read -> ACKed -> Replied -> Imported`.
+- The visible-Claude fresh launch problem remains unsolved beyond honest failure reporting; a genuinely new visible endpoint still needs dogfood proof.
+- The legacy `claude-channel-cli` endpoint registry is still involved in visible Claude startup/session identity.
+
+Next phase:
+
+- Add a per-message receipt timeline across Claude MCP outbox, legacy wake fallback, Codex wake payloads, Codex MCP reads, mailbox ACKs, semantic replies, and imports. Then return to visible-Claude session identity so first-party MCP plus startup proof can stop depending on legacy endpoint-name luck.

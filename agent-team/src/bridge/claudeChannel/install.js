@@ -54,7 +54,10 @@ function commandResult(command, args, options = {}) {
 function writeWrapper(binDir, name, target) {
   fs.mkdirSync(binDir, { recursive: true });
   const wrapperPath = path.join(binDir, name);
-  const body = ["#!/usr/bin/env bash", `exec ${shellQuote(target)} "$@"`, ""].join("\n");
+  const command = target.endsWith(".js")
+    ? `${shellQuote(process.execPath)} ${shellQuote(target)}`
+    : shellQuote(target);
+  const body = ["#!/usr/bin/env bash", `exec ${command} "$@"`, ""].join("\n");
   fs.writeFileSync(wrapperPath, body);
   fs.chmodSync(wrapperPath, 0o755);
   return {

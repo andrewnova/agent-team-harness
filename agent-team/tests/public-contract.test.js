@@ -17,6 +17,8 @@ test("public skill keeps Claude work mailbox-first and nonblocking", () => {
   assert.match(skill, /The daemon exists to connect Codex and Claude through the durable mailbox/);
   assert.match(skill, /Codex wake payloads/);
   assert.match(skill, /AGENT_TEAM_CODEX_WAKE_COMMAND/);
+  assert.match(skill, /agent-team-codex-mcp/);
+  assert.match(skill, /agent_team_codex_watch_mailbox/);
 });
 
 test("README explains daemon-backed mailbox delegation", () => {
@@ -26,7 +28,10 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /Do not delegate real Claude work through raw `ask_claude`/);
   assert.match(readme, /queues first-party Claude MCP channel notifications/);
   assert.match(readme, /agent-team channel mcp install/);
+  assert.match(readme, /agent-team-codex-mcp/);
+  assert.match(readme, /agent-team codex mcp install/);
   assert.match(readme, /MCP-emitted counts/);
+  assert.match(readme, /Codex MCP adapter status/);
   assert.match(readme, /legacy Claude channel wake as a compatibility fallback/);
   assert.match(readme, /queues Codex wake payloads/);
   assert.match(readme, /AGENT_TEAM_CODEX_WAKE_COMMAND/);

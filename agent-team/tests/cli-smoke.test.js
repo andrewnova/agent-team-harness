@@ -1848,6 +1848,44 @@ test("CLI smoke: channel mcp install registers first-party Claude MCP locally", 
   assert.equal(second.setup_mcp.idempotent, true);
 });
 
+test("CLI smoke: codex mcp install registers first-party Codex wake adapter locally", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+
+  const installed = JSON.parse(run(cwd, ["codex", "mcp", "install", "--bin-dir", binDir]).stdout);
+  assert.equal(installed.ok, true);
+  assert.equal(installed.ready, true);
+  assert.equal(installed.package, "agent-team-codex-mcp");
+  assert.equal(installed.server_name, "agent-team-codex");
+  assert.equal(fs.existsSync(path.join(binDir, "agent-team-codex-mcp")), true);
+  const realCwd = fs.realpathSync(cwd);
+  assert.equal(installed.adapter_manifest.path, path.join(realCwd, ".agent-team", "comms", "codex-mcp", "adapter.json"));
+
+  const manifest = JSON.parse(fs.readFileSync(installed.adapter_manifest.path, "utf8"));
+  assert.equal(manifest.config.type, "stdio");
+  assert.equal(manifest.config.command, installed.wrapper.path);
+  assert.deepEqual(manifest.config.args, []);
+  assert.deepEqual(manifest.config.env, {});
+  assert.equal(manifest.wake_stream_path, path.join(".agent-team", "comms", "codex-wake", "wake.jsonl"));
+  assert.equal(manifest.mailbox_path, path.join(".agent-team", "comms", "mailbox.jsonl"));
+
+  const status = JSON.parse(run(cwd, ["codex", "mcp", "status", "--bin-dir", binDir]).stdout);
+  assert.equal(status.ok, true);
+  assert.equal(status.configured, true);
+  assert.equal(status.wrapper_exists, true);
+
+  const env = { ...process.env, AGENT_TEAM_BIN_DIR: binDir };
+  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"], env).stdout);
+  assert.equal(cockpit.daemon.codex_mcp.configured, true);
+  assert.equal(cockpit.daemon.codex_mcp.wrapper_exists, true);
+  const cockpitText = run(cwd, ["cockpit", "--no-live-channel"], env).stdout;
+  assert.match(cockpitText, /Codex MCP: configured=yes wrapper=yes/);
+  assert.match(cockpitText, /## Codex MCP Adapter/);
+
+  const second = JSON.parse(run(cwd, ["codex", "mcp", "install", "--bin-dir", binDir]).stdout);
+  assert.equal(second.adapter_manifest.idempotent, true);
+});
+
 test("CLI smoke: doctor --fix installs the bridge and keeps remaining readiness issues honest", () => {
   const cwd = tempRoot();
   const fakeBin = tempRoot();

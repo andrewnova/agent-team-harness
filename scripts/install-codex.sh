@@ -40,6 +40,7 @@ Installs the Agent Team Harness for local Codex use:
   - validates Node.js >= 22.13.0
   - writes an agent-team wrapper to $AGENT_TEAM_BIN_DIR or ~/.local/bin
   - installs the Codex skill to $CODEX_HOME/skills/agent-team-harness
+  - installs the first-party agent-team-codex MCP wrapper
   - installs and registers the first-party agent-team-claude MCP server
   - installs the managed Claude channel bridge unless --skip-channel is passed
   - attempts legacy Claude channel MCP registration unless --no-channel-mcp is passed
@@ -89,6 +90,8 @@ if [ "$RUN_TESTS" -eq 1 ]; then
   (cd "$ROOT/agent-team" && npm test)
 fi
 
+node "$ROOT/agent-team/src/cli.js" --cwd "$ROOT" codex mcp install --bin-dir "$BIN_DIR" --no-setup-adapter >/dev/null
+
 if [ "$INSTALL_CHANNEL" -eq 1 ]; then
   channel_args=(channel install --version "$CHANNEL_VERSION" --tools-dir "$TOOLS_DIR" --bin-dir "$BIN_DIR")
   if [ "$SETUP_CHANNEL_MCP" -eq 0 ]; then
@@ -101,6 +104,7 @@ echo
 echo "Agent Team Harness installed."
 echo "CLI wrapper: $BIN_DIR/agent-team"
 echo "Codex skill: $CODEX_HOME/skills/agent-team-harness"
+echo "First-party Codex MCP wrapper: $BIN_DIR/agent-team-codex-mcp"
 if [ "$INSTALL_CHANNEL" -eq 1 ]; then
   echo "Managed Claude channel bridge: $TOOLS_DIR/claude-channel-cli"
   echo "First-party Claude MCP wrapper: $BIN_DIR/agent-team-claude-mcp"
