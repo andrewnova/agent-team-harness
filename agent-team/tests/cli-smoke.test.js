@@ -7,6 +7,7 @@ const { tempRoot, backendTaskInput, frontendTaskInput, frontendContract, writeEx
 const { processAlive, clearDaemonPidRecord } = require("../src/daemon");
 const paths = require("../src/paths");
 const { deliverQueuedNotifications } = require("../src/mcp/claudeChannel");
+const { callTool: callCodexTool } = require("../src/mcp/codexChannel");
 
 const cli = path.join(__dirname, "..", "src", "cli.js");
 
@@ -1884,6 +1885,53 @@ test("CLI smoke: codex mcp install registers first-party Codex wake adapter loca
 
   const second = JSON.parse(run(cwd, ["codex", "mcp", "install", "--bin-dir", binDir]).stdout);
   assert.equal(second.adapter_manifest.idempotent, true);
+});
+
+test("CLI smoke: cockpit renders a per-message transport and receipt timeline", () => {
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  const inbound = JSON.parse(
+    run(cwd, [
+      "mailbox",
+      "send",
+      "--from",
+      "claude",
+      "--to",
+      "codex",
+      "--kind",
+      "checkin",
+      "--task",
+      "T-000777",
+      "--subject",
+      "Timeline update",
+      "--body",
+      "Claude timeline payload"
+    ]).stdout
+  );
+  run(cwd, ["daemon", "run", "--once", "--roles", "codex"]);
+  callCodexTool(cwd, "agent_team_codex_ack", { message_id: inbound.message.id, note: "Timeline seen." });
+  callCodexTool(cwd, "agent_team_codex_reply", {
+    in_reply_to: inbound.message.id,
+    body: "Timeline reply from Codex."
+  });
+
+  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"]).stdout);
+  const row = cockpit.message_timeline.rows.find((item) => item.message_id === inbound.message.id);
+  assert.ok(row, "expected inbound message in cockpit timeline");
+  const stageTypes = row.stages.map((stage) => stage.type);
+  assert.ok(stageTypes.includes("mailbox_sent"));
+  assert.ok(stageTypes.includes("daemon_received"));
+  assert.ok(stageTypes.includes("codex_wake_queued"));
+  assert.ok(stageTypes.includes("codex_wake_payload"));
+  assert.ok(stageTypes.includes("codex_mcp_seen"));
+  assert.ok(stageTypes.includes("mailbox_ack"));
+  assert.ok(stageTypes.includes("mailbox_reply"));
+  assert.equal(row.current_state, "mailbox_reply");
+
+  const cockpitText = run(cwd, ["cockpit", "--no-live-channel"]).stdout;
+  assert.match(cockpitText, /Timeline: shown=/);
+  assert.match(cockpitText, /## Message Timeline/);
+  assert.match(cockpitText, new RegExp(`${inbound.message.id}.*mailbox_sent.*codex_wake_queued.*codex_mcp_seen.*mailbox_reply`));
 });
 
 test("CLI smoke: doctor --fix installs the bridge and keeps remaining readiness issues honest", () => {

@@ -120,7 +120,9 @@ The receiver daemon is the bridge that makes Codex and Claude feel connected wit
 
 For Claude-to-Codex traffic, the daemon writes wake payloads under `.agent-team/comms/codex-wake/` and can invoke `AGENT_TEAM_CODEX_WAKE_COMMAND` with the payload path. The mailbox remains the source of truth; the wake stream is the local real-time delivery adapter for Codex surfaces that can consume it. The first-party `agent-team-codex-mcp` adapter reads that wake stream, loads mailbox messages, writes Codex ACKs, and sends Codex replies back through the same durable mailbox.
 
-`agent-team cockpit` and `agent-team watch` show Claude MCP outbox totals, MCP-emitted counts, legacy fallback counts, Codex MCP adapter status, Codex wake totals, missing-adapter queues, and the wake stream path so operators can see whether teammate messages are moving in real time.
+`agent-team cockpit` and `agent-team watch` show Claude MCP outbox totals, MCP-emitted counts, legacy fallback counts, Codex MCP adapter status, Codex wake totals, missing-adapter queues, the wake stream path, and a per-message timeline so operators can see whether teammate messages are moving in real time.
+
+The cockpit timeline is derived from existing mailbox rows, ACK rows, MCP outbox/delivery rows, Codex wake payloads, Codex MCP receipts, and daemon events. It summarizes stages such as `mailbox_sent`, `claude_mcp_queued`, `claude_mcp_emitted`, `codex_wake_queued`, `codex_mcp_seen`, `mailbox_ack`, and `mailbox_reply` without creating a second state store.
 
 Do not delegate real Claude work through raw `ask_claude` or a direct live-channel wait. Planning, implementation, review, refactor, and debugging work should go through mailbox-backed harness commands such as `plan claude`, `review request`, `channel steer`, or `mailbox send --to claude --kind request --reply-required`. The raw live channel is for health checks, smoke tests, low-level diagnostics, and the daemon's short wake-up copy; the mailbox reply remains the completion truth.
 

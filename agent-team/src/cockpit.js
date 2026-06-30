@@ -15,7 +15,7 @@ const { listNotices, scanClaudeNotices } = require("./claudeNotices");
 const { listCheckins } = require("./checkins");
 const { listRefactorOffers } = require("./refactorLoop");
 const { listSelfHealRecommendations } = require("./feedback");
-const { listMessages, compactMessage, mailboxDiagnostics } = require("./mailbox");
+const { listMessages, listAcks, compactMessage, mailboxDiagnostics } = require("./mailbox");
 const { daemonStatus, receiptAckRequired, findReceiptAck, semanticAckRequired } = require("./daemon");
 const { listQueuedNotifications, listDeliveredNotifications } = require("./mcp/claudeChannel");
 const { statusCodexMcp } = require("./mcp/codexInstall");
@@ -346,6 +346,157 @@ function claudeMcpState(cwd) {
   };
 }
 
+function pushStage(stages, type, at, detail = {}) {
+  stages.push({
+    type,
+    at: at || detail.created_at || detail.delivered_at || detail.acknowledged_at || null,
+    ...detail
+  });
+}
+
+function messageTimelineState(cwd, options = {}) {
+  const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : 8;
+  const messages = listMessages(cwd);
+  const messageById = new Map(messages.map((message) => [message.id, message]));
+  const acks = listAcks(cwd);
+  const queuedClaude = listQueuedNotifications(cwd);
+  const deliveredClaude = listDeliveredNotifications(cwd);
+  const codexWakeRows = readJsonl(paths.codexWakeLogPath(cwd));
+  const codexReceipts = readJsonl(paths.codexMcpReceiptsPath(cwd));
+  const eventTypes = [
+    "daemon.message_received",
+    "daemon.semantic_ack_required",
+    "daemon.receipt_ack_sent",
+    "daemon.live_push_attempted",
+    "daemon.live_push_skipped",
+    "daemon.codex_push_attempted",
+    "daemon.codex_push_queued",
+    "daemon.claude_mcp_notification_queued",
+    "daemon.codex_mcp_message_seen",
+    "review.recorded",
+    "reground.stored",
+    "plan.reconciled"
+  ];
+  const events = eventTypes.flatMap((type) => state.listEvents(cwd, { type, limit: 200 }));
+  const candidateIds = new Set(messages.slice(-50).map((message) => message.id));
+  for (const row of queuedClaude) if (row.message_id) candidateIds.add(row.message_id);
+  for (const row of deliveredClaude) if (row.message_id) candidateIds.add(row.message_id);
+  for (const row of codexWakeRows) if (row.message_id) candidateIds.add(row.message_id);
+  for (const row of codexReceipts) if (row.message_id) candidateIds.add(row.message_id);
+  for (const ack of acks) if (ack.message_id) candidateIds.add(ack.message_id);
+  for (const event of events) if (event.detail && event.detail.message_id) candidateIds.add(event.detail.message_id);
+
+  const rows = Array.from(candidateIds)
+    .map((messageId) => {
+      const message = messageById.get(messageId);
+      const requestId = message && (message.request_id || message.id);
+      const taskId = message && message.task_id;
+      const stages = [];
+      if (message) {
+        pushStage(stages, "mailbox_sent", message.created_at, {
+          from: message.from,
+          to: message.to,
+          kind: message.kind,
+          subject: message.subject
+        });
+      }
+      for (const event of events.filter((row) => row.detail && row.detail.message_id === messageId)) {
+        const detail = event.detail || {};
+        const typeMap = {
+          "daemon.message_received": "daemon_received",
+          "daemon.semantic_ack_required": "semantic_ack_required",
+          "daemon.receipt_ack_sent": "receipt_ack_sent",
+          "daemon.live_push_attempted": "legacy_wake_attempted",
+          "daemon.live_push_skipped": "legacy_wake_skipped",
+          "daemon.codex_push_attempted": "codex_wake_attempted",
+          "daemon.codex_push_queued": "codex_wake_queued",
+          "daemon.claude_mcp_notification_queued": "claude_mcp_queued",
+          "daemon.codex_mcp_message_seen": "codex_mcp_seen"
+        };
+        pushStage(stages, typeMap[event.type] || event.type, event.recorded_at, {
+          result_state: detail.result_state,
+          transport: detail.transport,
+          run_id: event.run_id
+        });
+      }
+      for (const row of queuedClaude.filter((item) => item.message_id === messageId)) {
+        pushStage(stages, "claude_mcp_queued", row.created_at, {
+          notification_id: row.notification_id
+        });
+      }
+      for (const row of deliveredClaude.filter((item) => item.message_id === messageId)) {
+        pushStage(stages, "claude_mcp_emitted", row.delivered_at, {
+          notification_id: row.notification_id,
+          result_state: row.result_state
+        });
+      }
+      for (const row of codexWakeRows.filter((item) => item.message_id === messageId)) {
+        pushStage(stages, "codex_wake_payload", row.created_at, {
+          wake_id: row.wake_id,
+          payload_path: row.payload_path
+        });
+      }
+      for (const row of codexReceipts.filter((item) => item.message_id === messageId)) {
+        pushStage(stages, "codex_mcp_seen", row.created_at, {
+          receipt_id: row.receipt_id,
+          result_state: row.result_state
+        });
+      }
+      for (const ack of acks.filter((item) => item.message_id === messageId)) {
+        pushStage(stages, "mailbox_ack", ack.acknowledged_at, {
+          by: ack.by,
+          ack_id: ack.ack_id,
+          note: ack.note
+        });
+      }
+      const replies = messages.filter(
+        (reply) =>
+          reply.kind === "reply" &&
+          (reply.in_reply_to === messageId ||
+            (requestId && reply.request_id === requestId) ||
+            (message && message.request_id && reply.in_reply_to === message.request_id))
+      );
+      for (const reply of replies) {
+        pushStage(stages, "mailbox_reply", reply.created_at, {
+          message_id: reply.id,
+          from: reply.from,
+          to: reply.to,
+          subject: reply.subject
+        });
+      }
+      for (const event of events.filter((row) => row.task_id && row.task_id === taskId && ["review.recorded", "reground.stored", "plan.reconciled"].includes(row.type))) {
+        pushStage(stages, event.type.replace(/\./g, "_"), event.recorded_at, {
+          task_id: event.task_id,
+          goal_id: event.goal_id
+        });
+      }
+      const sortedStages = stages.sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")));
+      const terminal = [...sortedStages].reverse().find((stage) =>
+        ["mailbox_reply", "review_recorded", "reground_stored", "plan_reconciled", "mailbox_ack", "codex_mcp_seen", "claude_mcp_emitted"].includes(stage.type)
+      );
+      return {
+        message_id: messageId,
+        from: message?.from || null,
+        to: message?.to || null,
+        kind: message?.kind || null,
+        task_id: message?.task_id || null,
+        goal_id: message?.goal_id || null,
+        subject: message?.subject || null,
+        current_state: terminal ? terminal.type : sortedStages.length ? sortedStages[sortedStages.length - 1].type : "unknown",
+        last_at: sortedStages.length ? sortedStages[sortedStages.length - 1].at : null,
+        stages: sortedStages
+      };
+    })
+    .filter((row) => row.stages.length)
+    .sort((a, b) => String(b.last_at || "").localeCompare(String(a.last_at || "")))
+    .slice(0, limit);
+  return {
+    total_candidates: candidateIds.size,
+    shown: rows.length,
+    rows
+  };
+}
+
 function mailboxState(cwd, tasks = []) {
   const diagnostics = mailboxDiagnostics(cwd);
   const messages = listMessages(cwd);
@@ -552,6 +703,7 @@ function cockpitSnapshot(cwd, options = {}) {
   const codexWake = codexWakeState(cwd);
   const claudeMcp = claudeMcpState(cwd);
   const codexMcp = statusCodexMcp(cwd);
+  const messageTimeline = messageTimelineState(cwd, { limit: options.timeline_limit || 8 });
   const session = channelSession(cwd);
   const target = options.target || (session && (session.target || session.name));
   const channelCwd = (session && session.project_dir) || cwd;
@@ -707,6 +859,7 @@ function cockpitSnapshot(cwd, options = {}) {
       }))
     },
     mailbox,
+    message_timeline: messageTimeline,
     daemon: {
       running: daemon.running,
       stale_pid: daemon.stale_pid,
@@ -797,6 +950,7 @@ function renderCockpit(snapshot) {
     `Claude MCP: queued=${snapshot.daemon.claude_mcp.queued_total} waiting=${snapshot.daemon.claude_mcp.waiting_for_mcp_server} mcp-emitted=${snapshot.daemon.claude_mcp.mcp_emitted} legacy-fallback=${snapshot.daemon.claude_mcp.legacy_fallback_attempts} legacy-blocked=${snapshot.daemon.claude_mcp.legacy_blocked} outbox=${snapshot.daemon.claude_mcp.outbox_path}`,
     `Codex MCP: configured=${snapshot.daemon.codex_mcp.configured ? "yes" : "no"} wrapper=${snapshot.daemon.codex_mcp.wrapper_exists ? "yes" : "no"} pending-wake=${snapshot.daemon.codex_mcp.pending_wake_count} manifest=${path.relative(process.cwd(), snapshot.daemon.codex_mcp.manifest_path)}`,
     `Codex wake: total=${snapshot.daemon.codex_wake.total} delivered=${snapshot.daemon.codex_wake.delivered} queued-no-adapter=${snapshot.daemon.codex_wake.queued_no_adapter} failed=${snapshot.daemon.codex_wake.failed} adapter=${snapshot.daemon.codex_wake.adapter_configured ? "configured" : "missing"} stream=${snapshot.daemon.codex_wake.stream_path}`,
+    `Timeline: shown=${snapshot.message_timeline.shown} candidates=${snapshot.message_timeline.total_candidates}`,
     `Queues: requests=${snapshot.claude_channel.queues.requests} responses=${snapshot.claude_channel.queues.responses} pending=${snapshot.claude_channel.queues.pending.length}${snapshot.claude_channel.queues.stale_completed_pending ? ` completed-stale=${snapshot.claude_channel.queues.stale_completed_pending}` : ""}`,
     `Mailbox: total=${snapshot.mailbox.total} codex-unread=${snapshot.mailbox.codex_unread} claude-unread=${snapshot.mailbox.claude_unread} pending-receipts=${snapshot.mailbox.pending_receipt_ack} pending-replies=${snapshot.mailbox.pending_reply_required}${snapshot.mailbox.stale_completed_unread || snapshot.mailbox.stale_completed_receipt_ack || snapshot.mailbox.stale_completed_reply_required ? ` completed-stale=${snapshot.mailbox.stale_completed_unread + snapshot.mailbox.stale_completed_receipt_ack + snapshot.mailbox.stale_completed_reply_required}` : ""}${snapshot.mailbox.duplicate_receipt_acks_collapsed ? ` receipt-duplicates-collapsed=${snapshot.mailbox.duplicate_receipt_acks_collapsed}` : ""} malformed=${snapshot.mailbox.diagnostics.malformed_total}`,
     `Tasks: total=${snapshot.tasks.total} ${statusParts || "none"}`,
@@ -874,6 +1028,15 @@ function renderCockpit(snapshot) {
     ...(snapshot.daemon.codex_wake.recent.length
       ? snapshot.daemon.codex_wake.recent.map((wake) => `- ${wake.message_id}${wake.task_id ? ` ${wake.task_id}` : ""} ${wake.from}->${wake.to}/${wake.kind} ${wake.result_state}: ${wake.subject || wake.payload_path}`)
       : [`- No wake payloads yet (${snapshot.daemon.codex_wake.stream_path})`]),
+    "",
+    "## Message Timeline",
+    "",
+    ...(snapshot.message_timeline.rows.length
+      ? snapshot.message_timeline.rows.map((row) => {
+          const stages = row.stages.map((stage) => `${stage.type}${stage.result_state ? `(${stage.result_state})` : ""}`).join(" -> ");
+          return `- ${row.message_id}${row.task_id ? ` ${row.task_id}` : ""} ${row.from || "?"}->${row.to || "?"}/${row.kind || "?"} ${row.current_state}: ${stages}`;
+        })
+      : ["- None"]),
     "",
     "## Codex MCP Adapter",
     "",

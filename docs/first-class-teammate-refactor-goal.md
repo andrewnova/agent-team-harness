@@ -770,3 +770,47 @@ Remaining architectural discomfort:
 Next phase:
 
 - Add a per-message receipt timeline across Claude MCP outbox, legacy wake fallback, Codex wake payloads, Codex MCP reads, mailbox ACKs, semantic replies, and imports. Then return to visible-Claude session identity so first-party MCP plus startup proof can stop depending on legacy endpoint-name luck.
+
+### 2026-06-30 - Phase 7 Cockpit Message Timeline
+
+What changed:
+
+- Added a derived `message_timeline` projection to cockpit JSON/text.
+- Timeline rows combine existing mailbox rows, mailbox ACK rows, Claude MCP outbox rows, Claude MCP delivery rows, Codex wake payload rows, Codex MCP receipt rows, and daemon/state events.
+- Timeline stages now include `mailbox_sent`, `daemon_received`, `semantic_ack_required`, `receipt_ack_sent`, `claude_mcp_queued`, `claude_mcp_emitted`, `legacy_wake_attempted`, `legacy_wake_skipped`, `codex_wake_queued`, `codex_wake_attempted`, `codex_wake_payload`, `codex_mcp_seen`, `mailbox_ack`, and `mailbox_reply`.
+- Added cockpit summary line `Timeline: shown=... candidates=...` and a `## Message Timeline` section with compact stage chains.
+- Added a smoke test that drives a Claude-to-Codex check-in through daemon wake, Codex MCP ACK, Codex MCP reply, and cockpit timeline rendering.
+- Updated README and the Codex skill contract to document the per-message timeline.
+- Synced `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` after the skill update.
+
+Why it changed:
+
+- Counts were not enough. Operators could see that messages were queued or delivered somewhere, but not one coherent story per message.
+- The user explicitly wants the Claude/Codex system to feel real-time. A per-message timeline makes slow, missing, or stale legs visible without inventing a second state store.
+- The projection keeps mailbox truth intact: it derives from existing durable facts rather than becoming another lifecycle authority.
+
+Files touched:
+
+- `agent-team/src/cockpit.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test tests/cli-smoke.test.js tests/mcp-codex-channel.test.js` from `agent-team/`: 60 tests passed.
+- `node --test tests/public-contract.test.js tests/cli-smoke.test.js tests/mcp-codex-channel.test.js` from `agent-team/`: 62 tests passed.
+
+Remaining architectural discomfort:
+
+- The timeline is read-only and helpful, but not yet exposed as a dedicated CLI/API command outside cockpit.
+- Import stages are task-level approximations (`review_recorded`, `reground_stored`, `plan_reconciled`) rather than exact request-message import receipts.
+- Visible-Claude session identity and fresh launch still depend on the legacy endpoint registry.
+- The Codex MCP adapter still needs a native Codex-side consumer before it can feel like a push inside this Codex UI.
+
+Next phase:
+
+- Either expose the message timeline as a first-class CLI/API command for debugging, or return to visible-Claude startup identity and reduce dependency on the legacy endpoint-name registry. Prefer visible-Claude identity next because it is still the biggest user-visible trust gap.
