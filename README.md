@@ -112,7 +112,7 @@ agent-team verify final
 
 The mailbox is the durable communication truth. The managed Claude channel bridge is installed by the harness and is useful for startup, health checks, and explicit smoke tests, but normal development coordination should not depend on a synchronous reply window.
 
-The receiver daemon is the bridge that makes Codex and Claude feel connected without blocking either model. It watches mailbox traffic, records receipt ACKs, surfaces semantic ACK/reply requirements, immediately wakes the visible Claude channel for Claude-bound non-heartbeat traffic when a live endpoint exists, queues Codex wake payloads for Claude-to-Codex messages, shows check-ins in cockpit, and lets Codex import Claude's answer when it arrives.
+The receiver daemon is the bridge that makes Codex and Claude feel connected without blocking either model. It watches mailbox traffic, records receipt ACKs, surfaces semantic ACK/reply requirements, queues first-party Claude MCP channel notifications for Claude-bound non-heartbeat traffic, keeps the legacy Claude channel wake as a compatibility fallback when a live endpoint exists, queues Codex wake payloads for Claude-to-Codex messages, shows check-ins in cockpit, and lets Codex import Claude's answer when it arrives.
 
 For Claude-to-Codex traffic, the daemon writes wake payloads under `.agent-team/comms/codex-wake/` and can invoke `AGENT_TEAM_CODEX_WAKE_COMMAND` with the payload path. The mailbox remains the source of truth; the wake stream is the local real-time delivery adapter for Codex surfaces that can consume it.
 
@@ -142,9 +142,9 @@ agent-team review import T-000001 --request-id req_...
 
 ## First-Party Claude MCP Channel
 
-The repo now includes an experimental first-party Claude MCP server at `agent-team-claude-mcp`. It declares the Agent Team Claude Channel, exposes mailbox-backed tools for ACKs, replies, check-ins, status, and task opening, and writes Claude responses through the same durable mailbox as the CLI.
+The repo now includes an experimental first-party Claude MCP server at `agent-team-claude-mcp`. It declares the Agent Team Claude Channel, watches `.agent-team/comms/claude-mcp/outbox.jsonl`, emits queued `notifications/claude/channel` wake-ups, exposes mailbox-backed tools for ACKs, replies, check-ins, status, and task opening, and writes Claude responses through the same durable mailbox as the CLI.
 
-This is the migration target for replacing the managed `claude-channel-cli` bridge on the normal path. Until daemon launch/delivery is fully wired to this server and dogfooded with visible Claude Code, the legacy bridge remains the supported live startup/smoke path.
+This is the migration target for replacing the managed `claude-channel-cli` bridge on the normal path. The daemon now writes the first-party outbox first and uses the legacy bridge as compatibility fallback. Until installer/registration and real visible-Claude dogfood are complete, the legacy bridge remains the supported live startup/smoke path.
 
 ## Project Layout
 

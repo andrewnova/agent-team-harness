@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const path = require("node:path");
-const { initializeResult, toolDefinitions, callTool } = require("./claudeChannel");
+const { initializeResult, toolDefinitions, callTool, watchChannelOutbox } = require("./claudeChannel");
 
 function argValue(args, name, fallback = null) {
   const index = args.indexOf(name);
@@ -68,10 +68,33 @@ function handleRequest(cwd, message) {
 }
 
 function runServer(options = {}) {
-  const cwd = path.resolve(options.cwd || argValue(process.argv.slice(2), "--cwd", process.cwd()));
+  const args = process.argv.slice(2);
+  const cwd = path.resolve(options.cwd || argValue(args, "--cwd", process.cwd()));
   const input = options.input || process.stdin;
   const output = options.output || process.stdout;
+  const watchOutbox = options.watch_outbox !== false && !args.includes("--no-watch-outbox");
   let buffer = Buffer.alloc(0);
+  let outboxWatcher = null;
+
+  const close = () => {
+    input.removeAllListeners("data");
+    input.removeAllListeners("end");
+    if (outboxWatcher) outboxWatcher.close();
+    outboxWatcher = null;
+  };
+
+  if (watchOutbox) {
+    outboxWatcher = watchChannelOutbox(
+      cwd,
+      (notification) => {
+        output.write(encodeFrame(notification));
+      },
+      {
+        include_existing: true,
+        interval_ms: Number(argValue(args, "--outbox-interval-ms", "1000")) || 1000
+      }
+    );
+  }
 
   input.on("data", (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
@@ -92,11 +115,10 @@ function runServer(options = {}) {
       }
     }
   });
+  input.on("end", close);
 
   return {
-    close() {
-      input.removeAllListeners("data");
-    }
+    close
   };
 }
 

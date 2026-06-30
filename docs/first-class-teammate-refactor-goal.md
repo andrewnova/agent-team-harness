@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 2 first-party Claude MCP channel seam committed to tests, full architecture review still open
+Status: Active refactor charter; Phase 3 daemon-to-Claude-MCP outbox wiring verified locally, full architecture review still open
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -562,3 +562,51 @@ Remaining architectural discomfort:
 Next phase:
 
 - Wire daemon delivery to a pluggable channel transport so `agent-team-claude-mcp` can become the preferred live projection path, with `claude-channel-cli` demoted to compatibility/diagnostics.
+
+### 2026-06-30 - Phase 3 Daemon To Claude MCP Outbox Wiring
+
+What changed:
+
+- Added first-party Claude MCP outbox paths under `.agent-team/comms/claude-mcp/`.
+- Corrected Claude Channel notification shape to the documented `params.content` plus `params.meta` contract.
+- Added durable queue/deliver/watch helpers for first-party Claude Channel notifications.
+- Updated `agent-team-claude-mcp` so the server watches the outbox and emits queued `notifications/claude/channel` frames while Claude Code keeps the MCP server running.
+- Changed daemon Claude-bound live delivery to queue first-party MCP outbox notifications first, then attempt the legacy `claude-channel-cli` wake as compatibility fallback.
+- Added regression coverage proving daemon first-party outbox delivery works even when the legacy `.agent-team/comms/claude-channel/session.json` is missing.
+
+Why it changed:
+
+- The first-party MCP/channel server needed to become an actual daemon delivery path, not just a static server seam.
+- First-party delivery must not depend on legacy endpoint/session records; Claude Code MCP registration should be enough for the server to receive queued wake-ups.
+- The migration needs to preserve current visible behavior while demoting the wrapper to a fallback, not breaking active users during the transition.
+
+Files touched:
+
+- `agent-team/src/paths.js`
+- `agent-team/src/mcp/claudeChannel.js`
+- `agent-team/src/mcp/claudeServer.js`
+- `agent-team/src/daemon.js`
+- `agent-team/tests/mcp-claude-channel.test.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test tests/public-contract.test.js tests/mcp-claude-channel.test.js tests/cli-smoke.test.js` from `agent-team/`: 60 tests passed.
+- `npm test` from `agent-team/`: 111 tests passed.
+- Installed skill sync: plugin skill copied to `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` and verified with `cmp`.
+
+Remaining architectural discomfort:
+
+- There is still no installer/registration command that adds `agent-team-claude-mcp` to Claude Code MCP config automatically.
+- The daemon still attempts legacy `claude-channel-cli` compatibility fallback; this is intentional for now but not the final normal path.
+- Cockpit does not yet render the first-party Claude MCP outbox/delivery chain in human terms.
+- Real visible-Claude dogfood with the first-party MCP server has not been captured.
+- Codex wake remains a separate queued payload/optional command path rather than a first-class Codex MCP/app adapter.
+
+Next phase:
+
+- Add Claude MCP registration/install support for `agent-team-claude-mcp`, expose first-party delivery state in cockpit, then dogfood a visible Claude wake through the new path.

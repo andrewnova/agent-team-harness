@@ -24,7 +24,8 @@ test("README explains daemon-backed mailbox delegation", () => {
 
   assert.match(readme, /The receiver daemon is the bridge/);
   assert.match(readme, /Do not delegate real Claude work through raw `ask_claude`/);
-  assert.match(readme, /immediately wakes the visible Claude channel/);
+  assert.match(readme, /queues first-party Claude MCP channel notifications/);
+  assert.match(readme, /legacy Claude channel wake as a compatibility fallback/);
   assert.match(readme, /queues Codex wake payloads/);
   assert.match(readme, /AGENT_TEAM_CODEX_WAKE_COMMAND/);
   assert.match(readme, /cockpit` and `agent-team watch` show Codex wake totals/);

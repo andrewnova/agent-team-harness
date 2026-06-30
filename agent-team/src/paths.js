@@ -149,6 +149,18 @@ function channelLaunchLogPath(cwd, name) {
   return path.join(rootDir(cwd), "comms", "claude-channel", `${safeName}.log`);
 }
 
+function claudeMcpDir(cwd) {
+  return path.join(commsDir(cwd), "claude-mcp");
+}
+
+function claudeMcpOutboxPath(cwd) {
+  return path.join(claudeMcpDir(cwd), "outbox.jsonl");
+}
+
+function claudeMcpDeliveriesPath(cwd) {
+  return path.join(claudeMcpDir(cwd), "deliveries.jsonl");
+}
+
 function boardPath(cwd) {
   return path.join(rootDir(cwd), "projections", "board.md");
 }
@@ -223,6 +235,9 @@ module.exports = {
   channelSessionPath,
   channelSessionsPath,
   channelLaunchLogPath,
+  claudeMcpDir,
+  claudeMcpOutboxPath,
+  claudeMcpDeliveriesPath,
   boardPath,
   healthPath,
   taskProjectionPath,

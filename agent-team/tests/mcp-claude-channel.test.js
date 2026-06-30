@@ -9,6 +9,9 @@ const {
   initializeResult,
   toolDefinitions,
   channelNotification,
+  queueChannelNotification,
+  deliverQueuedNotifications,
+  listDeliveredNotifications,
   callTool
 } = require("../src/mcp/claudeChannel");
 const { encodeFrame, decodeFrames } = require("../src/mcp/claudeServer");
@@ -47,13 +50,47 @@ test("Claude MCP channel notification preserves mailbox identity and body", () =
 
   const notification = channelNotification(cwd, message);
   assert.equal(notification.method, "notifications/claude/channel");
-  assert.equal(notification.params.channel, CHANNEL_ID);
-  assert.equal(notification.params.metadata.mailbox_message_id, message.id);
-  assert.equal(notification.params.metadata.mailbox_truth, true);
-  const text = notification.params.message.content[0].text;
+  assert.equal(notification.params.meta.channel, CHANNEL_ID);
+  assert.equal(notification.params.meta.mailbox_message_id, message.id);
+  assert.equal(notification.params.meta.mailbox_truth, true);
+  const text = notification.params.content[0].text;
   assert.match(text, new RegExp(message.id));
   assert.match(text, /Mailbox is the source of truth/);
   assert.match(text, /test 123/);
+});
+
+test("Claude MCP outbox queues and delivers channel notifications exactly once", () => {
+  const cwd = tempRoot();
+  const message = appendMessage(cwd, {
+    from: "codex",
+    to: "claude",
+    kind: "notify",
+    subject: "Outbox ping",
+    body: "outbox body"
+  }).message;
+
+  const queued = queueChannelNotification(cwd, message, { daemon_run_id: "R-daemon" });
+  assert.equal(queued.ok, true);
+  assert.equal(queued.queued, true);
+  assert.equal(queued.transport, "claude-mcp-outbox");
+  assert.equal(queued.result_state, "mcp_outbox_queued");
+
+  const duplicate = queueChannelNotification(cwd, message);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.result_state, "mcp_outbox_already_queued");
+
+  const emitted = [];
+  const first = deliverQueuedNotifications(cwd, (notification, row) => emitted.push({ notification, row }));
+  assert.equal(first.count, 1);
+  assert.equal(emitted[0].notification.method, "notifications/claude/channel");
+  assert.equal(emitted[0].notification.params.meta.mailbox_message_id, message.id);
+  assert.match(emitted[0].notification.params.content[0].text, /outbox body/);
+  assert.equal(listDeliveredNotifications(cwd).length, 1);
+
+  const second = deliverQueuedNotifications(cwd, () => {
+    throw new Error("should not emit already delivered notification");
+  });
+  assert.equal(second.count, 0);
 });
 
 test("Claude MCP tools write ACKs, replies, and check-ins through durable mailbox", () => {
@@ -145,4 +182,31 @@ test("Claude MCP stdio server initializes, lists tools, and writes mailbox messa
   const checkins = listMessages(cwd, { from: "claude", to: "codex", kind: "checkin" });
   assert.equal(checkins.length, 1);
   assert.equal(loadMessage(cwd, checkins[0].id, { include_body: true }).body, "test 123 from Claude");
+});
+
+test("Claude MCP stdio server emits queued Agent Team channel notifications", () => {
+  const cwd = tempRoot();
+  const server = path.join(__dirname, "..", "src", "mcp", "claudeServer.js");
+  const message = appendMessage(cwd, {
+    from: "codex",
+    to: "claude",
+    kind: "notify",
+    subject: "Visible server wake",
+    body: "hello visible Claude"
+  }).message;
+  queueChannelNotification(cwd, message);
+
+  const result = spawnSync(process.execPath, [server, "--cwd", cwd], {
+    input: encodeFrame({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+    encoding: "buffer"
+  });
+  assert.equal(result.status, 0, result.stderr.toString("utf8"));
+  const decoded = decodeFrames(result.stdout);
+  const notification = decoded.messages.find((row) => row.method === "notifications/claude/channel");
+  const initialize = decoded.messages.find((row) => row.id === 1);
+  assert.ok(notification, "expected queued Claude channel notification");
+  assert.ok(initialize, "expected initialize response");
+  assert.equal(notification.params.meta.mailbox_message_id, message.id);
+  assert.match(notification.params.content[0].text, /hello visible Claude/);
+  assert.equal(listDeliveredNotifications(cwd).length, 1);
 });

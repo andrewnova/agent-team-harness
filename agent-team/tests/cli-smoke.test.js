@@ -714,6 +714,9 @@ test("CLI smoke: daemon wakes live Claude when a Claude-bound mailbox request la
   assert.equal(daemon.messages[0].live_push.attempted, true);
   assert.equal(daemon.messages[0].live_push.target, "ep_exact");
   assert.equal(daemon.messages[0].live_push.result_state, "wake_sent_reply_pending");
+  assert.equal(daemon.messages[0].live_push.first_party.transport, "claude-mcp-outbox");
+  assert.equal(daemon.messages[0].live_push.first_party.result_state, "mcp_outbox_queued");
+  assert.equal(daemon.messages[0].live_push.legacy.transport, "claude-channel-cli");
 
   const args = fs.readFileSync(argsFile, "utf8").trim().split(/\r?\n/);
   assert.equal(args[0], "ask-file");
@@ -732,6 +735,14 @@ test("CLI smoke: daemon wakes live Claude when a Claude-bound mailbox request la
   assert.equal(events.length, 1);
   assert.equal(events[0].detail.message_id, request.message.id);
   assert.equal(events[0].detail.result_state, "wake_sent_reply_pending");
+  const mcpRows = fs
+    .readFileSync(path.join(cwd, ".agent-team", "comms", "claude-mcp", "outbox.jsonl"), "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line));
+  assert.equal(mcpRows.length, 1);
+  assert.equal(mcpRows[0].message_id, request.message.id);
+  assert.equal(mcpRows[0].notification.method, "notifications/claude/channel");
 });
 
 test("CLI smoke: daemon live-wakes visible Claude for non-heartbeat notify messages", () => {
@@ -802,6 +813,7 @@ test("CLI smoke: daemon live-wakes visible Claude for non-heartbeat notify messa
   assert.equal(daemon.messages[0].id, notify.message.id);
   assert.equal(daemon.messages[0].semantic_ack_required, false);
   assert.equal(daemon.messages[0].live_push.required, true);
+  assert.equal(daemon.messages[0].live_push.first_party.result_state, "mcp_outbox_queued");
   assert.equal(daemon.messages[0].live_push.target, "ep_exact");
   assert.equal(daemon.messages[0].live_push.result_state, "queued");
 
@@ -811,6 +823,52 @@ test("CLI smoke: daemon live-wakes visible Claude for non-heartbeat notify messa
   assert.match(prompt, /mailbox message has just been queued/);
   assert.match(prompt, /Visible action:/);
   assert.match(prompt, /hi/);
+  const mcpRows = fs
+    .readFileSync(path.join(cwd, ".agent-team", "comms", "claude-mcp", "outbox.jsonl"), "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line));
+  assert.equal(mcpRows.length, 1);
+  assert.equal(mcpRows[0].message_id, notify.message.id);
+  assert.match(mcpRows[0].notification.params.content[0].text, /hi/);
+});
+
+test("CLI smoke: daemon queues first-party Claude MCP notifications without legacy channel session", () => {
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  const notify = JSON.parse(
+    run(cwd, [
+      "mailbox",
+      "send",
+      "--from",
+      "codex",
+      "--to",
+      "claude",
+      "--kind",
+      "notify",
+      "--subject",
+      "MCP-only wake",
+      "--body",
+      "first-party path should not need legacy session"
+    ]).stdout
+  );
+
+  const daemon = JSON.parse(run(cwd, ["daemon", "run", "--once", "--roles", "claude"]).stdout);
+  assert.equal(daemon.ok, true);
+  assert.equal(daemon.messages.length, 1);
+  assert.equal(daemon.messages[0].live_push.required, true);
+  assert.equal(daemon.messages[0].live_push.primary_transport, "claude-mcp-outbox");
+  assert.equal(daemon.messages[0].live_push.result_state, "mcp_outbox_queued");
+  assert.equal(daemon.messages[0].live_push.first_party.result_state, "mcp_outbox_queued");
+  assert.equal(daemon.messages[0].live_push.legacy.result_state, "legacy_no_session");
+
+  const mcpRows = fs
+    .readFileSync(path.join(cwd, ".agent-team", "comms", "claude-mcp", "outbox.jsonl"), "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line));
+  assert.equal(mcpRows.length, 1);
+  assert.equal(mcpRows[0].message_id, notify.message.id);
 });
 
 test("CLI smoke: daemon queues and delivers Codex wake payloads for Claude check-ins", () => {

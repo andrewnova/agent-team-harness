@@ -1,5 +1,8 @@
+const fs = require("node:fs");
 const path = require("node:path");
 const { appendMessage, ackMessage, listMessages, loadMessage, compactMessage } = require("../mailbox");
+const paths = require("../paths");
+const { appendJsonl, ensureDir } = require("../fsutil");
 const state = require("../state");
 
 const CHANNEL_ID = "agent-team";
@@ -156,17 +159,14 @@ function channelNotification(cwd, message, options = {}) {
     jsonrpc: "2.0",
     method: "notifications/claude/channel",
     params: {
-      channel: options.channel || CHANNEL_ID,
-      message: {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: notificationText(cwd, message)
-          }
-        ]
-      },
-      metadata: {
+      content: [
+        {
+          type: "text",
+          text: notificationText(cwd, message)
+        }
+      ],
+      meta: {
+        channel: options.channel || CHANNEL_ID,
         source: "agent-team-daemon",
         mailbox_message_id: message.id,
         request_id: message.request_id || null,
@@ -175,6 +175,157 @@ function channelNotification(cwd, message, options = {}) {
         kind: message.request_kind || message.kind,
         mailbox_truth: true
       }
+    }
+  };
+}
+
+function readJsonlSafe(file) {
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function notificationIdFor(message) {
+  return `claude_mcp_${message.id}`;
+}
+
+function listQueuedNotifications(cwd) {
+  return readJsonlSafe(paths.claudeMcpOutboxPath(cwd));
+}
+
+function listDeliveredNotifications(cwd) {
+  return readJsonlSafe(paths.claudeMcpDeliveriesPath(cwd));
+}
+
+function deliveredNotificationIds(cwd) {
+  return new Set(listDeliveredNotifications(cwd).map((row) => row.notification_id));
+}
+
+function queueChannelNotification(cwd, message, options = {}) {
+  state.init(cwd);
+  const notificationId = options.notification_id || notificationIdFor(message);
+  const existing = listQueuedNotifications(cwd).find(
+    (row) => row.notification_id === notificationId || row.message_id === message.id
+  );
+  const base = {
+    ok: true,
+    required: true,
+    transport: "claude-mcp-outbox",
+    notification_id: notificationId,
+    message_id: message.id,
+    task_id: message.task_id,
+    goal_id: message.goal_id,
+    outbox_path: path.relative(cwd, paths.claudeMcpOutboxPath(cwd))
+  };
+  if (existing) {
+    return {
+      ...base,
+      queued: false,
+      duplicate: true,
+      result_state: "mcp_outbox_already_queued"
+    };
+  }
+
+  const record = {
+    notification_id: notificationId,
+    created_at: new Date().toISOString(),
+    source: "agent-team-daemon",
+    message_id: message.id,
+    request_id: message.request_id || null,
+    task_id: message.task_id || null,
+    goal_id: message.goal_id || null,
+    run_id: message.run_id || null,
+    kind: message.request_kind || message.kind,
+    notification: channelNotification(cwd, message, options)
+  };
+  ensureDir(paths.claudeMcpDir(cwd));
+  appendJsonl(paths.claudeMcpOutboxPath(cwd), record);
+  state.recordEvent(cwd, {
+    type: "daemon.claude_mcp_notification_queued",
+    actor: "codex",
+    run_id: options.daemon_run_id,
+    task_id: message.task_id,
+    goal_id: message.goal_id,
+    detail: {
+      ...base,
+      queued: true,
+      result_state: "mcp_outbox_queued"
+    }
+  });
+  return {
+    ...base,
+    queued: true,
+    result_state: "mcp_outbox_queued"
+  };
+}
+
+function markNotificationDelivered(cwd, row) {
+  appendJsonl(paths.claudeMcpDeliveriesPath(cwd), {
+    notification_id: row.notification_id,
+    message_id: row.message_id,
+    task_id: row.task_id,
+    goal_id: row.goal_id,
+    delivered_at: new Date().toISOString(),
+    result_state: "delivered"
+  });
+}
+
+function deliverQueuedNotifications(cwd, onNotification) {
+  state.init(cwd);
+  ensureDir(paths.claudeMcpDir(cwd));
+  const delivered = deliveredNotificationIds(cwd);
+  const rows = listQueuedNotifications(cwd).filter((row) => !delivered.has(row.notification_id));
+  const emitted = [];
+  for (const row of rows) {
+    onNotification(row.notification, row);
+    markNotificationDelivered(cwd, row);
+    emitted.push({
+      notification_id: row.notification_id,
+      message_id: row.message_id,
+      task_id: row.task_id,
+      goal_id: row.goal_id
+    });
+  }
+  return {
+    ok: true,
+    emitted,
+    count: emitted.length
+  };
+}
+
+function watchChannelOutbox(cwd, onNotification, options = {}) {
+  state.init(cwd);
+  ensureDir(paths.claudeMcpDir(cwd));
+  const intervalMs = options.interval_ms || 1000;
+  let closed = false;
+  let watcher = null;
+  let timer = null;
+
+  const pump = () => {
+    if (!closed) deliverQueuedNotifications(cwd, onNotification);
+  };
+
+  if (options.include_existing !== false) pump();
+  try {
+    watcher = fs.watch(paths.claudeMcpDir(cwd), { persistent: true }, (_event, filename) => {
+      if (filename === "outbox.jsonl") pump();
+    });
+    watcher.on("error", () => {
+      if (watcher) watcher.close();
+      watcher = null;
+    });
+  } catch (_error) {
+    watcher = null;
+  }
+  timer = setInterval(pump, intervalMs);
+  return {
+    close() {
+      closed = true;
+      if (watcher) watcher.close();
+      if (timer) clearInterval(timer);
     }
   };
 }
@@ -294,5 +445,10 @@ module.exports = {
   initializeResult,
   notificationText,
   channelNotification,
+  queueChannelNotification,
+  listQueuedNotifications,
+  listDeliveredNotifications,
+  deliverQueuedNotifications,
+  watchChannelOutbox,
   callTool
 };
