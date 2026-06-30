@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 12 visible launch markers and boot ACK command implemented, real visible-Claude endpoint/MCP dogfood still open
+Status: Active refactor charter; Phase 13 cockpit projection now preserves visible launch proof, real visible-Claude endpoint/MCP dogfood still open
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -1072,3 +1072,42 @@ Remaining architectural discomfort:
 Next phase:
 
 - Run full tests, sync installed skill, then dogfood a real visible Claude startup with the new launch marker and boot ACK fields. If real Claude still does not emit a boot ACK or endpoint, build the next phase around first-party MCP session identity and a clean manual fallback packet rather than more endpoint guessing.
+
+### 2026-06-30 - Phase 13 Cockpit Projection Preserves Startup Proof
+
+What changed:
+
+- Fixed `cockpit` / `watch` session projection so persisted Claude startup records keep `launch_id`, `launch_marker`, and `boot_ack` fields.
+- Added a CLI smoke regression that seeds a failed fresh visible launch with a recorded launch marker and missing boot ACK, then proves both JSON cockpit output and text output render the correct facts.
+- Dogfooded the real current cockpit state from the Phase 12 visible launch attempt. It now shows `launch-marker=recorded boot-ack=missing`, and the priority Next Action says `visible launch marker recorded; Claude boot ACK missing`.
+
+Why it changed:
+
+- Phase 12 persisted the right startup proof, but `channelSession(cwd)` dropped it while compacting history/session records for cockpit display.
+- That made the dashboard contradict the underlying proof: the launch marker existed, but Next Actions still claimed no visible launch marker was recorded.
+- The fix keeps the architecture honest at the user-facing layer. If the visible shell command ran but Claude never boot-ACKed and no endpoint appeared, cockpit now says exactly that.
+
+Files touched:
+
+- `agent-team/src/cockpit.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/cli-smoke.test.js --test-name-pattern "cockpit preserves visible Claude startup proof"` from repo root: CLI smoke file ran and 60 tests passed.
+- `npm test` from `agent-team/`: 126 tests passed.
+- Live cockpit dogfood: `node agent-team/src/cli.js watch --once --no-live-channel --json` showed `claude_channel.session.launch_marker.ok: true`, `claude_channel.session.boot_ack.ok: false`, and the priority Next Action `visible launch marker recorded; Claude boot ACK missing`.
+- Live text dogfood: `node agent-team/src/cli.js watch --once --no-live-channel` rendered `Claude startup: ... launch-marker=recorded boot-ack=missing`.
+
+Remaining architectural discomfort:
+
+- This fixes truthful display, not the deeper visible-Claude handshake. Real visible Claude still did not record a boot ACK and did not produce a new same-project endpoint in the Phase 12 dogfood run.
+- The startup proof path still contains legacy endpoint registry dependency for live steering readiness.
+- The cockpit can now distinguish launch-marker, boot ACK, and endpoint readiness, but the user still has to understand those are separate facts. A more first-class teammate UX should make that distinction natural rather than technical.
+- Pending old Legal Ads Claude requests still create mailbox noise in this harness checkout; that is audit/state cleanup work, not part of this projection bug.
+
+Next phase:
+
+- Refactor toward first-party Claude MCP/session identity for visible startup. The launched visible Claude session should create a durable boot ACK or manual fallback packet tied to the Codex thread/project without relying on endpoint-name/list inference.
+- Add a cleaner diagnostic or repair command for "visible shell ran, Claude did not boot ACK" so the next action is operational, not just descriptive.

@@ -2186,6 +2186,62 @@ test("CLI smoke: fresh Claude start does not reuse or rename an old endpoint", (
   assert.match(cockpitText, /Fresh Claude launch did not register a new same-project endpoint/);
 });
 
+test("CLI smoke: cockpit preserves visible Claude startup proof from session history", () => {
+  const cwd = tempRoot();
+  const historyFile = paths.channelSessionsPath(cwd);
+  fs.mkdirSync(path.dirname(historyFile), { recursive: true });
+  fs.appendFileSync(
+    historyFile,
+    `${JSON.stringify({
+      ok: false,
+      action: "fresh_start_no_new_endpoint",
+      reason: "Claude launch command completed, but no new same-project Claude channel endpoint appeared.",
+      identity_confidence: "fresh_launch_unverified_no_new_endpoint",
+      name: "fresh-thread",
+      launch_id: "launch_test_123",
+      launch_mode: "visible",
+      launch_marker: {
+        ok: true,
+        record: {
+          launch_id: "launch_test_123",
+          name: "fresh-thread",
+          project_dir: cwd,
+          mode: "visible",
+          source: "visible-launch-command"
+        }
+      },
+      boot_ack: {
+        ok: false,
+        reason: "not_recorded",
+        launch_id: "launch_test_123"
+      },
+      fresh_launch_probe: {
+        require_new: true,
+        new_project_count: 0,
+        existing_project_count: 2,
+        checked_count: 0,
+        selected_target: null
+      },
+      updated_at: "2026-06-30T10:14:21.676Z"
+    })}\n`
+  );
+
+  const cockpit = JSON.parse(run(cwd, ["watch", "--once", "--json", "--no-live-channel"]).stdout);
+  assert.equal(cockpit.claude_channel.session.launch_id, "launch_test_123");
+  assert.equal(cockpit.claude_channel.session.launch_marker.ok, true);
+  assert.equal(cockpit.claude_channel.session.boot_ack.ok, false);
+  const next = cockpit.next_actions.join("\n");
+  assert.match(next, /Fresh Claude launch did not register a new same-project endpoint/);
+  assert.match(next, /visible launch marker recorded/);
+  assert.match(next, /Claude boot ACK missing/);
+  assert.doesNotMatch(next, /no visible launch marker recorded/);
+  assert.doesNotMatch(next, /Claude boot ACK recorded/);
+  const cockpitText = run(cwd, ["watch", "--once", "--no-live-channel"]).stdout;
+  assert.match(cockpitText, /Claude startup: .*launch-marker=recorded boot-ack=missing/);
+  assert.match(cockpitText, /visible launch marker recorded/);
+  assert.match(cockpitText, /Claude boot ACK missing/);
+});
+
 test("CLI smoke: start can launch Claude from an explicit project directory", () => {
   const cwd = tempRoot();
   const projectDir = tempRoot();
