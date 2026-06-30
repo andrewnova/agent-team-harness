@@ -144,6 +144,14 @@ function channelSessionsPath(cwd) {
   return path.join(rootDir(cwd), "comms", "claude-channel", "sessions.jsonl");
 }
 
+function channelLaunchMarkersPath(cwd) {
+  return path.join(rootDir(cwd), "comms", "claude-channel", "launch-markers.jsonl");
+}
+
+function channelBootAcksPath(cwd) {
+  return path.join(rootDir(cwd), "comms", "claude-channel", "boot-acks.jsonl");
+}
+
 function channelLaunchLogPath(cwd, name) {
   const safeName = String(name || "claude").replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 80);
   return path.join(rootDir(cwd), "comms", "claude-channel", `${safeName}.log`);
@@ -259,6 +267,8 @@ module.exports = {
   responsesPath,
   channelSessionPath,
   channelSessionsPath,
+  channelLaunchMarkersPath,
+  channelBootAcksPath,
   channelLaunchLogPath,
   claudeMcpDir,
   claudeMcpOutboxPath,

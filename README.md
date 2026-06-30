@@ -79,7 +79,7 @@ agent-team start --name my-project --project-dir "$PWD" --daemon
 
 When no `--name` is provided, the harness derives a session name from the project and the Codex thread id when `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, or `AGENT_TEAM_SESSION_ID` is available. That lets an old Codex thread reattach to its matching Claude teammate while a new Codex thread gets a separate visible Claude session by default. Passing `--name` remains the explicit override.
 
-`agent-team start` treats a failed Claude startup as a blocking setup error by default. That includes auth failures and failed visible fresh launches, because a Claude-owned task must not look delegated when no reachable visible Claude teammate exists. Use `--allow-degraded-claude` only for offline diagnostics or Codex-only work where the failed startup is intentionally nonblocking.
+`agent-team start` treats a failed Claude startup as a blocking setup error by default. That includes auth failures and failed visible fresh launches, because a Claude-owned task must not look delegated when no reachable visible Claude teammate exists. Visible launches now write a durable launch marker before Claude starts, and the startup prompt asks Claude to run `agent-team channel boot-ack` after reading the boot contract. Those are diagnostics, not proof of task delegation: the launch marker proves the visible shell command ran; the boot ACK proves Claude cooperated with the mailbox contract; the channel endpoint/smoke result still decides whether live steering is ready. Use `--allow-degraded-claude` only for offline diagnostics or Codex-only work where the failed startup is intentionally nonblocking.
 
 For offline or deterministic local testing:
 
@@ -166,7 +166,15 @@ The MCP server uses standard stdio newline-delimited JSON-RPC. It waits until Cl
 
 For clean teammate launches, `--fresh-claude` requires a genuinely new same-project channel endpoint. If no new endpoint appears, the harness reports `fresh_start_no_new_endpoint` instead of silently reusing or renaming an old Claude session.
 
-For same Codex thread resumes, Claude channel ensure now prefers the remembered endpoint id from `.agent-team/comms/claude-channel/session.json` when `session_identity.thread_ref` and `project_dir` match. Display names are human labels and fallback selectors, not the primary continuity proof. Fresh launch failures include an endpoint probe (`discovered.probe` / `fresh_launch_probe`) with old endpoints, new endpoint counts, checked candidates, and the selected target when one exists. `agent-team cockpit` and `agent-team watch` render this as a `Claude startup:` line so visible-launch blockers are readable without opening JSON.
+For same Codex thread resumes, Claude channel ensure now prefers the remembered endpoint id from `.agent-team/comms/claude-channel/session.json` when `session_identity.thread_ref` and `project_dir` match. Display names are human labels and fallback selectors, not the primary continuity proof. Fresh launch failures include an endpoint probe (`discovered.probe` / `fresh_launch_probe`) with old endpoints, new endpoint counts, checked candidates, and the selected target when one exists. Visible startup records also include `launch_marker` and `boot_ack` status. `agent-team cockpit` and `agent-team watch` render this as a `Claude startup:` line so visible-launch blockers are readable without opening JSON.
+
+Claude can manually or automatically acknowledge a boot prompt with:
+
+```bash
+agent-team channel boot-ack --launch-id launch_... --name my-project --project-dir "$PWD"
+```
+
+That command records `.agent-team/comms/claude-channel/boot-acks.jsonl` and sends a Claude-to-Codex mailbox check-in, so Codex can tell whether Claude actually read the startup contract.
 
 ## First-Party Codex MCP Adapter
 

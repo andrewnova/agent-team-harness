@@ -610,6 +610,73 @@ test("CH-3f channel ensure fresh visible launch fails with endpoint probe when n
   }
 });
 
+test("CH-3g channel ensure records visible launch marker when endpoint registry stays stale", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const commandFile = path.join(cwd, "visible-command.txt");
+  const fakeCli = path.join(binDir, "claude-channel");
+  const fakeClaude = path.join(binDir, "claude");
+  const fakeLauncher = path.join(binDir, "visible-launcher");
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  echo '{\"target\":\"ep_old\",\"endpoint\":{\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "  exit 0",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    "  echo '{\"targets\":[{\"target\":\"ep_old\",\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"started_at\":\"2026-06-28T00:00:01.000Z\"}]}'",
+    "  exit 0",
+    "fi",
+    "exit 1"
+  ]);
+  writeExecutable(fakeClaude, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
+    "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
+    "  exit 0",
+    "fi",
+    "exit 0"
+  ]);
+  writeExecutable(fakeLauncher, [
+    "#!/bin/sh",
+    "printf '%s\\n' \"$1\" > \"$FAKE_COMMAND_FILE\"",
+    "sh -c \"$1\"",
+    "exit $?"
+  ]);
+  const previousPath = process.env.PATH;
+  const previousCommandFile = process.env.FAKE_COMMAND_FILE;
+  process.env.PATH = `${binDir}:${previousPath}`;
+  process.env.FAKE_COMMAND_FILE = commandFile;
+  try {
+    const bridge = createBridge("claude-channel");
+    const result = bridge.ensure(cwd, {
+      name: "fresh-thread",
+      fresh_claude: true,
+      timeout_ms: 100,
+      poll_ms: 10,
+      launch_mode: "visible",
+      visible_launcher: fakeLauncher,
+      launch_marker_timeout_ms: 1000
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.action, "fresh_start_no_new_endpoint");
+    assert.equal(result.launch_marker.ok, true);
+    assert.equal(result.launch_marker.record.launch_id, result.launch_id);
+    assert.equal(result.launch_marker.record.name, "fresh-thread");
+    assert.equal(result.launch_marker.record.mode, "visible");
+    assert.equal(result.boot_ack.ok, false);
+    assert.match(fs.readFileSync(commandFile, "utf8"), /channel launch-marker/);
+    const markers = readJsonl(paths.channelLaunchMarkersPath(cwd));
+    assert.equal(markers.length, 1);
+    assert.equal(markers[0].launch_id, result.launch_id);
+    assert.equal(fs.realpathSync(markers[0].project_dir), fs.realpathSync(cwd));
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousCommandFile === undefined) delete process.env.FAKE_COMMAND_FILE;
+    else process.env.FAKE_COMMAND_FILE = previousCommandFile;
+  }
+});
+
 test("CH-3d channel ensure prefers Codex Terminal launcher when configured", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();

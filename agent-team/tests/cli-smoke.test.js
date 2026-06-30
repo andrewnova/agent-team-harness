@@ -2464,6 +2464,36 @@ test("CLI smoke: channel ensure starts a named Claude side through fake binaries
   assert.equal(start.claude_channel.name, "codex-thread");
 });
 
+test("CLI smoke: channel boot-ack records durable boot ack and mailbox checkin", () => {
+  const cwd = tempRoot();
+  const result = JSON.parse(
+    run(cwd, [
+      "channel",
+      "boot-ack",
+      "--launch-id",
+      "launch_test_123",
+      "--name",
+      "codex-thread",
+      "--project-dir",
+      cwd,
+      "--body",
+      "ACK Agent Team quickstart loaded; mailbox is truth."
+    ]).stdout
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.launch_id, "launch_test_123");
+  assert.ok(result.mailbox_message_id);
+  const acks = fs.readFileSync(paths.channelBootAcksPath(cwd), "utf8").trim().split(/\r?\n/).map(JSON.parse);
+  assert.equal(acks.length, 1);
+  assert.equal(acks[0].launch_id, "launch_test_123");
+  const mailbox = fs.readFileSync(paths.mailboxPath(cwd), "utf8").trim().split(/\r?\n/).map(JSON.parse);
+  assert.equal(mailbox.length, 1);
+  assert.equal(mailbox[0].from, "claude");
+  assert.equal(mailbox[0].to, "codex");
+  assert.equal(mailbox[0].kind, "checkin");
+  assert.equal(mailbox[0].metadata.launch_id, "launch_test_123");
+});
+
 test("CLI smoke: claim, attempt, review import, verify run, done", () => {
   const cwd = tempRoot();
   const taskFile = path.join(cwd, "task.json");

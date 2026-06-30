@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 11 Codex MCP wake adapter installed/dogfooded, visible-Claude startup handshake still open
+Status: Active refactor charter; Phase 12 visible launch markers and boot ACK command implemented, real visible-Claude endpoint/MCP dogfood still open
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -1017,3 +1017,58 @@ Remaining architectural discomfort:
 Next phase:
 
 - Attack visible-Claude startup handshake directly. Prefer a first-party startup ACK path where the launched Claude session writes a mailbox/MCP boot ACK tied to the Codex thread and project root, so visible startup proof no longer depends solely on legacy endpoint-list inference.
+
+### 2026-06-30 - Phase 12 Visible Launch Marker And Claude Boot ACK Primitive
+
+What changed:
+
+- Added durable Claude startup proof files under `.agent-team/comms/claude-channel/launch-markers.jsonl` and `.agent-team/comms/claude-channel/boot-acks.jsonl`.
+- Added `agent-team channel launch-marker`, which the visible launch shell command runs before starting Claude. This proves the visible shell command actually executed, separate from endpoint readiness.
+- Added `agent-team channel boot-ack`, which Claude can run after reading the startup prompt. It records a boot ACK and sends a Claude-to-Codex mailbox check-in tied to the launch id.
+- Injected a launch-specific boot ACK command into every Claude startup prompt when a launch id is present.
+- `channel ensure` / `start` now persist `launch_id`, `launch_marker`, and `boot_ack` fields in startup records, including `fresh_start_no_new_endpoint` failures.
+- Cockpit `Claude startup:` and priority Next Actions now show launch marker and boot ACK status alongside endpoint probe counts.
+- Added regression coverage for stale endpoint registry after a visible launch whose shell command really ran, plus a CLI smoke test for `channel boot-ack`.
+- Updated README and the Agent Team Harness skill contract, then synced the installed skill copy.
+
+Why it changed:
+
+- The live dogfood showed Terminal opening while the legacy endpoint registry failed to show a new same-project endpoint. That made the old health report too binary: it could not distinguish "visible command never ran" from "visible command ran but endpoint proof failed."
+- The user needs real-time visible trust, but the architecture must stay honest. A launch marker is not a Claude task ACK, and a boot ACK is not live steering readiness. Separating those facts makes failures diagnosable without pretending delegation succeeded.
+- This is the first first-party startup handshake primitive that does not depend on endpoint display names or endpoint-list timing.
+
+Files touched:
+
+- `agent-team/src/paths.js`
+- `agent-team/src/bridge/claudeChannel/boot.js`
+- `agent-team/src/bridge/claudeChannel/launcher.js`
+- `agent-team/src/bridge/claudeChannel.js`
+- `agent-team/src/cli.js`
+- `agent-team/src/cockpit.js`
+- `agent-team/tests/bridge-review-handoff-reground.test.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/bridge-review-handoff-reground.test.js --test-name-pattern "CH-3f|CH-3g"` from repo root: bridge test file ran and 35 tests passed.
+- `node --test agent-team/tests/cli-smoke.test.js --test-name-pattern "boot-ack|fresh Claude start|channel ensure starts"` from repo root: CLI smoke file ran and 59 tests passed.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+- `node --test agent-team/tests/bridge-review-handoff-reground.test.js` from repo root: 35 tests passed.
+- `node --test agent-team/tests/cli-smoke.test.js` from repo root: 59 tests passed.
+- `npm test` from `agent-team/`: 125 tests passed.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+
+Remaining architectural discomfort:
+
+- The visible launch marker proves the command shell ran, but not that Claude Code's model read or executed the startup prompt.
+- The boot ACK command is injected and test-covered, but real Claude may not run it automatically; live dogfood still needs to capture this behavior.
+- Live steering readiness still depends on endpoint/smoke proof from the legacy Claude channel registry.
+- The next big simplification is to make the first-party Claude MCP/channel path provide enough visible session identity that legacy endpoint-list inference becomes a fallback instead of the main proof.
+
+Next phase:
+
+- Run full tests, sync installed skill, then dogfood a real visible Claude startup with the new launch marker and boot ACK fields. If real Claude still does not emit a boot ACK or endpoint, build the next phase around first-party MCP session identity and a clean manual fallback packet rather than more endpoint guessing.

@@ -30,6 +30,7 @@ const {
   claudeVersion
 } = require("./claudeChannel/auth");
 const { installBridge } = require("./claudeChannel/install");
+const { createLaunchId, waitForBootAck, waitForLaunchMarker } = require("./claudeChannel/boot");
 const {
   codexSessionIdentity,
   codexTerminalLauncher,
@@ -266,9 +267,11 @@ function ensure(cwd, options = {}) {
   const launchOptions = {
     ...options,
     harness_cwd: path.resolve(cwd),
-    plugin_dir: options.plugin_dir || pluginRootFromCli(cli)
+    plugin_dir: options.plugin_dir || pluginRootFromCli(cli),
+    launch_id: options.launch_id || createLaunchId(name, projectCwd)
   };
   const launchMode = options.launch_mode || (codexTerminalLauncher(launchOptions) ? "codex-terminal" : "visible");
+  launchOptions.launch_mode = launchMode;
   if (!["codex-terminal", "visible", "pty", "background"].includes(launchMode)) {
     return persist({
       ok: false,
@@ -302,9 +305,17 @@ function ensure(cwd, options = {}) {
       reuse_source: reuseSource
     });
   }
+  const markerWaitMs =
+    launchMode === "visible" || launchMode === "codex-terminal"
+      ? options.launch_marker_timeout_ms === undefined
+        ? Math.min(2000, timeoutMs)
+        : options.launch_marker_timeout_ms
+      : 0;
+  const launchMarker = waitForLaunchMarker(cwd, launchOptions.launch_id, markerWaitMs, Math.min(pollMs, 100));
   const discovered = waitForStartedEndpoint(cli.command, projectCwd, beforeList, timeoutMs, pollMs, {
     require_new: Boolean(options.fresh_claude)
   });
+  const bootAck = waitForBootAck(cwd, launchOptions.launch_id, options.boot_ack_timeout_ms || 0, Math.min(pollMs, 100));
   let rename = null;
   let finalStatus = null;
   let endpoint = discovered.ok ? discovered.endpoint : null;
@@ -346,7 +357,10 @@ function ensure(cwd, options = {}) {
       action: "fresh_start_no_new_endpoint",
       reason: "Claude launch command completed, but no new same-project Claude channel endpoint appeared. Existing endpoints were intentionally not reused because --fresh-claude was requested.",
       identity_confidence: "fresh_launch_unverified_no_new_endpoint",
+      launch_id: launchOptions.launch_id,
       launch_mode: started.mode,
+      launch_marker: launchMarker,
+      boot_ack: bootAck,
       claude_path: claude.path,
       channel_path: cli.path,
       start: started,
@@ -386,6 +400,7 @@ function ensure(cwd, options = {}) {
   return persist({
     ok: channelAcceptable && (!finalMismatch || options.allow_cross_project_reuse) && (!smoke || smoke.ok),
     identity_confidence: launchedIdentityConfidence(discovered, rename, recoveredEndpoint),
+    launch_id: launchOptions.launch_id,
     action:
       finalMismatch && !options.allow_cross_project_reuse
         ? "workspace_mismatch"
@@ -402,6 +417,8 @@ function ensure(cwd, options = {}) {
     delivery_ready: deliveryReady,
     visible_loaded: visibleLoaded,
     launch_mode: started.mode,
+    launch_marker: launchMarker,
+    boot_ack: bootAck,
     claude_path: claude.path,
     channel_path: cli.path,
     start: started,

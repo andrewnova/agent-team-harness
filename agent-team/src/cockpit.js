@@ -216,9 +216,14 @@ function rememberedEndpointLine(record) {
 function channelStartupLine(channel) {
   if (!channel) return "none";
   const probe = channel.fresh_launch_probe || (channel.discovered && channel.discovered.probe);
+  const launchAttempted = Boolean(channel.launch_id || channel.start || ["fresh_start_no_new_endpoint", "start_failed"].includes(channel.action));
+  const marker = !launchAttempted ? "n/a" : channel.launch_marker && channel.launch_marker.ok ? "recorded" : "missing";
+  const bootAck = !launchAttempted ? "n/a" : channel.boot_ack && channel.boot_ack.ok ? "recorded" : "missing";
   return [
     `source=${channel.session_source || "unknown"}`,
     `confidence=${channel.identity_confidence || "unknown"}`,
+    `launch-marker=${marker}`,
+    `boot-ack=${bootAck}`,
     `reuse=${channel.reuse_source || "n/a"}`,
     `remembered=${rememberedEndpointLine(channel.remembered_endpoint)}`,
     startupProbeLine(probe)
@@ -665,7 +670,9 @@ function topNextActions(mode, goals, activeTasks, plans, claude, blockers = [], 
     const probe = claude.session.fresh_launch_probe || (claude.session.discovered && claude.session.discovered.probe);
     const existing = probe ? probe.existing_project_count || 0 : 0;
     const fresh = probe ? probe.new_project_count || 0 : 0;
-    priorityActions.push(`Fresh Claude launch did not register a new same-project endpoint; new=${fresh} existing=${existing}. Inspect claude_channel.session.fresh_launch_probe.`);
+    const marker = claude.session.launch_marker && claude.session.launch_marker.ok ? "visible launch marker recorded" : "no visible launch marker recorded";
+    const bootAck = claude.session.boot_ack && claude.session.boot_ack.ok ? "Claude boot ACK recorded" : "Claude boot ACK missing";
+    priorityActions.push(`Fresh Claude launch did not register a new same-project endpoint; new=${fresh} existing=${existing}; ${marker}; ${bootAck}. Inspect claude_channel.session.fresh_launch_probe.`);
   }
   if (claude.session && claude.session.action === "claude_auth_required") {
     priorityActions.push("Authenticate Claude Code with channel auth login before live teammate startup");

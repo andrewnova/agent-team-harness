@@ -60,6 +60,7 @@ const database = require("./db");
 const { daemonStatus, startDaemon, stopDaemon, runDaemon } = require("./daemon");
 const { installClaudeMcp, statusClaudeMcp } = require("./mcp/claudeInstall");
 const { installCodexMcp, statusCodexMcp } = require("./mcp/codexInstall");
+const { recordBootAck, recordLaunchMarker } = require("./bridge/claudeChannel/boot");
 const {
   appendMessage,
   appendMessagesBatch,
@@ -181,6 +182,8 @@ Commands:
   channel mcp install [--bin-dir <path>] [--mcp-scope user|local] [--project-dir <path>] [--no-setup-mcp] [--require-setup-mcp]
   channel mcp status [--bin-dir <path>] [--mcp-scope user|local] [--project-dir <path>]
   channel list
+  channel launch-marker --launch-id <id> [--name <name>] [--project-dir <path>] [--mode <mode>]
+  channel boot-ack --launch-id <id> [--name <name>] [--project-dir <path>] [--body <text>]
   channel ensure [--name <name>] [--target <target>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--timeout-ms <ms>] [--poll-ms <ms>] [--launch-mode <codex-terminal|visible|pty|background>] [--codex-terminal-launcher <path>] [--visible-app <app>] [--plugin-dir <path>] [--effort <level>] [--permission-mode <mode>] [--smoke] [--smoke-timeout-ms <ms>] [--approved-channel] [--no-chrome]
   channel auth [login] [--claudeai|--console] [--email <email>] [--sso] [--timeout-ms <ms>]
   channel doctor [--fix] [--target <target>] [--smoke] [--smoke-timeout-ms <ms>]
@@ -1685,6 +1688,30 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   if (command === "channel" && subcommand === "list") {
     const adapter = createBridge("claude-channel");
     print(adapter.list(cwd));
+    return 0;
+  }
+  if (command === "channel" && subcommand === "launch-marker") {
+    const result = recordLaunchMarker(cwd, {
+      launch_id: argValue(rest, "--launch-id"),
+      name: argValue(rest, "--name"),
+      project_dir: argValue(rest, "--project-dir", cwd),
+      harness_cwd: cwd,
+      mode: argValue(rest, "--mode", "visible"),
+      source: "visible-launch-command"
+    });
+    print(result);
+    return 0;
+  }
+  if (command === "channel" && subcommand === "boot-ack") {
+    const result = recordBootAck(cwd, {
+      launch_id: argValue(rest, "--launch-id"),
+      name: argValue(rest, "--name"),
+      project_dir: argValue(rest, "--project-dir", cwd),
+      harness_cwd: cwd,
+      body: argValue(rest, "--body") || "ACK Agent Team quickstart loaded; mailbox is truth.",
+      source: "claude-boot-ack"
+    });
+    print(result);
     return 0;
   }
   if (command === "channel" && subcommand === "auth") {

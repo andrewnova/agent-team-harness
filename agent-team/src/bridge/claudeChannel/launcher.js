@@ -114,13 +114,18 @@ function startupPrompt(name, cwd, options = {}) {
   const harnessRoot = path.resolve(options.harness_cwd || options.harness_root || cwd);
   const cliPath = path.resolve(options.cli_path || defaultCliPath());
   const cliCommand = `${shellQuote(process.execPath)} ${shellQuote(cliPath)} --cwd ${shellQuote(harnessRoot)}`;
+  const bootAckCommand = options.launch_id
+    ? `${cliCommand} channel boot-ack --launch-id ${shellQuote(options.launch_id)} --name ${shellQuote(name)} --project-dir ${shellQuote(cwd)}`
+    : null;
   const quickstart = teammateQuickstartBlock(harnessRoot);
   return [
     `You are the Claude Code teammate for the Codex Agent Team Harness session named "${name}".`,
     `Project directory: ${cwd}`,
     `Harness root: ${harnessRoot}`,
     quickstart,
-    "On session start, visibly acknowledge: ACK Agent Team quickstart loaded; mailbox is truth.",
+    bootAckCommand
+      ? `On session start, run this exact durable boot ACK command once, then visibly say ACK Agent Team quickstart loaded; mailbox is truth: ${bootAckCommand}`
+      : "On session start, visibly acknowledge: ACK Agent Team quickstart loaded; mailbox is truth.",
     "Stay visible and available as the Claude Code teammate for Codex.",
     "Own frontend UI, UX, layout, copy polish, visual QA, and large-context critique when asked.",
     "Help Codex on backend review, simplification, debugging, and re-grounding when asked.",
@@ -179,6 +184,28 @@ function claudeSessionArgs(name, cwd, options, includeStartupPromptAsArg) {
   return args;
 }
 
+function launchMarkerCommand(cwd, name, options = {}) {
+  if (!options.launch_id) return null;
+  const harnessRoot = path.resolve(options.harness_cwd || options.harness_root || cwd);
+  const cliPath = path.resolve(options.cli_path || defaultCliPath());
+  return [
+    shellQuote(process.execPath),
+    shellQuote(cliPath),
+    "--cwd",
+    shellQuote(harnessRoot),
+    "channel",
+    "launch-marker",
+    "--launch-id",
+    shellQuote(options.launch_id),
+    "--name",
+    shellQuote(name),
+    "--project-dir",
+    shellQuote(cwd),
+    "--mode",
+    shellQuote(options.launch_mode || "visible")
+  ].join(" ");
+}
+
 function visibleShellCommand(claude, cwd, name, options) {
   const env = channelEnv(name, cwd);
   const envAssignments = [
@@ -186,7 +213,13 @@ function visibleShellCommand(claude, cwd, name, options) {
     `CLAUDE_CHANNEL_PROJECT_DIR=${shellQuote(env.CLAUDE_CHANNEL_PROJECT_DIR)}`
   ];
   const args = claudeSessionArgs(name, cwd, options, false);
-  return [`cd ${shellQuote(cwd)}`, [...envAssignments, shellQuote(claude.path), ...args.map(shellQuote)].join(" ")].join(" && ");
+  return [
+    `cd ${shellQuote(cwd)}`,
+    launchMarkerCommand(cwd, name, options),
+    [...envAssignments, shellQuote(claude.path), ...args.map(shellQuote)].join(" ")
+  ]
+    .filter(Boolean)
+    .join(" && ");
 }
 
 function launchCommand(command, name, cwd, options) {
