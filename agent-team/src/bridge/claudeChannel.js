@@ -30,7 +30,7 @@ const {
   claudeVersion
 } = require("./claudeChannel/auth");
 const { installBridge } = require("./claudeChannel/install");
-const { createLaunchId, waitForBootAck, waitForLaunchMarker, waitForMcpInitialized } = require("./claudeChannel/boot");
+const { createLaunchId, waitForBootAck, waitForLaunchMarker, waitForMcpInitialized, waitForMcpStarted } = require("./claudeChannel/boot");
 const {
   codexSessionIdentity,
   codexTerminalLauncher,
@@ -319,7 +319,10 @@ function ensure(cwd, options = {}) {
         ? Math.min(3000, timeoutMs)
         : options.handshake_timeout_ms
       : 0;
-  const mcpInit = waitForMcpInitialized(cwd, launchOptions.launch_id, handshakeWaitMs, Math.min(pollMs, 100));
+  const mcpStart = waitForMcpStarted(cwd, launchOptions.launch_id, handshakeWaitMs, Math.min(pollMs, 100));
+  const mcpInit = mcpStart.ok
+    ? waitForMcpInitialized(cwd, launchOptions.launch_id, handshakeWaitMs, Math.min(pollMs, 100))
+    : { ok: false, reason: "mcp_start_not_recorded", launch_id: launchOptions.launch_id };
   const discovered = waitForStartedEndpoint(cli.command, projectCwd, beforeList, timeoutMs, pollMs, {
     require_new: Boolean(options.fresh_claude)
   });
@@ -385,6 +388,7 @@ function ensure(cwd, options = {}) {
       launch_id: launchOptions.launch_id,
       launch_mode: started.mode,
       launch_marker: launchMarker,
+      mcp_start: mcpStart,
       mcp_init: mcpInit,
       boot_ack: bootAck,
       claude_path: claude.path,
@@ -446,6 +450,7 @@ function ensure(cwd, options = {}) {
     visible_loaded: visibleLoaded,
     launch_mode: started.mode,
     launch_marker: launchMarker,
+    mcp_start: mcpStart,
     mcp_init: mcpInit,
     boot_ack: bootAck,
     claude_path: claude.path,

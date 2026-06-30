@@ -187,7 +187,7 @@ Commands:
   channel boot-ack --launch-id <id> [--name <name>] [--project-dir <path>] [--body <text>]
   channel startup-packet --launch-id <id> [--text]
   channel startup-import --launch-id <id> (--text <text>|--file <path>) [--boot-ack] [--kind checkin|reply] [--request-id <id>] [--in-reply-to <id>]
-  channel ensure [--name <name>] [--target <target>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--timeout-ms <ms>] [--poll-ms <ms>] [--launch-mode <codex-terminal|visible|pty|background>] [--codex-terminal-launcher <path>] [--visible-app <app>] [--plugin-dir <path>] [--effort <level>] [--permission-mode <mode>] [--handshake-timeout-ms <ms>] [--boot-ack-timeout-ms <ms>] [--smoke] [--smoke-timeout-ms <ms>] [--approved-channel] [--no-chrome]
+  channel ensure [--name <name>] [--target <target>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--timeout-ms <ms>] [--poll-ms <ms>] [--launch-mode <codex-terminal|visible|pty|background>] [--codex-terminal-launcher <path>] [--visible-app <app>] [--plugin-dir <path>] [--effort <level>] [--permission-mode <mode>] [--handshake-timeout-ms <ms>] [--boot-ack-timeout-ms <ms>] [--smoke] [--smoke-timeout-ms <ms>] [--use-development-channel] [--no-chrome]
   channel auth [login] [--claudeai|--console] [--email <email>] [--sso] [--timeout-ms <ms>]
   channel doctor [--fix] [--target <target>] [--smoke] [--smoke-timeout-ms <ms>]
   channel status [--target <target>]
@@ -306,7 +306,7 @@ function channelEnsureOptions(args) {
     permission_mode: argValue(args, "--permission-mode"),
     smoke: hasFlag(args, "--smoke"),
     smoke_timeout_ms: optionalNumberArg(args, "--smoke-timeout-ms"),
-    use_development_channel: hasFlag(args, "--use-development-channel") || !hasFlag(args, "--approved-channel"),
+    use_development_channel: hasFlag(args, "--use-development-channel"),
     chrome: !hasFlag(args, "--no-chrome")
   };
 }

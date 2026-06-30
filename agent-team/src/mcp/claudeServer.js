@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 const path = require("node:path");
 const { initializeResult, toolDefinitions, callTool, watchChannelOutbox } = require("./claudeChannel");
-const { recordMcpInitialized } = require("../bridge/claudeChannel/boot");
+const { recordMcpInitialized, recordMcpStarted } = require("../bridge/claudeChannel/boot");
 
 function argValue(args, name, fallback = null) {
   const index = args.indexOf(name);
@@ -87,6 +87,8 @@ function runServer(options = {}) {
   const watchOutbox = options.watch_outbox !== false && !args.includes("--no-watch-outbox");
   let buffer = Buffer.alloc(0);
   let outboxWatcher = null;
+
+  recordMcpStarted(cwd);
 
   const startOutboxWatcher = () => {
     if (!watchOutbox || outboxWatcher) return;

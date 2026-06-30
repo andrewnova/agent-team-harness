@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 16 per-launch Claude MCP config dogfooded; next focus is MCP server start proof and first-party session registry cleanup
+Status: Active refactor charter; Phase 17 MCP server start proof implemented; next focus is real visible Terminal dogfood and first-party session registry cleanup
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -1269,3 +1269,146 @@ Next phase:
 - Add a separate MCP server process-start marker before MCP `notifications/initialized`, keyed by launch id/session/project.
 - Render `mcp-start` separately from `mcp_init` in startup/cockpit state so the operator can see whether Claude ignored `--mcp-config`, spawned the server but failed initialization, or initialized MCP but did not run the boot ACK.
 - Keep endpoint readiness as compatibility diagnostics while first-party session readiness becomes sharper.
+
+### 2026-06-30 - Phase 17 MCP Server Start Proof
+
+What changed:
+
+- The first-party Claude MCP server now writes a durable `mcp_started` row under `.agent-team/comms/claude-channel/mcp-starts.jsonl` as soon as the MCP server process starts.
+- `channel ensure` now waits for `mcp_start` before waiting for `mcp_init`. If the MCP server process never starts, `mcp_init` reports `mcp_start_not_recorded` instead of a generic missing init.
+- Startup session records now persist `mcp_start` alongside `launch_marker`, `mcp_init`, and `boot_ack`.
+- Cockpit startup lines now render `mcp-start=started|missing` separately from `mcp=loaded|missing`.
+- Cockpit next actions now distinguish "Claude MCP server process did not start" from "Claude MCP init missing".
+- README, public contract tests, and the installed skill contract now describe `mcp_start` as a separate visible-startup diagnostic.
+
+Why it changed:
+
+- Phase 16 proved the generated `--mcp-config` was present in the visible launch command but still did not record MCP init or boot ACK.
+- Without a process-start marker, the harness could not tell whether Claude ignored the MCP config, spawned the server but failed protocol initialization, or initialized MCP but failed the boot contract.
+- Production-grade teammate startup needs state that names the failing boundary, not another vague timeout.
+
+Files touched:
+
+- `agent-team/src/paths.js`
+- `agent-team/src/bridge/claudeChannel/boot.js`
+- `agent-team/src/bridge/claudeChannel.js`
+- `agent-team/src/mcp/claudeServer.js`
+- `agent-team/src/cockpit.js`
+- `agent-team/tests/mcp-claude-channel.test.js`
+- `agent-team/tests/bridge-review-handoff-reground.test.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/mcp-claude-channel.test.js` from repo root: 6 tests passed.
+- `node --test agent-team/tests/bridge-review-handoff-reground.test.js --test-name-pattern CH-3g` from repo root: bridge test file ran and 35 tests passed.
+- `node --test agent-team/tests/cli-smoke.test.js --test-name-pattern startup` from repo root: CLI smoke file ran and 63 tests passed.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+
+Remaining architectural discomfort:
+
+- The diagnostic layer is now sharper, but real visible Terminal dogfood must prove whether `mcp_start` appears when Claude is launched with the generated per-launch `--mcp-config`.
+- If `mcp_start` remains missing, the problem is below the model layer: Claude Code did not spawn the first-party MCP server for that visible launch.
+- If `mcp_start` appears but `mcp_init` remains missing, the problem is the MCP lifecycle/stdio handshake.
+- If `mcp_init` appears but boot ACK remains missing, the problem is prompt submission or Claude not executing the startup command.
+
+Next phase:
+
+- Sync the installed skill copy and run the full suite.
+- Dogfood a fresh visible Claude launch again and inspect `mcp-starts.jsonl`, `mcp-inits.jsonl`, `boot-acks.jsonl`, and cockpit startup state.
+- Use the new boundary-specific result to decide whether the next fix belongs in Claude launch args/config, MCP lifecycle handling, or startup prompt delivery.
+
+### 2026-06-30 - Phase 18 Approved Channels as Visible Startup Default
+
+What changed:
+
+- Per-launch Claude MCP configs now use launch-scoped MCP server names, such as `agent-team-claude-launch-<launch-id>`, instead of a single global server id.
+- The first-party Claude MCP channel server now reports the dynamic server name in `initialize.result.serverInfo.name`.
+- Launch env now carries `AGENT_TEAM_MCP_SERVER_NAME` alongside launch/session/project/harness context.
+- Visible Claude startup now defaults to approved Claude channel mode with `--channels server:<launch-scoped-name>`.
+- Development-channel mode is now opt-in through `--use-development-channel` for diagnostics only.
+- README, public contract tests, and the installed skill contract now explain that development-channel mode may pause on Claude's confirmation screen before MCP startup or boot ACK.
+
+Why it changed:
+
+- Phase 17 dogfood finally identified the real visible startup blocker: Claude was stopping at the development-channel safety confirmation before spawning the MCP server.
+- A production teammate launch should not require the user to confirm a development-channel warning before Claude can receive the MCP config, write `mcp_start`, initialize MCP, or run the boot ACK.
+- Launch-scoped server names avoid global MCP config shadowing and make each visible Claude launch independently attributable in the startup proof logs.
+
+Files touched:
+
+- `agent-team/src/bridge/claudeChannel/launcher.js`
+- `agent-team/src/mcp/claudeChannel.js`
+- `agent-team/src/cli.js`
+- `agent-team/tests/bridge-review-handoff-reground.test.js`
+- `agent-team/tests/mcp-claude-channel.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/mcp-claude-channel.test.js` from repo root: 6 tests passed.
+- `node --test agent-team/tests/bridge-review-handoff-reground.test.js --test-name-pattern "CH-3b|CH-3g|CH-3d|CH-3e"` from repo root: bridge test file ran and 35 tests passed.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+- Explicit approved-channel dogfood with `node agent-team/src/cli.js start --fresh-claude --approved-channel --daemon --timeout-ms 12000 --poll-ms 1000 --handshake-timeout-ms 5000 --boot-ack-timeout-ms 10000 --allow-degraded-claude` opened visible Claude and returned `ok: true`, `action: started`, `identity_confidence: launched_new_endpoint`, new endpoint `ep_E42ZKX`, `launch_marker.ok=true`, `mcp_start.ok=true`, `mcp_init.ok=true`, and `boot_ack.ok=true`.
+- Default-mode dogfood after the default flip with `node agent-team/src/cli.js start --fresh-claude --daemon --timeout-ms 12000 --poll-ms 1000 --handshake-timeout-ms 5000 --boot-ack-timeout-ms 10000 --allow-degraded-claude` opened visible Claude and returned `ok: true`, `action: started`, `identity_confidence: launched_new_endpoint`, new endpoint `ep_4SRARU`, `launch_marker.ok=true`, `mcp_start.ok=true`, and `mcp_init.ok=true`.
+- The default-mode dogfood wrote a boot ACK for launch `launch_mr0l01qd_409efd9ba9` shortly after the startup command returned, but the cockpit still showed the persisted session snapshot's stale `boot_ack.ok=false`.
+
+Remaining architectural discomfort:
+
+- Visible approved-channel startup is finally proven end to end, but startup proof can still land after the synchronous `start` command has already persisted its session snapshot.
+- Cockpit must reconcile late durable startup proof by launch id before telling the operator that boot ACK, MCP start, or MCP init is missing.
+- The dogfood runs left multiple visible Claude terminals/endpoints alive. Do not kill or clean those up without explicit user approval.
+- There can be multiple MCP start/init rows for a launch when endpoint candidates overlap; current latest-by-launch-id behavior is acceptable for display but should be revisited if routing starts depending on one canonical MCP process.
+
+Next phase:
+
+- Reconcile `launch_marker`, `mcp_start`, `mcp_init`, and `boot_ack` from durable startup logs in cockpit/watch before rendering startup lines or next actions.
+- Add a regression test where `sessions.jsonl` says boot ACK is missing but `boot-acks.jsonl` later records the ACK for the same launch.
+
+### 2026-06-30 - Phase 19 Late Startup Proof Reconciliation
+
+What changed:
+
+- Cockpit startup session rendering now reconciles the latest durable `launch_marker`, `mcp_start`, `mcp_init`, and `boot_ack` rows by `launch_id` before redacting and returning the session view.
+- The reconciliation preserves startup facts as separate records; it only prevents stale `session.json` or `sessions.jsonl` snapshots from hiding later durable proof.
+- Added a CLI smoke regression where session history reports a missing boot ACK, `boot-acks.jsonl` later records the ACK for the same launch, and cockpit correctly renders `boot-ack=recorded`.
+
+Why it changed:
+
+- Phase 18 proved visible startup can work with approved channels, but it also showed a race: `start` can return before Claude's boot ACK lands.
+- The operator-facing cockpit must represent the durable mailbox/startup logs, not a stale snapshot captured milliseconds before Claude responded.
+- False "boot ACK missing" warnings recreate the exact trust problem this refactor is supposed to remove.
+
+Files touched:
+
+- `agent-team/src/cockpit.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/cli-smoke.test.js --test-name-pattern "startup proof|late Claude boot ACK|fresh Claude start"` from repo root: CLI smoke file ran and 64 tests passed, including the new late boot ACK regression.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+- `node --test agent-team/tests/mcp-claude-channel.test.js` from repo root: 6 tests passed.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+- `node --test agent-team/tests/bridge-review-handoff-reground.test.js --test-name-pattern "CH-3b|CH-3g|CH-3d|CH-3e"` from repo root: bridge test file ran and 35 tests passed.
+- `npm test` from `agent-team/`: 130 tests passed.
+- `node agent-team/src/cli.js watch --once --no-live-channel` from repo root: cockpit rendered `Claude startup: ... launch-marker=recorded mcp-start=started mcp=loaded boot-ack=recorded` for latest visible startup `ep_4SRARU`.
+
+Remaining architectural discomfort:
+
+- Startup proof display is now reconciled, but endpoint selection and duplicate MCP rows still deserve a later simplification pass.
+- The architecture is much closer to first-class visible Claude startup, but the satisfaction review should not pass until endpoint selection and duplicate MCP row behavior are intentionally simplified or accepted as compatibility diagnostics.
+
+Next phase:
+
+- Sync the installed skill copy.
+- Run focused public/bridge/MCP tests, full `npm test`, and `git diff --check`.
+- Commit the Phase 17-19 visible startup hardening as one coherent checkpoint if verification stays green.

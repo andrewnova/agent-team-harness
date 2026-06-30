@@ -535,15 +535,18 @@ test("CH-3b channel ensure defaults to a visible Claude teammate launch", () => 
     assert.equal(result.start.mode, "visible");
     assert.match(result.start.command.shell, /'--name' 'codex-thread'/);
     assert.match(result.start.command.shell, /'--mcp-config' '/);
-    assert.match(result.start.command.shell, /'--dangerously-load-development-channels' 'server:claude-channel-cli'/);
-    assert.equal(result.start.command.channel_mode, "development");
-    assert.equal(result.start.command.mcp_config.server_name, "agent-team-claude");
+    assert.match(result.start.command.shell, /'--channels' 'server:agent-team-claude-launch-/);
+    assert.match(result.start.command.shell, /'--channels' 'server:claude-channel-cli'/);
+    assert.equal(result.start.command.channel_mode, "approved");
+    assert.match(result.start.command.mcp_config.server_name, /^agent-team-claude-launch-/);
     const mcpConfig = readJson(result.start.command.mcp_config.path);
-    assert.equal(mcpConfig.mcpServers["agent-team-claude"].type, "stdio");
-    assert.equal(mcpConfig.mcpServers["agent-team-claude"].command, process.execPath);
-    assert.equal(mcpConfig.mcpServers["agent-team-claude"].env.AGENT_TEAM_LAUNCH_ID, result.launch_id);
-    assert.equal(mcpConfig.mcpServers["agent-team-claude"].env.AGENT_TEAM_SESSION_NAME, "codex-thread");
-    assert.equal(fs.realpathSync(mcpConfig.mcpServers["agent-team-claude"].env.AGENT_TEAM_HARNESS_CWD), fs.realpathSync(cwd));
+    const server = mcpConfig.mcpServers[result.start.command.mcp_config.server_name];
+    assert.equal(server.type, "stdio");
+    assert.equal(server.command, process.execPath);
+    assert.equal(server.env.AGENT_TEAM_LAUNCH_ID, result.launch_id);
+    assert.equal(server.env.AGENT_TEAM_SESSION_NAME, "codex-thread");
+    assert.equal(server.env.AGENT_TEAM_MCP_SERVER_NAME, result.start.command.mcp_config.server_name);
+    assert.equal(fs.realpathSync(server.env.AGENT_TEAM_HARNESS_CWD), fs.realpathSync(cwd));
     assert.equal(readJson(paths.channelSessionPath(cwd)).launch_mode, "visible");
   } finally {
     process.env.PATH = previousPath;
@@ -672,7 +675,9 @@ test("CH-3g channel ensure records visible launch marker when endpoint registry 
     assert.equal(result.launch_marker.record.launch_id, result.launch_id);
     assert.equal(result.launch_marker.record.name, "fresh-thread");
     assert.equal(result.launch_marker.record.mode, "visible");
+    assert.equal(result.mcp_start.ok, false);
     assert.equal(result.mcp_init.ok, false);
+    assert.equal(result.mcp_init.reason, "mcp_start_not_recorded");
     assert.equal(result.boot_ack.ok, false);
     assert.equal(result.fallback_packet.ok, true);
     assert.match(result.fallback_packet.relative_path, /startup-packets\/launch_/);
@@ -681,9 +686,12 @@ test("CH-3g channel ensure records visible launch marker when endpoint registry 
     assert.match(fs.readFileSync(commandFile, "utf8"), /AGENT_TEAM_LAUNCH_ID=/);
     assert.match(fs.readFileSync(commandFile, "utf8"), /First action: run this exact durable boot ACK command once using Bash/);
     const mcpConfig = readJson(result.start.command.mcp_config.path);
-    assert.equal(mcpConfig.mcpServers["agent-team-claude"].env.AGENT_TEAM_LAUNCH_ID, result.launch_id);
-    assert.equal(mcpConfig.mcpServers["agent-team-claude"].env.AGENT_TEAM_SESSION_NAME, "fresh-thread");
-    assert.match(mcpConfig.mcpServers["agent-team-claude"].args.join(" "), /claudeServer\.js --cwd/);
+    assert.match(result.start.command.mcp_config.server_name, /^agent-team-claude-launch-/);
+    const server = mcpConfig.mcpServers[result.start.command.mcp_config.server_name];
+    assert.equal(server.env.AGENT_TEAM_LAUNCH_ID, result.launch_id);
+    assert.equal(server.env.AGENT_TEAM_SESSION_NAME, "fresh-thread");
+    assert.equal(server.env.AGENT_TEAM_MCP_SERVER_NAME, result.start.command.mcp_config.server_name);
+    assert.match(server.args.join(" "), /claudeServer\.js --cwd/);
     const markers = readJsonl(paths.channelLaunchMarkersPath(cwd));
     assert.equal(markers.length, 1);
     assert.equal(markers[0].launch_id, result.launch_id);
@@ -765,8 +773,10 @@ test("CH-3d channel ensure prefers Codex Terminal launcher when configured", () 
     assert.equal(result.start.launcher, fakeLauncher);
     assert.match(result.start.command.shell, /'--name' 'codex-thread'/);
     assert.match(result.start.command.shell, /'--mcp-config' '/);
-    assert.match(result.start.command.shell, /'--dangerously-load-development-channels' 'server:claude-channel-cli'/);
-    assert.equal(result.start.command.mcp_config.server_name, "agent-team-claude");
+    assert.match(result.start.command.shell, /'--channels' 'server:agent-team-claude-launch-/);
+    assert.match(result.start.command.shell, /'--channels' 'server:claude-channel-cli'/);
+    assert.equal(result.start.command.channel_mode, "approved");
+    assert.match(result.start.command.mcp_config.server_name, /^agent-team-claude-launch-/);
     const launchedCommand = fs.readFileSync(commandFile, "utf8");
     assert.match(launchedCommand, /complete_channel_request/);
     assert.match(launchedCommand, /Harness root:/);
@@ -827,7 +837,7 @@ test("CH-3e explicit Codex Terminal launch reports missing launcher with command
     assert.equal(result.start.reason, "codex_terminal_launcher_missing");
     assert.match(result.start.instructions.join(" "), /Codex Terminal/);
     assert.match(result.start.command.shell, /'--name' 'codex-thread'/);
-    assert.equal(result.start.command.channel_mode, "development");
+    assert.equal(result.start.command.channel_mode, "approved");
     assert.equal(JSON.stringify(result).includes(".claude-channel/token"), false);
   } finally {
     process.env.PATH = previousPath;

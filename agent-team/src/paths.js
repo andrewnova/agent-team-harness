@@ -156,6 +156,10 @@ function channelMcpInitsPath(cwd) {
   return path.join(rootDir(cwd), "comms", "claude-channel", "mcp-inits.jsonl");
 }
 
+function channelMcpStartsPath(cwd) {
+  return path.join(rootDir(cwd), "comms", "claude-channel", "mcp-starts.jsonl");
+}
+
 function channelStartupPacketsDir(cwd) {
   return path.join(rootDir(cwd), "comms", "claude-channel", "startup-packets");
 }
@@ -291,6 +295,7 @@ module.exports = {
   channelSessionsPath,
   channelLaunchMarkersPath,
   channelBootAcksPath,
+  channelMcpStartsPath,
   channelMcpInitsPath,
   channelStartupPacketsDir,
   channelStartupPacketPath,

@@ -26,6 +26,10 @@ function serverInstructions() {
   ].join(" ");
 }
 
+function serverName(options = {}) {
+  return options.server_name || process.env.AGENT_TEAM_MCP_SERVER_NAME || SERVER_NAME;
+}
+
 function toolDefinitions() {
   return [
     {
@@ -104,7 +108,7 @@ function initializeResult(options = {}) {
   return {
     protocolVersion: options.protocol_version || "2025-06-18",
     serverInfo: {
-      name: SERVER_NAME,
+      name: serverName(options),
       version: options.version || packageVersion()
     },
     instructions: serverInstructions(),
@@ -427,6 +431,7 @@ function callTool(cwd, name, args = {}) {
 module.exports = {
   CHANNEL_ID,
   SERVER_NAME,
+  serverName,
   serverInstructions,
   toolDefinitions,
   initializeResult,

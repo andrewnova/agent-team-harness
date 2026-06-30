@@ -220,7 +220,8 @@ test("Claude MCP stdio server waits for initialized before emitting queued Agent
       AGENT_TEAM_LAUNCH_ID: "launch_mcp_test",
       AGENT_TEAM_SESSION_NAME: "mcp-visible-test",
       AGENT_TEAM_PROJECT_DIR: cwd,
-      AGENT_TEAM_HARNESS_CWD: cwd
+      AGENT_TEAM_HARNESS_CWD: cwd,
+      AGENT_TEAM_MCP_SERVER_NAME: "agent-team-claude-launch-mcp-test"
     }
   });
   assert.equal(result.status, 0, result.stderr.toString("utf8"));
@@ -230,9 +231,13 @@ test("Claude MCP stdio server waits for initialized before emitting queued Agent
   assert.ok(notification, "expected queued Claude channel notification");
   assert.ok(initialize, "expected initialize response");
   assert.equal(initialize.result.protocolVersion, "2024-11-05");
+  assert.equal(initialize.result.serverInfo.name, "agent-team-claude-launch-mcp-test");
   assert.equal(notification.params.meta.mailbox_message_id, message.id);
   assert.match(notification.params.content, /hello visible Claude/);
   assert.equal(listDeliveredNotifications(cwd).length, 1);
+  const starts = readJsonl(paths.channelMcpStartsPath(cwd)).filter((row) => row.launch_id === "launch_mcp_test");
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].event, "mcp_started");
   const inits = readJsonl(paths.channelMcpInitsPath(cwd));
   assert.equal(inits.length, 1);
   assert.equal(inits[0].launch_id, "launch_mcp_test");

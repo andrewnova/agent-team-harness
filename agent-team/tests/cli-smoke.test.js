@@ -2212,7 +2212,7 @@ test("CLI smoke: cockpit preserves visible Claude startup proof from session his
       },
       mcp_init: {
         ok: false,
-        reason: "not_recorded",
+        reason: "mcp_start_not_recorded",
         launch_id: "launch_test_123"
       },
       boot_ack: {
@@ -2234,20 +2234,95 @@ test("CLI smoke: cockpit preserves visible Claude startup proof from session his
   const cockpit = JSON.parse(run(cwd, ["watch", "--once", "--json", "--no-live-channel"]).stdout);
   assert.equal(cockpit.claude_channel.session.launch_id, "launch_test_123");
   assert.equal(cockpit.claude_channel.session.launch_marker.ok, true);
+  assert.equal(cockpit.claude_channel.session.mcp_start, undefined);
   assert.equal(cockpit.claude_channel.session.mcp_init.ok, false);
   assert.equal(cockpit.claude_channel.session.boot_ack.ok, false);
   const next = cockpit.next_actions.join("\n");
   assert.match(next, /Fresh Claude launch did not register a new same-project endpoint/);
   assert.match(next, /visible launch marker recorded/);
+  assert.match(next, /Claude MCP server process did not start/);
   assert.match(next, /Claude MCP init missing/);
   assert.match(next, /Claude boot ACK missing/);
   assert.match(next, /channel startup-packet --launch-id launch_test_123 --text/);
   assert.doesNotMatch(next, /no visible launch marker recorded/);
   assert.doesNotMatch(next, /Claude boot ACK recorded/);
   const cockpitText = run(cwd, ["watch", "--once", "--no-live-channel"]).stdout;
-  assert.match(cockpitText, /Claude startup: .*launch-marker=recorded mcp=missing boot-ack=missing/);
+  assert.match(cockpitText, /Claude startup: .*launch-marker=recorded mcp-start=missing mcp=missing boot-ack=missing/);
   assert.match(cockpitText, /visible launch marker recorded/);
+  assert.match(cockpitText, /Claude MCP server process did not start/);
   assert.match(cockpitText, /Claude boot ACK missing/);
+});
+
+test("CLI smoke: cockpit reconciles late Claude boot ACK from durable startup log", () => {
+  const cwd = tempRoot();
+  const launchId = "launch_test_late_ack";
+  const historyFile = paths.channelSessionsPath(cwd);
+  fs.mkdirSync(path.dirname(historyFile), { recursive: true });
+  fs.appendFileSync(
+    historyFile,
+    `${JSON.stringify({
+      ok: false,
+      action: "fresh_start_no_new_endpoint",
+      reason: "Claude launch command completed, but no new same-project Claude channel endpoint appeared.",
+      identity_confidence: "fresh_launch_unverified_no_new_endpoint",
+      name: "fresh-thread",
+      launch_id: launchId,
+      launch_mode: "visible",
+      launch_marker: {
+        ok: true,
+        record: {
+          launch_id: launchId,
+          name: "fresh-thread",
+          project_dir: cwd,
+          mode: "visible",
+          source: "visible-launch-command",
+          created_at: "2026-06-30T10:14:21.676Z"
+        }
+      },
+      mcp_init: {
+        ok: false,
+        reason: "mcp_start_not_recorded",
+        launch_id: launchId
+      },
+      boot_ack: {
+        ok: false,
+        reason: "not_recorded",
+        launch_id: launchId
+      },
+      fresh_launch_probe: {
+        require_new: true,
+        new_project_count: 0,
+        existing_project_count: 2,
+        checked_count: 0,
+        selected_target: null
+      },
+      updated_at: "2026-06-30T10:14:21.700Z"
+    })}\n`
+  );
+  fs.appendFileSync(
+    paths.channelBootAcksPath(cwd),
+    `${JSON.stringify({
+      launch_id: launchId,
+      name: "fresh-thread",
+      project_dir: cwd,
+      harness_cwd: cwd,
+      source: "claude-boot-ack",
+      pid: process.pid,
+      created_at: "2026-06-30T10:14:25.000Z",
+      body: "ACK Agent Team quickstart loaded; mailbox is truth."
+    })}\n`
+  );
+
+  const cockpit = JSON.parse(run(cwd, ["watch", "--once", "--json", "--no-live-channel"]).stdout);
+  assert.equal(cockpit.claude_channel.session.launch_id, launchId);
+  assert.equal(cockpit.claude_channel.session.boot_ack.ok, true);
+  assert.equal(cockpit.claude_channel.session.boot_ack.record.source, "claude-boot-ack");
+  const next = cockpit.next_actions.join("\n");
+  assert.match(next, /Claude boot ACK recorded/);
+  assert.doesNotMatch(next, /Claude boot ACK missing/);
+  assert.doesNotMatch(next, /channel startup-packet --launch-id launch_test_late_ack --text/);
+  const cockpitText = run(cwd, ["watch", "--once", "--no-live-channel"]).stdout;
+  assert.match(cockpitText, /Claude startup: .*launch-marker=recorded mcp-start=missing mcp=missing boot-ack=recorded/);
 });
 
 test("CLI smoke: channel startup-packet renders copy-paste Claude recovery packet", () => {

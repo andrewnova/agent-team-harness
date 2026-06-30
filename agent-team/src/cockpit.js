@@ -19,6 +19,12 @@ const { listMessages, listAcks, compactMessage, mailboxDiagnostics } = require("
 const { daemonStatus, receiptAckRequired, findReceiptAck, semanticAckRequired, configuredCodexWakeCommand } = require("./daemon");
 const { listQueuedNotifications, listDeliveredNotifications } = require("./mcp/claudeChannel");
 const { statusCodexMcp } = require("./mcp/codexInstall");
+const {
+  latestBootAck,
+  latestLaunchMarker,
+  latestMcpInitialized,
+  latestMcpStarted
+} = require("./bridge/claudeChannel/boot");
 
 const ACTIVE_STATUSES = new Set(["planning", "ready", "claimed", "implementing", "review", "merge", "verifying", "handoff", "human", "blocked"]);
 
@@ -105,6 +111,38 @@ function inferMode(goals, tasks, plans) {
   return "choose-mode";
 }
 
+function startupProofRecord(proof) {
+  if (!proof || typeof proof !== "object") return null;
+  return proof.record || proof.marker || proof.boot_ack || proof;
+}
+
+function proofTime(proof) {
+  return String(startupProofRecord(proof)?.created_at || "");
+}
+
+function okProof(record) {
+  return record ? { ok: true, record } : null;
+}
+
+function reconcileProof(existing, latest) {
+  if (!latest) return existing;
+  const reconciled = okProof(latest);
+  if (!existing || !existing.ok) return reconciled;
+  return String(latest.created_at || "") >= proofTime(existing) ? reconciled : existing;
+}
+
+function reconcileStartupProof(cwd, session) {
+  if (!session || !session.launch_id) return session;
+  const launchId = session.launch_id;
+  return {
+    ...session,
+    launch_marker: reconcileProof(session.launch_marker, latestLaunchMarker(cwd, launchId)),
+    mcp_start: reconcileProof(session.mcp_start, latestMcpStarted(cwd, launchId)),
+    mcp_init: reconcileProof(session.mcp_init, latestMcpInitialized(cwd, launchId)),
+    boot_ack: reconcileProof(session.boot_ack, latestBootAck(cwd, launchId))
+  };
+}
+
 function channelSession(cwd) {
   const file = paths.channelSessionPath(cwd);
   const historyFile = paths.channelSessionsPath(cwd);
@@ -116,7 +154,7 @@ function channelSession(cwd) {
   const useHistory = latestHistory && (!current || historyTime >= currentTime);
   const rawSession = useHistory ? latestHistory : current;
   if (!rawSession) return null;
-  const session = redact(rawSession);
+  const session = redact(reconcileStartupProof(cwd, rawSession));
   return {
     ok: session.ok,
     action: session.action,
@@ -128,6 +166,7 @@ function channelSession(cwd) {
     launch_id: session.launch_id,
     launch_mode: session.launch_mode,
     launch_marker: session.launch_marker,
+    mcp_start: session.mcp_start,
     mcp_init: session.mcp_init,
     boot_ack: session.boot_ack,
     fallback_packet: session.fallback_packet,
@@ -223,12 +262,14 @@ function channelStartupLine(channel) {
   const probe = channel.fresh_launch_probe || (channel.discovered && channel.discovered.probe);
   const launchAttempted = Boolean(channel.launch_id || channel.start || ["fresh_start_no_new_endpoint", "start_failed"].includes(channel.action));
   const marker = !launchAttempted ? "n/a" : channel.launch_marker && channel.launch_marker.ok ? "recorded" : "missing";
+  const mcpStart = !launchAttempted ? "n/a" : channel.mcp_start && channel.mcp_start.ok ? "started" : "missing";
   const mcp = !launchAttempted ? "n/a" : channel.mcp_init && channel.mcp_init.ok ? "loaded" : "missing";
   const bootAck = !launchAttempted ? "n/a" : channel.boot_ack && channel.boot_ack.ok ? "recorded" : "missing";
   return [
     `source=${channel.session_source || "unknown"}`,
     `confidence=${channel.identity_confidence || "unknown"}`,
     `launch-marker=${marker}`,
+    `mcp-start=${mcpStart}`,
     `mcp=${mcp}`,
     `boot-ack=${bootAck}`,
     `reuse=${channel.reuse_source || "n/a"}`,
@@ -678,13 +719,14 @@ function topNextActions(mode, goals, activeTasks, plans, claude, blockers = [], 
     const existing = probe ? probe.existing_project_count || 0 : 0;
     const fresh = probe ? probe.new_project_count || 0 : 0;
     const marker = claude.session.launch_marker && claude.session.launch_marker.ok ? "visible launch marker recorded" : "no visible launch marker recorded";
+    const mcpStart = claude.session.mcp_start && claude.session.mcp_start.ok ? "Claude MCP server process started" : "Claude MCP server process did not start";
     const mcp = claude.session.mcp_init && claude.session.mcp_init.ok ? "Claude MCP initialized" : "Claude MCP init missing";
     const bootAck = claude.session.boot_ack && claude.session.boot_ack.ok ? "Claude boot ACK recorded" : "Claude boot ACK missing";
     const recovery =
       claude.session.launch_id && claude.session.launch_marker && claude.session.launch_marker.ok && !(claude.session.boot_ack && claude.session.boot_ack.ok)
         ? `Run/copy startup recovery packet: channel startup-packet --launch-id ${claude.session.launch_id} --text`
         : "Inspect claude_channel.session.fresh_launch_probe.";
-    priorityActions.push(`Fresh Claude launch did not register a new same-project endpoint; new=${fresh} existing=${existing}; ${marker}; ${mcp}; ${bootAck}. ${recovery}`);
+    priorityActions.push(`Fresh Claude launch did not register a new same-project endpoint; new=${fresh} existing=${existing}; ${marker}; ${mcpStart}; ${mcp}; ${bootAck}. ${recovery}`);
   }
   if (claude.session && claude.session.action === "claude_auth_required") {
     priorityActions.push("Authenticate Claude Code with channel auth login before live teammate startup");

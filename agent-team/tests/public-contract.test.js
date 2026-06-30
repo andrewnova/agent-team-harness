@@ -24,10 +24,13 @@ test("public skill keeps Claude work mailbox-first and nonblocking", () => {
   assert.match(skill, /remembered endpoint id/);
   assert.match(skill, /Display names are labels\/fallbacks, not primary identity/);
   assert.match(skill, /per-launch Claude MCP config/);
+  assert.match(skill, /launch-scoped server name/);
   assert.match(skill, /--mcp-config/);
   assert.match(skill, /fresh_launch_probe/);
   assert.match(skill, /Claude startup:/);
+  assert.match(skill, /mcp_start/);
   assert.match(skill, /mcp_init/);
+  assert.match(skill, /--use-development-channel/);
   assert.match(skill, /channel startup-packet --launch-id/);
   assert.match(skill, /channel startup-import --launch-id/);
   assert.match(skill, /does not bypass mailbox, review, merge, proof, or done gates/);
@@ -58,10 +61,13 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /remembered endpoint id/);
   assert.match(readme, /Display names are human labels and fallback selectors, not the primary continuity proof/);
   assert.match(readme, /per-launch Claude MCP config/);
+  assert.match(readme, /launch-scoped server name/);
   assert.match(readme, /--mcp-config/);
   assert.match(readme, /fresh_launch_probe/);
   assert.match(readme, /Claude startup:/);
+  assert.match(readme, /mcp_start/);
   assert.match(readme, /mcp_init/);
+  assert.match(readme, /--use-development-channel/);
   assert.match(readme, /agent-team channel startup-packet --launch-id/);
   assert.match(readme, /agent-team channel startup-import --launch-id/);
   assert.match(readme, /does not bypass mailbox, review, merge, proof, or done gates/);

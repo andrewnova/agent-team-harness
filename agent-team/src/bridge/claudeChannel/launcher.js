@@ -114,15 +114,22 @@ function mcpServerScriptPath() {
   return path.resolve(__dirname, "..", "..", "mcp", "claudeServer.js");
 }
 
+function launchMcpServerName(launchId) {
+  if (!launchId) return MCP_SERVER_NAME;
+  const safeId = String(launchId).replace(/[^A-Za-z0-9-]+/g, "-").slice(0, 80);
+  return `${MCP_SERVER_NAME}-${safeId}`;
+}
+
 function launchMcpConfig(name, cwd, options = {}) {
   if (options.use_first_party_mcp_channel === false || !options.launch_id) return null;
   if (options.launch_mcp_config) return options.launch_mcp_config;
   const harnessRoot = path.resolve(options.harness_cwd || options.harness_root || cwd);
   const env = channelEnv(name, cwd, options);
   const file = harnessPaths.channelLaunchMcpConfigPath(harnessRoot, options.launch_id);
+  const serverName = launchMcpServerName(options.launch_id);
   const config = {
     mcpServers: {
-      [MCP_SERVER_NAME]: {
+      [serverName]: {
         type: "stdio",
         command: process.execPath,
         args: [mcpServerScriptPath(), "--cwd", harnessRoot],
@@ -132,6 +139,7 @@ function launchMcpConfig(name, cwd, options = {}) {
           AGENT_TEAM_HARNESS_CWD: env.AGENT_TEAM_HARNESS_CWD,
           AGENT_TEAM_LAUNCH_ID: env.AGENT_TEAM_LAUNCH_ID,
           AGENT_TEAM_CODEX_THREAD_ID: env.AGENT_TEAM_CODEX_THREAD_ID,
+          AGENT_TEAM_MCP_SERVER_NAME: serverName,
           CLAUDE_CHANNEL_DISPLAY_NAME: env.CLAUDE_CHANNEL_DISPLAY_NAME,
           CLAUDE_CHANNEL_PROJECT_DIR: env.CLAUDE_CHANNEL_PROJECT_DIR
         }
@@ -144,7 +152,7 @@ function launchMcpConfig(name, cwd, options = {}) {
     ok: true,
     path: file,
     relative_path: path.relative(harnessRoot, file),
-    server_name: MCP_SERVER_NAME
+    server_name: serverName
   };
   return options.launch_mcp_config;
 }
@@ -235,9 +243,9 @@ function claudeSessionArgs(name, cwd, options, includeStartupPromptAsArg) {
   if (options.plugin_dir) args.push("--plugin-dir", options.plugin_dir);
   const mcpConfig = launchMcpConfig(name, cwd, options);
   if (mcpConfig) args.push("--mcp-config", mcpConfig.path);
-  const channelFlag = options.use_development_channel !== false ? "--dangerously-load-development-channels" : "--channels";
+  const channelFlag = options.use_development_channel === true ? "--dangerously-load-development-channels" : "--channels";
   const channels = [];
-  if (options.use_first_party_mcp_channel !== false) channels.push(`server:${MCP_SERVER_NAME}`);
+  if (options.use_first_party_mcp_channel !== false) channels.push(`server:${mcpConfig ? mcpConfig.server_name : MCP_SERVER_NAME}`);
   channels.push("server:claude-channel-cli");
   for (const channel of channels) args.push(channelFlag, channel);
   if (options.chrome !== false) args.push("--chrome");
@@ -300,7 +308,7 @@ function visibleShellCommand(claude, cwd, name, options) {
 function launchCommand(command, name, cwd, options) {
   return {
     shell: command,
-    channel_mode: options.use_development_channel !== false ? "development" : "approved",
+    channel_mode: options.use_development_channel === true ? "development" : "approved",
     mcp_config: options.launch_mcp_config || null,
     env: {
       AGENT_TEAM_LAUNCH_ID: options.launch_id || "",
@@ -417,7 +425,7 @@ function launchBackground(claude, cwd, name, options) {
     command: {
       bin: claude.command,
       args: args.slice(0, -1),
-      channel_mode: options.use_development_channel !== false ? "development" : "approved",
+      channel_mode: options.use_development_channel === true ? "development" : "approved",
       env: {
         CLAUDE_CHANNEL_DISPLAY_NAME: name,
         CLAUDE_CHANNEL_PROJECT_DIR: cwd
@@ -455,7 +463,7 @@ function launchPty(claude, cwd, name, options) {
       command: {
         bin: scriptCli.command,
         args: ["-q", "-F", logPath, claude.path, ...claudeArgs],
-        channel_mode: options.use_development_channel !== false ? "development" : "approved",
+        channel_mode: options.use_development_channel === true ? "development" : "approved",
         env: {
           CLAUDE_CHANNEL_DISPLAY_NAME: name,
           CLAUDE_CHANNEL_PROJECT_DIR: cwd
@@ -478,6 +486,7 @@ module.exports = {
   defaultSessionName,
   codexSessionIdentity,
   launchMcpConfig,
+  launchMcpServerName,
   startupPrompt,
   startupUserPrompt,
   teammateQuickstartPath,
