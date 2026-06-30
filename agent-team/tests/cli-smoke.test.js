@@ -485,7 +485,7 @@ test("CLI smoke: realtime mailbox lets Claude check in anytime and answer nonblo
   const afterMailboxReply = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"]).stdout);
   assert.equal(afterMailboxReply.claude_channel.queues.mailbox_replies, 1);
   assert.equal(afterMailboxReply.claude_channel.queues.pending.length, 0);
-  assert.doesNotMatch(afterMailboxReply.next_actions.join("\n"), /Claude semantic ACK\/reply pending/);
+  assert.doesNotMatch(afterMailboxReply.next_actions.join("\n"), /Claude reply pending/);
   const imported = JSON.parse(run(cwd, ["review", "import", task.task_id, "--request-id", dispatched.request.request_id]).stdout);
   assert.equal(imported.ok, true);
   assert.equal(imported.review.verdict, "approve");
@@ -533,7 +533,7 @@ test("CLI smoke: channel steer creates a durable Claude ACK handle before live d
 
   const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"]).stdout);
   assert.equal(cockpit.mailbox.pending_reply_required, 1);
-  assert.match(cockpit.next_actions.join("\n"), /Claude semantic ACK\/reply pending/);
+  assert.match(cockpit.next_actions.join("\n"), /Claude reply pending/);
 });
 
 test("CLI smoke: daemon one-shot observes both inboxes, receipts advisory notes, and requires semantic replies only when asked", () => {
@@ -631,8 +631,8 @@ test("CLI smoke: daemon one-shot observes both inboxes, receipts advisory notes,
   assert.equal(cockpit.mailbox.codex_inbox[0].semantic_ack_required, false);
   assert.match(cockpit.next_actions.join("\n"), /Start the receiver daemon/);
   assert.match(cockpit.next_actions.join("\n"), /Read Codex advisory mailbox/);
-  assert.match(cockpit.next_actions.join("\n"), /Claude semantic ACK\/reply pending/);
-  assert.doesNotMatch(cockpit.next_actions.find((action) => action.includes(codexAdvisory.message.id)) || "", /send semantic ACK\/reply/);
+  assert.match(cockpit.next_actions.join("\n"), /Claude reply pending/);
+  assert.doesNotMatch(cockpit.next_actions.find((action) => action.includes(codexAdvisory.message.id)) || "", /reply/);
   assert.doesNotMatch(cockpit.next_actions.join("\n"), /Generate receipt ACK/);
 
   const daemonAgain = JSON.parse(run(cwd, ["daemon", "run", "--once", "--roles", "codex,claude"]).stdout);
@@ -1284,7 +1284,7 @@ test("CLI smoke: cockpit suppresses stale completed-task mailbox noise", () => {
   assert.equal(clean.mailbox.stale_completed_unread, 1);
   assert.equal(clean.mailbox.stale_completed_receipt_ack, 1);
   assert.equal(clean.mailbox.stale_completed_reply_required, 1);
-  assert.doesNotMatch(clean.next_actions.join("\n"), /Claude semantic ACK\/reply pending/);
+  assert.doesNotMatch(clean.next_actions.join("\n"), /Claude reply pending/);
   assert.doesNotMatch(clean.next_actions.join("\n"), /Generate receipt ACK/);
   assert.equal(dispatched.request.task_id, task.task_id);
 });
@@ -1978,7 +1978,7 @@ test("CLI smoke: cockpit renders a per-message transport and receipt timeline", 
   const cockpitText = run(cwd, ["cockpit", "--no-live-channel"]).stdout;
   assert.match(cockpitText, /Timeline: shown=/);
   assert.match(cockpitText, /## Message Timeline/);
-  assert.match(cockpitText, new RegExp(`${inbound.message.id}.*mailbox_sent.*codex_wake_queued.*codex_mcp_seen.*mailbox_reply`));
+  assert.match(cockpitText, new RegExp(`${inbound.message.id}.*mailbox sent.*Codex wake queued.*Codex MCP saw it.*mailbox replied`));
 });
 
 test("CLI smoke: doctor --fix installs the bridge and keeps remaining readiness issues honest", () => {

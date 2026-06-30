@@ -324,6 +324,35 @@ function completedTaskId(taskId, taskStatuses) {
   return taskId && taskStatuses.get(taskId) === "done";
 }
 
+const HUMAN_STAGE_LABELS = {
+  mailbox_sent: "mailbox sent",
+  daemon_received: "daemon saw it",
+  semantic_ack_required: "reply needed",
+  receipt_ack_sent: "receipt sent",
+  claude_mcp_queued: "Claude wake queued",
+  claude_mcp_emitted: "Claude MCP emitted",
+  legacy_wake_attempted: "live wake attempted",
+  legacy_wake_skipped: "live wake skipped",
+  codex_wake_queued: "Codex wake queued",
+  codex_wake_attempted: "Codex wake attempted",
+  codex_wake_payload: "Codex wake payload",
+  codex_mcp_seen: "Codex MCP saw it",
+  mailbox_ack: "mailbox acknowledged",
+  mailbox_reply: "mailbox replied",
+  review_recorded: "review imported",
+  reground_stored: "reground imported",
+  plan_reconciled: "plan reconciled"
+};
+
+function humanStageLabel(type) {
+  return HUMAN_STAGE_LABELS[type] || String(type || "unknown").replace(/_/g, " ");
+}
+
+function mailboxActionLabel(message) {
+  if (message.kind === "receipt_ack") return "Read Codex receipt";
+  return message.semantic_ack_required ? "Read Codex request and reply" : "Read Codex advisory mailbox";
+}
+
 function channelQueues(cwd, tasks = []) {
   const requests = exists(paths.requestsPath(cwd)) ? readJsonl(paths.requestsPath(cwd)) : [];
   const responses = exists(paths.responsesPath(cwd)) ? readJsonl(paths.responsesPath(cwd)) : [];
@@ -768,17 +797,11 @@ function topNextActions(mode, goals, activeTasks, plans, claude, blockers = [], 
     actions.push(`Generate receipt ACK for ${message.id}${message.task_id ? ` ${message.task_id}` : ""}: ${message.subject || message.body_preview || message.kind}`);
   }
   for (const message of (mailbox?.codex_inbox || []).slice(0, 3)) {
-    const semantic = message.semantic_ack_required ? " and send semantic ACK/reply" : "";
-    const label =
-      message.kind === "receipt_ack"
-        ? "Read Codex receipt ACK"
-        : message.semantic_ack_required
-          ? "Read Codex mailbox"
-          : "Read Codex advisory mailbox";
-    actions.push(`${label} ${message.id}${message.task_id ? ` for ${message.task_id}` : ""}${semantic}: ${message.subject || message.body_preview || message.kind}`);
+    const label = mailboxActionLabel(message);
+    actions.push(`${label} ${message.id}${message.task_id ? ` for ${message.task_id}` : ""}: ${message.subject || message.body_preview || message.kind}`);
   }
   for (const message of (mailbox?.pending_replies || []).slice(0, 2)) {
-    actions.push(`Claude semantic ACK/reply pending for ${message.id}${message.task_id ? ` ${message.task_id}` : ""}: ${message.subject || message.request_kind || message.kind}`);
+    actions.push(`Claude reply pending for ${message.id}${message.task_id ? ` ${message.task_id}` : ""}: ${message.subject || message.request_kind || message.kind}`);
   }
   for (const notice of notices.slice(0, 3)) {
     actions.push(`Read Claude notice ${notice.notice_id}: ${notice.title}`);
@@ -1147,7 +1170,7 @@ function renderCockpit(snapshot) {
     "## Codex Mailbox",
     "",
     ...(snapshot.mailbox.codex_inbox.length
-      ? snapshot.mailbox.codex_inbox.map((message) => `- ${message.id}${message.task_id ? ` ${message.task_id}` : ""} ${message.from}->${message.to}/${message.kind}${message.informational ? " advisory" : ""}${message.semantic_ack_required ? " semantic-reply-required" : ""}: ${message.subject || message.body_preview || "message"}`)
+      ? snapshot.mailbox.codex_inbox.map((message) => `- ${message.id}${message.task_id ? ` ${message.task_id}` : ""} ${message.from}->${message.to}/${message.kind}${message.informational ? " advisory" : ""}${message.semantic_ack_required ? " reply-needed" : ""}: ${message.subject || message.body_preview || "message"}`)
       : ["- None"]),
     "",
     "## Receiver Daemon",
@@ -1166,8 +1189,8 @@ function renderCockpit(snapshot) {
     "",
     ...(snapshot.message_timeline.rows.length
       ? snapshot.message_timeline.rows.map((row) => {
-          const stages = row.stages.map((stage) => `${stage.type}${stage.result_state ? `(${stage.result_state})` : ""}`).join(" -> ");
-          return `- ${row.message_id}${row.task_id ? ` ${row.task_id}` : ""} ${row.from || "?"}->${row.to || "?"}/${row.kind || "?"} ${row.current_state}: ${stages}`;
+          const stages = row.stages.map((stage) => `${humanStageLabel(stage.type)}${stage.result_state ? ` (${stage.result_state})` : ""}`).join(" -> ");
+          return `- ${row.message_id}${row.task_id ? ` ${row.task_id}` : ""} ${row.from || "?"}->${row.to || "?"}/${row.kind || "?"} ${humanStageLabel(row.current_state)}: ${stages}`;
         })
       : ["- None"]),
     "",

@@ -34,7 +34,7 @@ function toolDefinitions() {
   return [
     {
       name: "agent_team_ack",
-      description: "Acknowledge a mailbox message and optionally write the semantic ACK reply Codex needs.",
+      description: "Acknowledge a mailbox message and optionally write the real reply Codex needs.",
       inputSchema: {
         type: "object",
         properties: {

@@ -1465,3 +1465,67 @@ Remaining architectural discomfort:
 Next phase:
 
 - Commit Phase 20 as a coherent checkpoint, then run an architecture satisfaction review pass to decide whether endpoint registry dependency is now an accepted compatibility diagnostic or needs a deeper replacement before marking the Codex goal complete.
+
+### 2026-06-30 - Phase 21 Human-Readable Cockpit Receipts And Satisfaction Review
+
+What changed:
+
+- Added a cockpit display translation layer so the text cockpit renders human receipt/timeline labels such as `reply needed`, `Claude wake queued`, `Codex MCP saw it`, and `mailbox replied` while preserving stable JSON stage keys for automation.
+- Changed Next Actions from `Claude semantic ACK/reply pending` to `Claude reply pending`.
+- Changed Codex inbox display from `semantic-reply-required` to `reply-needed`.
+- Updated the live steering prompt so Claude sees that daemon `receipt_ack` only proves inbox receipt and that the real mailbox reply is still required.
+- Updated README and the packaged/installed Codex skill wording from internal semantic-ACK language toward operator-facing real-reply language.
+- Updated public contract and smoke coverage to lock the new public wording.
+
+Why it changed:
+
+- The architecture already had a per-message timeline, but the operator-facing layer still leaked internal protocol names.
+- The user specifically called out that waiter/receipt behavior must not be misread as expired, lost, or silently delegated work.
+- Production-grade teammate UX needs the human view to say what matters: a receipt landed, a reply is still pending, Codex/Claude saw the message, or a fallback is needed.
+
+Files touched:
+
+- `agent-team/src/cockpit.js`
+- `agent-team/src/cli.js`
+- `agent-team/src/mcp/claudeChannel.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test tests/cli-smoke.test.js --test-name-pattern "channel steer|daemon one-shot|per-message transport|stale completed-task|realtime mailbox"` from `agent-team/`: 64 tests passed.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+- `node --test tests/public-contract.test.js` from `agent-team/`: 2 tests passed.
+- `npm test` from `agent-team/`: 130 tests passed.
+- `git diff --check` from repo root: no whitespace errors before this changelog update.
+- `node agent-team/src/cli.js watch --once --no-live-channel` from repo root rendered human timeline/status labels including `Claude reply pending`, `reply-needed`, `Claude wake queued`, `Codex MCP saw it`, and `mailbox replied`.
+
+Remaining architectural discomfort:
+
+- The live Claude endpoint registry is still a compatibility diagnostic and startup/smoke readiness layer. It is no longer the normal work bus, but it has not been removed.
+- The current cockpit state still contains older Legal Ads task records in this local harness workspace. They are unrelated to this Codex refactor goal and should not be mutated as part of this goal.
+- Startup proof can contain duplicate MCP start/init rows; cockpit now reports those as diagnostics and selects the latest durable proof row.
+
+Architecture satisfaction review:
+
+1. Is there exactly one durable communication truth? Yes: the durable mailbox remains the truth; MCP outbox, wake stream, channel requests, and cockpit are projections or delivery surfaces.
+2. Is there exactly one normal delivery daemon? Yes: the receiver daemon owns normal mailbox observation, receipt ACKs, first-party Claude MCP wake queueing, Codex wake payloads, and cockpit state.
+3. Are Codex and Claude both using MCP/mailbox APIs instead of wrapper-specific commands? Yes for normal teammate work. Deliberate limitation: the legacy Claude endpoint registry/bridge remains as a compatibility diagnostic plus live startup/smoke readiness layer, not the work bus.
+4. Are live channels only projections/wake paths? Yes: real work and completion state are mailbox-backed; live channel attempts are wake/status/smoke surfaces.
+5. Can the user see Claude receive steering when Claude owns work? Yes: visible Claude startup is default for Claude-owned work, approved channels are default, and failed startup blocks delegation unless explicitly degraded.
+6. Can Claude messages land in Codex without manual mailbox inspection where the Codex surface supports it? Yes: Codex wake payloads plus `agent-team-codex-mcp` provide the first-party read/ACK/reply surface, and cockpit shows pending wake/read state.
+7. If live delivery fails, is fallback faster than debugging the automation? Yes: startup packet/import, durable `await reply`, mailbox replies, and cockpit diagnostics make fallback operational without losing state.
+8. Are all receipt states human-readable? Yes after Phase 21: cockpit text uses human labels while JSON preserves stable machine keys.
+9. Are obsolete terms removed from user-facing docs? Yes for the normal public/operator path. Internal schema names such as `semantic_ack_required` remain in code/tests where they are protocol fields.
+10. Does the code feel simpler than before? Yes enough for this milestone: the normal mental model is mailbox -> daemon -> first-party MCP/wake -> cockpit, with legacy bridge explicitly labeled compatibility. The code still has compatibility layers, but they are bounded and diagnosed.
+11. Would copy/paste be slower than the harness in the common case? Yes. Common case now has visible startup, mailbox-first steering, daemon receipt, first-party MCP/wake routing, and cockpit proof. Copy/paste remains a recovery path.
+12. Would a future Codex session understand what to do from this file alone? Yes. This document contains the problem statement, tracks, exit criteria, changelog, proof, accepted limitation, and satisfaction review.
+
+Completion decision:
+
+- The Codex-owned refactor goal can be marked complete after committing Phase 21.
+- Accepted limitation: the legacy Claude endpoint registry is retained only for compatibility diagnostics and startup/smoke readiness until Claude/Codex expose stronger native session identity hooks. It must not become the normal work bus again.

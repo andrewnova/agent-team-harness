@@ -494,8 +494,8 @@ function liveSteerPrompt(prompt, durable) {
   return [
     "A durable mailbox request has already been queued for this instruction.",
     "Do not rely only on complete_channel_request.",
-    "A daemon-generated receipt_ack may arrive first; it is not the semantic reply.",
-    "Send the semantic ACK/reply through the mailbox with this command shape:",
+    "A daemon-generated receipt_ack may arrive first; it only proves the inbox received the message.",
+    "Send the real mailbox reply through this command shape:",
     semanticAckReplyCommand({
       requestId: durable.request_id,
       mailboxMessageId: durable.mailbox_message_id

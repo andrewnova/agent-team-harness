@@ -54,7 +54,8 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /MCP-emitted counts/);
   assert.match(readme, /Codex MCP adapter status/);
   assert.match(readme, /per-message timeline/);
-  assert.match(readme, /codex_mcp_seen/);
+  assert.match(readme, /stable machine stage keys/);
+  assert.match(readme, /Codex MCP saw it/);
   assert.match(readme, /legacy Claude channel wake as a compatibility fallback/);
   assert.match(readme, /queues Codex wake payloads/);
   assert.match(readme, /AGENT_TEAM_CODEX_WAKE_COMMAND/);
