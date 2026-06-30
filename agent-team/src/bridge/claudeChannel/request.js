@@ -5,12 +5,25 @@ const { parseJsonOutput } = require("./utils");
 const LONG_FORM_REPLY_TIMEOUT_MS = 30 * 60 * 1000;
 const LONG_FORM_KINDS = new Set(["plan_review", "review", "reground"]);
 
-function resultStateForStatus(status, exitCode) {
-  if (status === "answered") return "answered";
+const PENDING_STATUSES = new Set([
+  "queued",
+  "pending",
+  "in_progress",
+  "receipt_ack",
+  "mcp_outbox_queued",
+  "mcp_emitted",
+  "wake_sent",
+  "wake_sent_reply_pending",
+  "timeout_pending"
+]);
+
+function resultStateForStatus(status, exitCode, answer) {
+  if (status === "answered") return answer ? "answered" : "pending";
   if (status === "needs_user") return "needs_user";
   if (status === "declined") return "declined";
   if (status === "failed") return "failed";
-  return exitCode === 0 ? "answered" : "failed";
+  if (PENDING_STATUSES.has(status)) return "pending";
+  return exitCode === 0 ? "pending" : "failed";
 }
 
 function defaultReplyTimeoutMs(kind) {
@@ -49,10 +62,14 @@ function sendChannelRequest(cwd, row, request, cliCommand) {
       adapter: "claude-channel",
       target: parsed.target,
       status: parsed.status,
-      result_state: resultStateForStatus(parsed.status, result.status),
+      result_state: resultStateForStatus(parsed.status, result.status, parsed.answer),
       answer: parsed.answer,
       exit_code: result.status,
-      stderr: result.stderr.trim()
+      stderr: result.stderr.trim(),
+      note:
+        resultStateForStatus(parsed.status, result.status, parsed.answer) === "answered"
+          ? undefined
+          : `Claude live channel returned ${parsed.status || "no semantic status"} without a semantic answer; use mailbox-backed channel steer for real work.`
     };
   }
   const timeout = isReplyTimeout(result.stderr, result.error ? result.error.message : undefined);
@@ -76,6 +93,7 @@ function sendChannelRequest(cwd, row, request, cliCommand) {
 module.exports = {
   LONG_FORM_REPLY_TIMEOUT_MS,
   resultStateForStatus,
+  PENDING_STATUSES,
   defaultReplyTimeoutMs,
   replyTimeoutMsFor,
   isReplyTimeout,

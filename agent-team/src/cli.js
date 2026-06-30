@@ -193,7 +193,7 @@ Commands:
   channel status [--target <target>]
   channel ask --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>]
   channel dispatch --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>] [--goal <goal>]
-  channel steer --kind <kind> --task <task> (--prompt <text>|--file <path>) [--subject <text>] [--target <target>] [--timeout-ms <ms>] [--goal <goal>] [--no-live|--mailbox-only|--raw-live]
+  channel steer --kind <kind> --task <task> (--prompt <text>|--file <path>) [--subject <text>] [--target <target>] [--timeout-ms <ms>] [--semantic-wait-ms <ms>|--no-semantic-wait] [--goal <goal>] [--no-live|--mailbox-only|--raw-live]
   watch [--once] [--json] [--target <target>] [--limit <n>] [--interval-ms <ms>] [--no-live-channel]
   cockpit [--json] [--target <target>] [--limit <n>] [--no-live-channel]
   board
@@ -571,7 +571,15 @@ function liveSteerPrompt(prompt, durable) {
   ].join("\n");
 }
 
-const LIVE_DELIVERY_STATES = new Set(["answered", "needs_user", "declined", "wake_sent_reply_pending", "wake_sent"]);
+const DEFAULT_STEER_SEMANTIC_WAIT_MS = 750;
+const SEMANTIC_LIVE_DELIVERY_STATES = new Set(["answered", "needs_user", "declined"]);
+const NON_SEMANTIC_WAKE_STATES = new Set([
+  "mcp_outbox_queued",
+  "mcp_outbox_already_queued",
+  "queued",
+  "wake_sent",
+  "wake_sent_reply_pending"
+]);
 
 function explicitMailboxOnly(args) {
   return hasFlag(args, "--no-live") || hasFlag(args, "--mailbox-only");
@@ -580,9 +588,9 @@ function explicitMailboxOnly(args) {
 function liveDeliverySucceeded(live) {
   if (!live) return false;
   if (live.ok) return true;
-  if (LIVE_DELIVERY_STATES.has(live.result_state)) return true;
-  if (live.legacy && LIVE_DELIVERY_STATES.has(live.legacy.result_state)) return true;
-  if (live.first_party && LIVE_DELIVERY_STATES.has(live.first_party.result_state)) return true;
+  if (SEMANTIC_LIVE_DELIVERY_STATES.has(live.result_state)) return true;
+  if (live.legacy && SEMANTIC_LIVE_DELIVERY_STATES.has(live.legacy.result_state)) return true;
+  if (live.first_party && SEMANTIC_LIVE_DELIVERY_STATES.has(live.first_party.result_state)) return true;
   return false;
 }
 
@@ -591,10 +599,66 @@ function replyForRequest(cwd, requestId) {
   return (
     listMessages(cwd, {
       to: "codex",
+      from: "claude",
       kind: "reply",
       request_id: requestId
     })[0] || null
   );
+}
+
+function semanticWaitMs(args) {
+  if (hasFlag(args, "--no-semantic-wait")) return 0;
+  const value = optionalNumberArg(args, "--semantic-wait-ms");
+  if (value === undefined || value === null) return DEFAULT_STEER_SEMANTIC_WAIT_MS;
+  return Math.max(0, value);
+}
+
+function liveWakeWasAttempted(live) {
+  if (!live) return false;
+  if (live.legacy && live.legacy.attempted) return true;
+  if (live.first_party && live.first_party.queued && live.legacy && live.legacy.attempted) return true;
+  return Boolean(live.attempted);
+}
+
+function nonSemanticWakeState(live) {
+  if (!live) return null;
+  if (!(live.legacy && live.legacy.attempted)) return null;
+  const candidates = [
+    live.result_state,
+    live.status,
+    live.legacy && live.legacy.result_state,
+    live.legacy && live.legacy.status
+  ].filter(Boolean);
+  return candidates.find((state) => NON_SEMANTIC_WAKE_STATES.has(String(state))) || null;
+}
+
+async function waitForSemanticReply(cwd, requestId, live, waitMs) {
+  const initial = replyForRequest(cwd, requestId);
+  if (initial || !waitMs || !liveWakeWasAttempted(live)) {
+    return {
+      reply: initial,
+      wait: initial
+        ? { ok: true, state: "answered", waited_ms: 0 }
+        : { ok: false, state: "skipped", waited_ms: 0, reason: !waitMs ? "semantic wait disabled" : "live wake was not attempted" }
+    };
+  }
+  const waited = await awaitReply(cwd, {
+    request_id: requestId,
+    from: "claude",
+    to: "codex",
+    timeout_ms: waitMs,
+    interval_ms: Math.min(250, Math.max(25, waitMs))
+  });
+  return {
+    reply: replyForRequest(cwd, requestId),
+    wait: {
+      ok: waited.ok,
+      state: waited.state,
+      waited_ms: waited.waited_ms,
+      note: waited.note,
+      latest_activity: waited.latest_activity
+    }
+  };
 }
 
 function daemonLivePushForMessage(result, messageId) {
@@ -612,7 +676,9 @@ function visibleDeliveryBlocker(cwd, durable, live, reply) {
   const legacy = live && live.legacy;
   const promptPath = legacy && legacy.prompt_path ? legacy.prompt_path : null;
   const target = (live && live.target) || (legacy && legacy.target) || null;
+  const wakeState = nonSemanticWakeState(live);
   const reason =
+    (wakeState && `Visible Claude wake reached a non-semantic state (${wakeState}), but no real Claude mailbox reply has landed.`) ||
     (legacy && (legacy.stderr || legacy.error || legacy.reason || legacy.result_state)) ||
     (live && (live.stderr || live.error || live.reason || live.result_state)) ||
     "visible Claude wake was not proven";
@@ -628,8 +694,10 @@ function visibleDeliveryBlocker(cwd, durable, live, reply) {
     : null;
   return {
     blocking: true,
-    kind: "visible_claude_delivery_unproven",
+    kind: wakeState ? "claude_semantic_reply_missing" : "visible_claude_delivery_unproven",
     reason,
+    semantic_reply_required: true,
+    semantic_reply_missing: true,
     request_id: durable.request_id,
     mailbox_message_id: durable.mailbox_message_id,
     target,
@@ -641,7 +709,7 @@ function visibleDeliveryBlocker(cwd, durable, live, reply) {
     diagnostic_command: "node agent-team/src/cli.js daemon status && node agent-team/src/cli.js cockpit --json --no-live-channel",
     operator_hint: permissionHint || undefined,
     directive:
-      "Visible Claude did not prove it received this steering. Do not claim Claude is working; inspect the wake packet or await the mailbox reply."
+      "Do not claim Claude is working until a semantic mailbox reply lands. If Claude is visibly waiting, paste/show the recovery packet, then await the mailbox reply."
   };
 }
 
@@ -1914,8 +1982,26 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
       target: argValue(rest, "--target"),
       timeout_ms: optionalNumberArg(rest, "--timeout-ms")
     });
-    print(row);
-    return 0;
+    const response = row.response || {};
+    const answered = response.result_state === "answered";
+    print({
+      ...row,
+      ok: answered,
+      blocking_next_step: answered
+        ? undefined
+        : {
+            blocking: true,
+            kind: "claude_live_answer_missing",
+            reason: response.note || response.stderr || response.error || response.result_state || "Claude live channel did not return a semantic answer.",
+            request_id: row.request_id,
+            target: response.target || row.target,
+            directive:
+              "Raw channel ask is diagnostics-only. For real Claude work, use channel steer so the durable mailbox request can be awaited and recovered.",
+            recovery_command: "node agent-team/src/cli.js channel steer --kind <kind> --task <task> --prompt <text>",
+            diagnostic_command: "node agent-team/src/cli.js channel status"
+          }
+    });
+    return answered ? 0 : 1;
   }
   if (command === "channel" && subcommand === "dispatch") {
     const adapter = createBridge("mailbox");
@@ -1945,6 +2031,7 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     const kind = argValue(rest, "--kind", "implementation");
     const target = argValue(rest, "--target");
     const timeoutMs = optionalNumberArg(rest, "--timeout-ms") || 60000;
+    const semanticWait = semanticWaitMs(rest);
     const mailbox = createBridge("mailbox");
     const durable = mailbox.request(cwd, {
       task_id: taskId,
@@ -1999,7 +2086,8 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
         reason: "daemon did not process the new mailbox message"
       };
     }
-    reply = replyForRequest(cwd, durable.request_id);
+    const semantic = await waitForSemanticReply(cwd, durable.request_id, live, semanticWait);
+    reply = semantic.reply;
     const blockingNextStep = mailboxOnly ? null : visibleDeliveryBlocker(cwd, durable, live, reply);
     const result = {
       ok: !blockingNextStep,
@@ -2016,6 +2104,7 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
             messages_processed: Array.isArray(daemonPass.messages) ? daemonPass.messages.length : 0
           }
         : undefined,
+      semantic_wait: semantic.wait,
       semantic_reply: reply
         ? {
             message_id: reply.id,

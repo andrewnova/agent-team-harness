@@ -781,6 +781,9 @@ function topNextActions(mode, goals, activeTasks, plans, claude, blockers = [], 
   if (!goals.length && !activeTasks.length && claude.session && claude.session.ok === false) {
     priorityActions.push("Fix Claude channel startup before live teammate requests");
   }
+  if (claude.session && claude.session.delivery_ready === true && claude.session.reply_ready === false) {
+    priorityActions.push("Claude endpoint is transport-ready, but semantic reply readiness is not proven; use channel steer/await reply before claiming Claude is working");
+  }
   if (daemon && !daemon.running) {
     actions.push("Start the receiver daemon for fast mailbox routing: daemon start --roles codex,claude --include-existing");
   }
@@ -1070,7 +1073,9 @@ function renderCockpit(snapshot) {
   const channelState = channel
     ? liveChecked
       ? liveOk
-        ? "ready"
+        ? channel.reply_ready === false
+          ? "transport-ready"
+          : "ready"
         : presenceOk
           ? "loaded-channel-unverified"
         : "not-live"
@@ -1078,8 +1083,16 @@ function renderCockpit(snapshot) {
         ? "last-known-ready"
         : "last-known-not-ready"
     : "no-session";
+  const replyLabel =
+    channel && channel.reply_ready === true
+      ? "semantic-ready"
+      : channel && channel.reply_ready === false
+        ? "semantic-not-proven"
+        : channel
+          ? channel.reply_ready || "unchecked"
+          : "unchecked";
   const channelLine = channel
-    ? `${channelState} action=${channel.action || "unknown"} target=${channel.target || channel.name || "unknown"}${channel.session_identity && channel.session_identity.thread_ref ? ` identity=${channel.session_identity.thread_ref}` : ""} reply=${channel.reply_ready}`
+    ? `${channelState} action=${channel.action || "unknown"} target=${channel.target || channel.name || "unknown"}${channel.session_identity && channel.session_identity.thread_ref ? ` identity=${channel.session_identity.thread_ref}` : ""} reply=${replyLabel}`
     : "no session yet";
   const runtimeLine = liveChecked
     ? `live-ok=${liveOk}${presenceOk ? " presence=loaded" : ""}${runtime && runtime.status_kind ? ` status=${runtime.status_kind}` : ""}`

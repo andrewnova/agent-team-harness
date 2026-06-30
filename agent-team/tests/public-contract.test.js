@@ -61,7 +61,7 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /AGENT_TEAM_CODEX_WAKE_COMMAND/);
   assert.match(readme, /cockpit` and `agent-team watch` show Claude MCP outbox totals/);
   assert.match(readme, /CODEX_THREAD_ID/);
-  assert.match(readme, /short wake-up copy; the mailbox reply remains the completion truth/);
+  assert.match(readme, /short wake-up copy; `channel ask` exits nonzero unless Claude returns a semantic answer/);
   assert.match(readme, /remembered endpoint id/);
   assert.match(readme, /Display names are human labels and fallback selectors, not the primary continuity proof/);
   assert.match(readme, /per-launch Claude MCP config/);

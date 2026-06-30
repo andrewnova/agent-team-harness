@@ -101,6 +101,35 @@ test("CH-1b live adapter floors long-form request timeouts to 30 minutes", () =>
   });
 });
 
+test("CH-1b live adapter does not treat queued channel status as answered", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const fakeCli = path.join(binDir, "claude-channel");
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"ask-file\" ]; then",
+    "  echo '{\"request_id\":\"req_fake\",\"target\":\"ep_fake\",\"status\":\"queued\"}'",
+    "  exit 0",
+    "fi",
+    "exit 0"
+  ]);
+  state.init(cwd);
+  withPathEnv(binDir, () => {
+    const bridge = createBridge("claude-channel");
+    const request = bridge.request(cwd, {
+      task_id: "T-000001",
+      kind: "debug_help",
+      prompt: "From Codex: diagnostic ping.",
+      timeout_ms: 1000
+    });
+    const responses = readJsonl(paths.responsesPath(cwd));
+    assert.equal(request.response.status, "queued");
+    assert.equal(request.response.result_state, "pending");
+    assert.match(request.response.note, /without a semantic answer/);
+    assert.equal(responses[0].result_state, "pending");
+  });
+});
+
 test("CH-1c live adapter keeps long-form timeout responses recoverable", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();

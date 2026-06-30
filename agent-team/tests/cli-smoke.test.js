@@ -160,6 +160,49 @@ test("CLI smoke: cockpit renders a concise Codex operating view", () => {
   assert.match(output, /Create a goal/);
 });
 
+test("CLI smoke: cockpit labels transport-ready Claude without semantic reply proof", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const fakeCli = path.join(binDir, "claude-channel");
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  echo '{\"target\":\"codex-thread\",\"endpoint\":{\"endpoint_id\":\"ep_exact\",\"display_name\":\"codex-thread\",\"pid\":'$FAKE_ENDPOINT_PID'},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "  exit 0",
+    "fi",
+    "exit 1"
+  ]);
+  const env = {
+    ...process.env,
+    AGENT_TEAM_CHANNEL_CLI: fakeCli,
+    FAKE_ENDPOINT_PID: String(process.pid)
+  };
+  run(cwd, ["init"], env);
+  const sessionFile = path.join(cwd, ".agent-team", "comms", "claude-channel", "session.json");
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  fs.writeFileSync(
+    sessionFile,
+    JSON.stringify(
+      {
+        ok: false,
+        action: "started_smoke_failed",
+        target: "codex-thread",
+        delivery_ready: true,
+        reply_ready: false
+      },
+      null,
+      2
+    )
+  );
+
+  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--target", "codex-thread"], env).stdout);
+  assert.equal(cockpit.claude_channel.runtime.ok, true);
+  assert.match(cockpit.next_actions.join("\n"), /semantic reply readiness is not proven/);
+  const text = run(cwd, ["cockpit", "--target", "codex-thread"], env).stdout;
+  assert.match(text, /Claude: transport-ready/);
+  assert.match(text, /reply=semantic-not-proven/);
+});
+
 test("CLI smoke: Claude steering notices scan into cockpit and can be acknowledged", () => {
   const cwd = tempRoot();
   const projectDir = path.join(cwd, "project");
@@ -546,6 +589,47 @@ test("CLI smoke: channel steer mailbox-only creates a durable Claude ACK handle 
   assert.match(cockpit.next_actions.join("\n"), /Claude reply pending/);
 });
 
+test("CLI smoke: channel ask exits nonzero when the live channel only queues", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const fakeCli = path.join(binDir, "claude-channel");
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"ask-file\" ]; then",
+    "  echo '{\"request_id\":\"req_fake\",\"target\":\"ep_fake\",\"status\":\"queued\"}'",
+    "  exit 0",
+    "fi",
+    "exit 1"
+  ]);
+  const env = {
+    ...process.env,
+    AGENT_TEAM_CHANNEL_CLI: fakeCli
+  };
+  run(cwd, ["init"], env);
+
+  const result = runRaw(
+    cwd,
+    [
+      "channel",
+      "ask",
+      "--kind",
+      "debug_help",
+      "--task",
+      "T-000010",
+      "--prompt",
+      "From Codex: diagnostic ping."
+    ],
+    env
+  );
+  assert.equal(result.status, 1);
+  const asked = JSON.parse(result.stdout);
+  assert.equal(asked.ok, false);
+  assert.equal(asked.response.result_state, "pending");
+  assert.equal(asked.blocking_next_step.kind, "claude_live_answer_missing");
+  assert.match(asked.blocking_next_step.directive, /diagnostics-only/);
+  assert.match(asked.blocking_next_step.recovery_command, /channel steer/);
+});
+
 test("CLI smoke: channel steer default blocks when visible Claude delivery is unproven", () => {
   const cwd = tempRoot();
   run(cwd, ["init"]);
@@ -653,6 +737,74 @@ test("CLI smoke: channel steer reports wake packet path when legacy live wake fa
   assert.match(steer.blocking_next_step.wake_packet_path, /wake-req_/);
   assert.equal(fs.existsSync(path.join(cwd, steer.blocking_next_step.wake_packet_path)), true);
   assert.match(steer.blocking_next_step.manual_recovery_command, /cat /);
+});
+
+test("CLI smoke: channel steer blocks when legacy wake is sent but semantic reply is missing", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const fakeCli = path.join(binDir, "claude-channel");
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"ask-file\" ]; then",
+    "  echo 'timed out waiting for Claude Code reply' >&2",
+    "  exit 1",
+    "fi",
+    "exit 1"
+  ]);
+  const env = {
+    ...process.env,
+    AGENT_TEAM_CHANNEL_CLI: fakeCli
+  };
+  run(cwd, ["init"], env);
+  const sessionFile = path.join(cwd, ".agent-team", "comms", "claude-channel", "session.json");
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  fs.writeFileSync(
+    sessionFile,
+    JSON.stringify(
+      {
+        ok: true,
+        target: "codex-thread",
+        endpoint: {
+          endpoint_id: "ep_exact",
+          display_name: "codex-thread"
+        },
+        delivery_ready: true
+      },
+      null,
+      2
+    )
+  );
+
+  const result = runRaw(
+    cwd,
+    [
+      "channel",
+      "steer",
+      "--kind",
+      "ui_direction",
+      "--task",
+      "T-000009",
+      "--goal",
+      "G-000001",
+      "--subject",
+      "Read Codex UI direction visibly",
+      "--prompt",
+      "From Codex: the wake can be sent, but a real mailbox ACK is still required.",
+      "--no-semantic-wait"
+    ],
+    env
+  );
+  assert.equal(result.status, 1);
+  const steer = JSON.parse(result.stdout);
+  assert.equal(steer.ok, false);
+  assert.equal(steer.live_channel.result_state, "wake_sent_reply_pending");
+  assert.equal(steer.blocking_next_step.kind, "claude_semantic_reply_missing");
+  assert.equal(steer.blocking_next_step.semantic_reply_missing, true);
+  assert.match(steer.blocking_next_step.reason, /no real Claude mailbox reply has landed/);
+  assert.match(steer.blocking_next_step.directive, /Do not claim Claude is working/);
+  assert.match(steer.blocking_next_step.wake_packet_path, /wake-req_/);
+  assert.equal(steer.semantic_reply, null);
+  assert.equal(steer.semantic_wait.state, "skipped");
 });
 
 test("CLI smoke: daemon one-shot observes both inboxes, receipts advisory notes, and requires semantic replies only when asked", () => {
