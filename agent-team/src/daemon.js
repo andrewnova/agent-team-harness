@@ -125,7 +125,9 @@ function claudeMcpPushEnabled(options = {}) {
 }
 
 function legacyLivePushEnabled(options = {}) {
-  return options.legacy_live_push !== false && process.env.AGENT_TEAM_DAEMON_LEGACY_LIVE_PUSH !== "0";
+  if (options.legacy_live_push === true) return true;
+  if (options.legacy_live_push === false) return false;
+  return process.env.AGENT_TEAM_DAEMON_LEGACY_LIVE_PUSH === "1";
 }
 
 function safeFileToken(value) {
@@ -665,12 +667,14 @@ function daemonStatus(cwd) {
     session_push: {
       native_model_ui_push: Boolean(codexWake),
       live_channel_wake: true,
+      primary_claude_wake: "first_party_mcp_outbox",
+      legacy_live_channel_wake: process.env.AGENT_TEAM_DAEMON_LEGACY_LIVE_PUSH === "1",
       claude_mcp_outbox: path.relative(cwd, paths.claudeMcpOutboxPath(cwd)),
       codex_wake_adapter: codexWake ? codexWake.command : null,
       codex_wake_adapter_source: codexWake ? codexWake.source : null,
       codex_wake_stream: path.relative(cwd, codexWakeLogPath(cwd)),
-      reason: "The receiver daemon queues first-party Claude MCP channel notifications, keeps legacy claude-channel wake as compatibility fallback, and queues Codex-bound wake payloads for a Codex-side MCP/app adapter.",
-      mailbox_push: "durable mailbox is truth; receiver daemon immediately queues Claude-bound non-heartbeat traffic to the Claude MCP outbox and attempts compatibility live wake when available",
+      reason: "The receiver daemon queues first-party Claude MCP channel notifications, keeps legacy claude-channel wake as explicit opt-in compatibility, and queues Codex-bound wake payloads for a Codex-side MCP/app adapter.",
+      mailbox_push: "durable mailbox is truth; receiver daemon immediately queues Claude-bound non-heartbeat traffic to the Claude MCP outbox and only attempts legacy compatibility live wake when explicitly enabled",
       fallback_waiter: "await reply --request-id <id>"
     },
     log_path: paths.daemonLogPath(cwd),

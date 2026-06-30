@@ -20,6 +20,9 @@ test("public skill keeps Claude work mailbox-first and nonblocking", () => {
   assert.match(skill, /agent-team-codex-wake/);
   assert.match(skill, /agent-team-codex-mcp/);
   assert.match(skill, /agent_team_codex_watch_mailbox/);
+  assert.match(skill, /legacy Claude channel CLI is not the normal wake path/);
+  assert.match(skill, /--recover-visible/);
+  assert.match(skill, /--legacy-live-push/);
   assert.match(skill, /per-message timeline/);
   assert.match(skill, /remembered endpoint id/);
   assert.match(skill, /Display names are labels\/fallbacks, not primary identity/);
@@ -56,12 +59,14 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /per-message timeline/);
   assert.match(readme, /stable machine stage keys/);
   assert.match(readme, /Codex MCP saw it/);
-  assert.match(readme, /legacy Claude channel wake as a compatibility fallback/);
+  assert.match(readme, /legacy Claude channel wake as explicit opt-in compatibility/);
   assert.match(readme, /queues Codex wake payloads/);
   assert.match(readme, /AGENT_TEAM_CODEX_WAKE_COMMAND/);
   assert.match(readme, /cockpit` and `agent-team watch` show Claude MCP outbox totals/);
   assert.match(readme, /CODEX_THREAD_ID/);
-  assert.match(readme, /short wake-up copy; `channel ask` exits nonzero unless Claude returns a semantic answer/);
+  assert.match(readme, /legacy channel CLI are for startup, health checks, smoke tests, and low-level diagnostics/);
+  assert.match(readme, /--recover-visible/);
+  assert.match(readme, /--legacy-live-push/);
   assert.match(readme, /remembered endpoint id/);
   assert.match(readme, /Display names are human labels and fallback selectors, not the primary continuity proof/);
   assert.match(readme, /per-launch Claude MCP config/);

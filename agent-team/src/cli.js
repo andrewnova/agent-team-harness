@@ -195,7 +195,7 @@ Commands:
   channel status [--target <target>]
   channel ask --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>]
   channel dispatch --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>] [--goal <goal>]
-  channel steer --kind <kind> --task <task> (--prompt <text>|--file <path>) [--subject <text>] [--target <target>] [--timeout-ms <ms>] [--semantic-wait-ms <ms>|--no-semantic-wait] [--goal <goal>] [--no-live|--mailbox-only|--raw-live]
+  channel steer --kind <kind> --task <task> (--prompt <text>|--file <path>) [--subject <text>] [--target <target>] [--timeout-ms <ms>] [--semantic-wait-ms <ms>|--no-semantic-wait] [--recover-visible] [--recovery-wait-ms <ms>] [--goal <goal>] [--no-live|--mailbox-only|--raw-live|--legacy-live-push]
   watch [--once] [--json] [--target <target>] [--limit <n>] [--interval-ms <ms>] [--no-live-channel]
   cockpit [--json] [--target <target>] [--limit <n>] [--no-live-channel]
   board
@@ -698,6 +698,14 @@ function recoverVisibleCommand({ requestId, mailboxMessageId }) {
   return `node agent-team/src/cli.js channel recover-visible ${key}`;
 }
 
+function recoveryWaitMs(args) {
+  return optionalNumberArg(args, "--recovery-wait-ms") || 90000;
+}
+
+function visibleRecoveryRequested(args) {
+  return hasFlag(args, "--recover-visible") || hasFlag(args, "--auto-recover-visible");
+}
+
 function claudeMailboxRequest(cwd, input = {}) {
   if (input.message_id) {
     const message = loadMessage(cwd, input.message_id, { include_body: true });
@@ -758,6 +766,78 @@ function visibleRecoveryPrompt(cwd, message) {
     "Original request body:",
     body || "(empty)"
   ].join("\n");
+}
+
+function runVisibleRecovery(cwd, message, args = []) {
+  const adapter = createBridge("claude-channel");
+  const ensureOptions = channelEnsureOptions(args);
+  const recoveryName = argValue(args, "--recovery-name") || ensureOptions.name || visibleRecoveryName(cwd, message);
+  const projectDir = ensureOptions.project_dir || cwd;
+  const result = adapter.ensure(cwd, {
+    ...ensureOptions,
+    target: undefined,
+    name: recoveryName,
+    project_dir: projectDir,
+    fresh_claude: true,
+    reuse_claude: false,
+    startup_message: visibleRecoveryPrompt(cwd, message),
+    smoke: false
+  });
+  return {
+    ok: result.ok,
+    recovery: "visible_direct_prompt",
+    request_id: message.request_id || message.id,
+    mailbox_message_id: message.id,
+    name: recoveryName,
+    project_dir: projectDir,
+    startup_message_injected: true,
+    start: result,
+    await_reply_command: commandToAwaitReply({ requestId: message.request_id || message.id })
+  };
+}
+
+async function attemptVisibleRecovery(cwd, durable, blockingNextStep, args = []) {
+  if (!visibleRecoveryRequested(args) || !blockingNextStep || blockingNextStep.kind !== "first_party_mcp_reply_missing") return null;
+  const message = claudeMailboxRequest(cwd, {
+    request_id: durable.request_id,
+    message_id: durable.mailbox_message_id
+  });
+  if (!message) {
+    return {
+      ok: false,
+      error: "Claude mailbox request not found for visible recovery",
+      request_id: durable.request_id,
+      mailbox_message_id: durable.mailbox_message_id,
+      semantic_wait: { ok: false, state: "skipped", waited_ms: 0, reason: "mailbox request missing" },
+      reply: null
+    };
+  }
+  const recovery = runVisibleRecovery(cwd, message, args);
+  if (!recovery.ok) {
+    return {
+      ...recovery,
+      semantic_wait: { ok: false, state: "skipped", waited_ms: 0, reason: "visible recovery launch failed" },
+      reply: null
+    };
+  }
+  const waited = await awaitReply(cwd, {
+    request_id: durable.request_id,
+    from: "claude",
+    to: "codex",
+    timeout_ms: recoveryWaitMs(args),
+    interval_ms: 1000
+  });
+  return {
+    ...recovery,
+    semantic_wait: {
+      ok: waited.ok,
+      state: waited.state,
+      waited_ms: waited.waited_ms,
+      note: waited.note,
+      latest_activity: waited.latest_activity
+    },
+    reply: replyForRequest(cwd, durable.request_id)
+  };
 }
 
 function visibleDeliveryBlocker(cwd, durable, live, reply) {
@@ -913,6 +993,7 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
       interval_ms: optionalNumberArg(rest, "--interval-ms"),
       include_existing: hasFlag(rest, "--include-existing"),
       once: hasFlag(rest, "--once"),
+      legacy_live_push: hasFlag(rest, "--legacy-live-push") ? true : undefined,
       onOutput: (payload) => process.stdout.write(`${JSON.stringify(payload)}\n`)
     });
     if (hasFlag(rest, "--once")) print(result);
@@ -2094,30 +2175,8 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
       });
       return 1;
     }
-    const adapter = createBridge("claude-channel");
-    const ensureOptions = channelEnsureOptions(rest);
-    const recoveryName = ensureOptions.name || visibleRecoveryName(cwd, message);
-    const projectDir = ensureOptions.project_dir || cwd;
-    const result = adapter.ensure(cwd, {
-      ...ensureOptions,
-      name: recoveryName,
-      project_dir: projectDir,
-      fresh_claude: true,
-      reuse_claude: false,
-      startup_message: visibleRecoveryPrompt(cwd, message),
-      smoke: false
-    });
-    print({
-      ok: result.ok,
-      recovery: "visible_direct_prompt",
-      request_id: message.request_id || message.id,
-      mailbox_message_id: message.id,
-      name: recoveryName,
-      project_dir: projectDir,
-      startup_message_injected: true,
-      start: result,
-      await_reply_command: commandToAwaitReply({ requestId: message.request_id || message.id })
-    });
+    const result = runVisibleRecovery(cwd, message, rest);
+    print(result);
     return result.ok ? 0 : 1;
   }
   if (command === "channel" && subcommand === "auth") {
@@ -2242,7 +2301,8 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
         roles: ["claude"],
         once: true,
         unacked: true,
-        message_id: durable.mailbox_message_id
+        message_id: durable.mailbox_message_id,
+        legacy_live_push: hasFlag(rest, "--legacy-live-push") ? true : undefined
       });
       live = daemonLivePushForMessage(daemonPass, durable.mailbox_message_id) || {
         ok: false,
@@ -2252,7 +2312,12 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     }
     const semantic = await waitForSemanticReply(cwd, durable.request_id, live, semanticWait);
     reply = semantic.reply;
-    const blockingNextStep = mailboxOnly ? null : visibleDeliveryBlocker(cwd, durable, live, reply);
+    let blockingNextStep = mailboxOnly ? null : visibleDeliveryBlocker(cwd, durable, live, reply);
+    const visibleRecovery = await attemptVisibleRecovery(cwd, durable, blockingNextStep, rest);
+    if (visibleRecovery && visibleRecovery.reply) {
+      reply = visibleRecovery.reply;
+      blockingNextStep = null;
+    }
     const result = {
       ok: !blockingNextStep,
       durable_ack: {
@@ -2269,6 +2334,28 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
           }
         : undefined,
       semantic_wait: semantic.wait,
+      visible_recovery: visibleRecovery
+        ? {
+            ok: visibleRecovery.ok,
+            recovery: visibleRecovery.recovery,
+            request_id: visibleRecovery.request_id,
+            mailbox_message_id: visibleRecovery.mailbox_message_id,
+            name: visibleRecovery.name,
+            project_dir: visibleRecovery.project_dir,
+            startup_message_injected: visibleRecovery.startup_message_injected,
+            start: visibleRecovery.start
+              ? {
+                  ok: visibleRecovery.start.ok,
+                  action: visibleRecovery.start.action,
+                  target: visibleRecovery.start.target,
+                  delivery_ready: visibleRecovery.start.delivery_ready,
+                  launch_id: visibleRecovery.start.launch_id,
+                  launch_mode: visibleRecovery.start.launch_mode
+                }
+              : undefined,
+            semantic_wait: visibleRecovery.semantic_wait
+          }
+        : undefined,
       semantic_reply: reply
         ? {
             message_id: reply.id,

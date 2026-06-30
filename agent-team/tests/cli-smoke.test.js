@@ -653,12 +653,12 @@ test("CLI smoke: channel steer default blocks when visible Claude delivery is un
   assert.equal(steer.durable_ack.reply_required, true);
   assert.equal(steer.live_channel.required, true);
   assert.equal(steer.live_channel.first_party.result_state, "mcp_outbox_queued");
-  assert.equal(steer.live_channel.legacy.result_state, "legacy_no_session");
+  assert.equal(steer.live_channel.legacy.result_state, "legacy_live_push_disabled");
   assert.equal(steer.blocking_next_step.blocking, true);
   assert.equal(steer.blocking_next_step.kind, "first_party_mcp_reply_missing");
   assert.equal(steer.blocking_next_step.primary_transport, "agent-team-claude-mcp");
   assert.equal(steer.blocking_next_step.first_party_mcp.result_state, "mcp_outbox_queued");
-  assert.equal(steer.blocking_next_step.compatibility_wake.result_state, "legacy_no_session");
+  assert.equal(steer.blocking_next_step.compatibility_wake.result_state, "legacy_live_push_disabled");
   assert.equal(steer.blocking_next_step.request_id, steer.durable_ack.request_id);
   assert.equal(steer.blocking_next_step.mailbox_message_id, steer.durable_ack.mailbox_message_id);
   assert.match(steer.blocking_next_step.await_reply_command, new RegExp(steer.durable_ack.request_id));
@@ -777,6 +777,104 @@ test("CLI smoke: channel recover-visible launches a fresh visible recovery promp
   assert.match(args, /Please ACK this recovered request/);
 });
 
+test("CLI smoke: channel steer can auto-recover visible Claude and wait for a semantic mailbox reply", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const readyFile = path.join(cwd, "ready");
+  const argsFile = path.join(cwd, "claude-auto-recover-args.txt");
+  writeExecutable(path.join(binDir, "claude-channel"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  if [ -f \"$FAKE_READY\" ]; then",
+    "    echo '{\"target\":\"recover-thread\",\"endpoint\":{\"endpoint_id\":\"ep_recover\",\"display_name\":\"recover-thread\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "    exit 0",
+    "  fi",
+    "  echo '{\"reachable\":false,\"health\":{\"ok\":false}}'",
+    "  exit 1",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    "  if [ -f \"$FAKE_READY\" ]; then",
+    "    echo '{\"targets\":[{\"target\":\"ep_recover\",\"endpoint_id\":\"ep_recover\",\"display_name\":\"recover-thread\",\"project_dir\":\"'$PWD'\"}]}'",
+    "  else",
+    "    echo '{\"targets\":[]}'",
+    "  fi",
+    "  exit 0",
+    "fi",
+    "exit 1"
+  ]);
+  writeExecutable(path.join(binDir, "claude"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
+    "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
+    "  exit 0",
+    "fi",
+    "printf '%s\\n' \"$*\" > \"$FAKE_ARGS\"",
+    "touch \"$FAKE_READY\"",
+    "REQ=$(printf '%s\\n' \"$*\" | sed -n 's/.*\"request_id\": \"\\([^\"]*\\)\".*/\\1/p' | tail -n 1)",
+    "MSG=$(printf '%s\\n' \"$*\" | sed -n 's/.*\"message_id\": \"\\([^\"]*\\)\".*/\\1/p' | tail -n 1)",
+    "if [ -n \"$REQ\" ]; then",
+    "  \"$NODE_BIN\" \"$CLI_PATH\" mailbox send --from claude --to codex --kind reply --request-id \"$REQ\" --in-reply-to \"$MSG\" --subject 'ACK: recovered' --body 'ACK: recovered by fake visible Claude' >/dev/null",
+    "fi",
+    "echo 'backgrounded - fake123 - recover-thread'",
+    "exit 0"
+  ]);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    FAKE_READY: readyFile,
+    FAKE_ARGS: argsFile,
+    NODE_BIN: process.execPath,
+    CLI_PATH: cli
+  };
+  run(cwd, ["init"], env);
+
+  const steer = JSON.parse(
+    run(
+      cwd,
+      [
+        "channel",
+        "steer",
+        "--kind",
+        "ui_direction",
+        "--task",
+        "T-000011",
+        "--goal",
+        "G-000001",
+        "--subject",
+        "Recover visible steering",
+        "--prompt",
+        "From Codex: recover visibly and reply through the mailbox.",
+        "--recover-visible",
+        "--name",
+        "recover-thread",
+        "--launch-mode",
+        "background",
+        "--timeout-ms",
+        "1000",
+        "--poll-ms",
+        "10",
+        "--semantic-wait-ms",
+        "10",
+        "--recovery-wait-ms",
+        "3000"
+      ],
+      env
+    ).stdout
+  );
+
+  assert.equal(steer.ok, true);
+  assert.equal(steer.blocking_next_step, undefined);
+  assert.equal(steer.live_channel.first_party.result_state, "mcp_outbox_queued");
+  assert.equal(steer.live_channel.legacy.result_state, "legacy_live_push_disabled");
+  assert.equal(steer.visible_recovery.ok, true);
+  assert.equal(steer.visible_recovery.recovery, "visible_direct_prompt");
+  assert.equal(steer.visible_recovery.semantic_wait.ok, true);
+  assert.equal(steer.semantic_reply.request_id, steer.durable_ack.request_id);
+  const args = fs.readFileSync(argsFile, "utf8");
+  assert.match(args, /Visible recovery for an Agent Team mailbox request/);
+  assert.match(args, /recover visibly and reply through the mailbox/);
+});
+
 test("CLI smoke: channel steer reports wake packet path when legacy live wake fails", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();
@@ -827,7 +925,8 @@ test("CLI smoke: channel steer reports wake packet path when legacy live wake fa
       "--subject",
       "Read Codex UI direction visibly",
       "--prompt",
-      "From Codex: fail the compatibility live wake."
+      "From Codex: fail the compatibility live wake.",
+      "--legacy-live-push"
     ],
     env
   );
@@ -904,6 +1003,7 @@ test("CLI smoke: channel steer blocks when legacy wake is sent but semantic repl
       "Read Codex UI direction visibly",
       "--prompt",
       "From Codex: the wake can be sent, but a real mailbox ACK is still required.",
+      "--legacy-live-push",
       "--no-semantic-wait"
     ],
     env
@@ -1030,7 +1130,7 @@ test("CLI smoke: daemon one-shot observes both inboxes, receipts advisory notes,
   assert.equal(receiptAcksAfterRepeat.length, 2);
 });
 
-test("CLI smoke: daemon wakes live Claude when a Claude-bound mailbox request lands", () => {
+test("CLI smoke: daemon can opt into legacy live Claude wake for compatibility", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();
   const argsFile = path.join(cwd, "claude-channel-args.txt");
@@ -1050,7 +1150,8 @@ test("CLI smoke: daemon wakes live Claude when a Claude-bound mailbox request la
     ...process.env,
     AGENT_TEAM_CHANNEL_CLI: fakeCli,
     FAKE_ARGS_FILE: argsFile,
-    FAKE_PROMPT_COPY: promptCopy
+    FAKE_PROMPT_COPY: promptCopy,
+    AGENT_TEAM_DAEMON_LEGACY_LIVE_PUSH: "1"
   };
   run(cwd, ["init"], env);
   const sessionFile = path.join(cwd, ".agent-team", "comms", "claude-channel", "session.json");
@@ -1136,7 +1237,7 @@ test("CLI smoke: daemon wakes live Claude when a Claude-bound mailbox request la
   assert.equal(mcpRows[0].notification.method, "notifications/claude/channel");
 });
 
-test("CLI smoke: daemon live-wakes visible Claude for non-heartbeat notify messages", () => {
+test("CLI smoke: daemon queues first-party MCP without invoking legacy channel by default", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();
   const argsFile = path.join(cwd, "claude-channel-notify-args.txt");
@@ -1205,15 +1306,10 @@ test("CLI smoke: daemon live-wakes visible Claude for non-heartbeat notify messa
   assert.equal(daemon.messages[0].semantic_ack_required, false);
   assert.equal(daemon.messages[0].live_push.required, true);
   assert.equal(daemon.messages[0].live_push.first_party.result_state, "mcp_outbox_queued");
-  assert.equal(daemon.messages[0].live_push.target, "ep_exact");
-  assert.equal(daemon.messages[0].live_push.result_state, "queued");
-
-  const args = fs.readFileSync(argsFile, "utf8").trim().split(/\r?\n/);
-  assert.deepEqual(args.slice(args.indexOf("--to"), args.indexOf("--to") + 2), ["--to", "ep_exact"]);
-  const prompt = fs.readFileSync(promptCopy, "utf8");
-  assert.match(prompt, /mailbox message has just been queued/);
-  assert.match(prompt, /Visible action:/);
-  assert.match(prompt, /hi/);
+  assert.equal(daemon.messages[0].live_push.legacy.result_state, "legacy_live_push_disabled");
+  assert.equal(daemon.messages[0].live_push.result_state, "mcp_outbox_queued");
+  assert.equal(fs.existsSync(argsFile), false);
+  assert.equal(fs.existsSync(promptCopy), false);
   const mcpRows = fs
     .readFileSync(path.join(cwd, ".agent-team", "comms", "claude-mcp", "outbox.jsonl"), "utf8")
     .trim()
@@ -1224,7 +1320,7 @@ test("CLI smoke: daemon live-wakes visible Claude for non-heartbeat notify messa
   assert.match(mcpRows[0].notification.params.content, /hi/);
 });
 
-test("CLI smoke: daemon queues first-party Claude MCP notifications without legacy channel session", () => {
+test("CLI smoke: daemon queues first-party Claude MCP notifications without needing legacy channel", () => {
   const cwd = tempRoot();
   run(cwd, ["init"]);
   const notify = JSON.parse(
@@ -1251,7 +1347,7 @@ test("CLI smoke: daemon queues first-party Claude MCP notifications without lega
   assert.equal(daemon.messages[0].live_push.primary_transport, "claude-mcp-outbox");
   assert.equal(daemon.messages[0].live_push.result_state, "mcp_outbox_queued");
   assert.equal(daemon.messages[0].live_push.first_party.result_state, "mcp_outbox_queued");
-  assert.equal(daemon.messages[0].live_push.legacy.result_state, "legacy_no_session");
+  assert.equal(daemon.messages[0].live_push.legacy.result_state, "legacy_live_push_disabled");
 
   const mcpRows = fs
     .readFileSync(path.join(cwd, ".agent-team", "comms", "claude-mcp", "outbox.jsonl"), "utf8")
