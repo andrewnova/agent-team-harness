@@ -11,7 +11,9 @@ Use one normal operator CLI: `agent-team`. The local Claude channel bridge is a 
 
 Hard transport rule: do not use raw `ask_claude`, raw live-channel asks, or `complete_channel_request` as the delegation path for planning, implementation, frontend work, review, refactor, or debugging tasks. Those synchronous channel paths are only for health checks, smoke tests, and low-level bridge diagnostics. Real work for Claude must be represented in harness state and delivered through mailbox-backed CLI flows so Codex can keep working while Claude is busy.
 
-The daemon exists to connect Codex and Claude through the durable mailbox: receipt ACKs, semantic ACKs, check-ins, replies, cockpit visibility, and importable state. If Claude should do work, use a mailbox-first command such as `plan claude` with the default adapter, `review request`, `channel steer`, or `mailbox send --to claude --kind request --reply-required`. Then keep Codex moving and later import or acknowledge Claude's mailbox reply.
+Visible-Claude rule: for Claude-owned tasks, especially frontend/UI/UX work, Codex must start or attach a visible Claude Code teammate and deliver steering through `channel steer` with live delivery enabled by default. The user should be able to see Claude receive Codex's steering unless the user explicitly asks for quiet/mailbox-only mode. Do not use `--no-live`, mailbox-only delegation, background-only launch, or hidden/PTY launch for Claude-owned work unless the user explicitly requested that mode. If visible attach/start or live delivery fails, treat that as a blocking harness setup problem for the Claude-owned task: run the repair/auth/endpoint diagnostics, report the exact blocker, and do not claim Claude is working or mark the task delegated until a visible Claude channel is healthy or the user explicitly overrides the visible requirement.
+
+The daemon exists to connect Codex and Claude through the durable mailbox: receipt ACKs, semantic ACKs, check-ins, replies, cockpit visibility, and importable state. If Claude should do work, use a mailbox-first command such as `plan claude` with the default adapter, `review request`, `channel steer`, or `mailbox send --to claude --kind request --reply-required`. For Claude-owned tasks, pair that durable request with the visible-Claude rule above. Then keep Codex moving and later import or acknowledge Claude's mailbox reply.
 
 ## Invocation Behavior
 
@@ -80,6 +82,7 @@ Rules:
 Route by task facet:
 
 - Claude owns frontend UI, UX/layout, copy polish, visual QA, and frontend browser observation/debugging.
+- When delegating any Claude-owned task, Codex must first make the live Claude teammate visible to the user with the correct project root. Use `start --name <session> --project-dir <project-root> --daemon` or `channel ensure --name <session> --project-dir <project-root> --launch-mode visible` before steering. If no matching visible endpoint is available or live delivery fails, block Claude-owned task execution and fix the endpoint/auth/session problem; do not silently fall back to mailbox-only, do not send `--no-live`, and do not say Claude is working unless the user explicitly overrides visible mode.
 - Codex owns backend, data model, state machine, test/proof harness, browser/computer-use proof, merge, and final `done`.
 - Codex should use max useful native subagents for independent backend, tests, docs, review, debugging, and proof-prep slices. Import their results with `codex-subagents import` when the evidence matters.
 - Claude may use available browser observation tools for frontend debugging when permitted by the local environment.
