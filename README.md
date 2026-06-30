@@ -140,6 +140,12 @@ agent-team await reply --request-id req_... --once
 agent-team review import T-000001 --request-id req_...
 ```
 
+## First-Party Claude MCP Channel
+
+The repo now includes an experimental first-party Claude MCP server at `agent-team-claude-mcp`. It declares the Agent Team Claude Channel, exposes mailbox-backed tools for ACKs, replies, check-ins, status, and task opening, and writes Claude responses through the same durable mailbox as the CLI.
+
+This is the migration target for replacing the managed `claude-channel-cli` bridge on the normal path. Until daemon launch/delivery is fully wired to this server and dogfooded with visible Claude Code, the legacy bridge remains the supported live startup/smoke path.
+
 ## Project Layout
 
 ```text

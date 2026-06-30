@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 1 hardening committed to tests, full architecture review still open
+Status: Active refactor charter; Phase 2 first-party Claude MCP channel seam committed to tests, full architecture review still open
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -522,3 +522,43 @@ Remaining architectural discomfort:
 Next phase:
 
 - Start Track 1 by designing the first-party Claude MCP/channel server boundary and fake-channel test harness, while continuing Track 3 daemon receipt-state cleanup.
+
+### 2026-06-30 - Phase 2 First-Party Claude MCP Channel Boundary
+
+What changed:
+
+- Added an experimental first-party Claude MCP/channel module that declares the Agent Team channel contract, builds Claude Channel notification payloads from durable mailbox messages, and exposes mailbox-backed tools for Claude ACKs, replies, check-ins, status reads, and task opening.
+- Added a stdio MCP server executable, `agent-team-claude-mcp`, with JSON-RPC frame handling for `initialize`, `tools/list`, `tools/call`, and `ping`.
+- Added tests proving the server declares `experimental["claude/channel"]`, preserves mailbox identity and body text in channel notifications, and writes Claude replies/check-ins into the durable mailbox.
+- Documented the server in the README as the migration target for replacing the legacy managed `claude-channel-cli` bridge on the normal path.
+
+Why it changed:
+
+- Track 1 needs a first-party replacement seam before the daemon can stop shelling out to `claude-channel-cli`.
+- Claude-side replies should be normal MCP tool calls that write mailbox records, not `complete_channel_request` semantics hidden behind a wrapper.
+- The architecture needs executable proof, not only a design note, that the MCP/channel boundary can preserve mailbox truth.
+
+Files touched:
+
+- `agent-team/src/mcp/claudeChannel.js`
+- `agent-team/src/mcp/claudeServer.js`
+- `agent-team/tests/mcp-claude-channel.test.js`
+- `agent-team/package.json`
+- `README.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test tests/mcp-claude-channel.test.js` from `agent-team/`: 4 tests passed.
+- `npm test` from `agent-team/`: 108 tests passed.
+
+Remaining architectural discomfort:
+
+- The daemon still delivers live Claude wake-ups through `claude-channel-cli`; the new first-party MCP/channel server is not yet registered, launched, or used by daemon delivery.
+- The MCP server has the mailbox reply tools and channel notification payload shape, but not a persistent mailbox watcher that emits live notifications by itself.
+- There is no Claude MCP config installer yet for `agent-team-claude-mcp`.
+- The server has test coverage with fake stdio frames, but no real visible Claude Code dogfood transcript.
+
+Next phase:
+
+- Wire daemon delivery to a pluggable channel transport so `agent-team-claude-mcp` can become the preferred live projection path, with `claude-channel-cli` demoted to compatibility/diagnostics.
