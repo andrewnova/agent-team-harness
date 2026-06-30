@@ -233,6 +233,14 @@ function hasFlag(args, name) {
   return args.includes(name);
 }
 
+function wantsHelp(args) {
+  return args.some((arg, index) => {
+    if (arg !== "--help" && arg !== "-h") return false;
+    const previous = args[index - 1];
+    return !(previous && previous.startsWith("--"));
+  });
+}
+
 function print(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
@@ -499,7 +507,7 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   argv = resolved.argv;
   cwd = resolved.cwd;
   const [command, subcommand, ...rest] = argv;
-  if (!command || command === "--help" || command === "-h") {
+  if (!command || wantsHelp(argv)) {
     process.stdout.write(usage());
     return 0;
   }

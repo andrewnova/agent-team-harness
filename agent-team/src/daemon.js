@@ -62,8 +62,14 @@ function semanticAckInstruction(message) {
   ].join(" ");
 }
 
-function livePushRequired(message, semantic) {
-  return Boolean(message && message.to === "claude" && semantic);
+function livePushRequired(message) {
+  return Boolean(
+    message &&
+      message.to === "claude" &&
+      message.from !== "claude" &&
+      message.kind !== RECEIPT_ACK_KIND &&
+      message.kind !== "heartbeat"
+  );
 }
 
 function codexPushRequired(message) {
@@ -139,9 +145,22 @@ function mailboxReplyCommand(cwd, message) {
   ].join(" ");
 }
 
-function livePushPrompt(cwd, message) {
+function livePushPrompt(cwd, message, semantic) {
+  const actionLines = semantic
+    ? [
+        "Required action:",
+        "1. Send a mailbox reply/ACK immediately so Codex can see you are actually active.",
+        "2. Continue the requested work visibly in Claude Code.",
+        "3. Send check-ins through the mailbox during long work."
+      ]
+    : [
+        "Visible action:",
+        "1. Read this mailbox message in the visible Claude Code session.",
+        "2. If it asks for acknowledgement, status, or action, answer through the mailbox.",
+        "3. Otherwise continue normally; this live wake is the visible copy of mailbox traffic."
+      ];
   return [
-    "A durable Agent Team mailbox request has just been queued for you by Codex.",
+    "A durable Agent Team mailbox message has just been queued for you by Codex.",
     "This live channel message is a real-time wake-up copy only; the mailbox is the source of truth.",
     "",
     `Mailbox message id: ${message.id}`,
@@ -151,10 +170,7 @@ function livePushPrompt(cwd, message) {
     `Kind: ${message.request_kind || message.kind}`,
     `Subject: ${message.subject || "(none)"}`,
     "",
-    "Required action:",
-    "1. Send a mailbox reply/ACK immediately so Codex can see you are actually active.",
-    "2. Continue the requested work visibly in Claude Code.",
-    "3. Send check-ins through the mailbox during long work.",
+    ...actionLines,
     "",
     `Reply command shape: ${mailboxReplyCommand(cwd, message)}`,
     "",
@@ -254,7 +270,7 @@ function attemptClaudeLivePush(cwd, runId, message, semantic, options = {}) {
     return detail;
   }
   const promptPath = livePushPromptPath(cwd, message);
-  writeText(promptPath, livePushPrompt(cwd, message));
+  writeText(promptPath, livePushPrompt(cwd, message, semantic));
   const target = livePushTarget(message, session);
   const args = [
     "ask-file",
@@ -556,7 +572,7 @@ function daemonStatus(cwd) {
       codex_wake_adapter: process.env.AGENT_TEAM_CODEX_WAKE_COMMAND || null,
       codex_wake_stream: path.relative(cwd, codexWakeLogPath(cwd)),
       reason: "The receiver daemon wakes visible Claude through claude-channel and queues Codex-bound wake payloads for a Codex-side MCP/app adapter.",
-      mailbox_push: "durable mailbox is truth; receiver daemon immediately attempts live Claude wake for Claude-bound semantic requests",
+      mailbox_push: "durable mailbox is truth; receiver daemon immediately attempts live Claude wake for Claude-bound non-heartbeat traffic",
       fallback_waiter: "await reply --request-id <id>"
     },
     log_path: paths.daemonLogPath(cwd),

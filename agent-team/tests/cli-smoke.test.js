@@ -81,6 +81,13 @@ test("CLI smoke: stale daemon cleanup does not erase a newer daemon pid record",
   assert.equal(fs.existsSync(pidPath), false);
 });
 
+test("CLI smoke: nested help is read-only and does not create state", () => {
+  const cwd = tempRoot();
+  const result = run(cwd, ["goal", "new", "--help"]);
+  assert.match(result.stdout, /goal new --title <title> --objective <objective>/);
+  assert.equal(fs.existsSync(path.join(cwd, ".agent-team")), false);
+});
+
 test("CLI smoke: init, goal, plan claude via mock, task create, board", () => {
   const cwd = tempRoot();
   const start = JSON.parse(run(cwd, ["start", "--no-ensure-claude"]).stdout);
@@ -725,6 +732,85 @@ test("CLI smoke: daemon wakes live Claude when a Claude-bound mailbox request la
   assert.equal(events.length, 1);
   assert.equal(events[0].detail.message_id, request.message.id);
   assert.equal(events[0].detail.result_state, "wake_sent_reply_pending");
+});
+
+test("CLI smoke: daemon live-wakes visible Claude for non-heartbeat notify messages", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const argsFile = path.join(cwd, "claude-channel-notify-args.txt");
+  const promptCopy = path.join(cwd, "claude-channel-notify-prompt.md");
+  const fakeCli = path.join(binDir, "claude-channel");
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "printf '%s\\n' \"$@\" > \"$FAKE_ARGS_FILE\"",
+    "if [ \"$1\" = \"ask-file\" ]; then",
+    "  cp \"$2\" \"$FAKE_PROMPT_COPY\"",
+    "  echo '{\"request_id\":\"req_notify\",\"target\":\"ep_exact\",\"status\":\"queued\"}'",
+    "  exit 0",
+    "fi",
+    "exit 1"
+  ]);
+  const env = {
+    ...process.env,
+    AGENT_TEAM_CHANNEL_CLI: fakeCli,
+    FAKE_ARGS_FILE: argsFile,
+    FAKE_PROMPT_COPY: promptCopy
+  };
+  run(cwd, ["init"], env);
+  const sessionFile = path.join(cwd, ".agent-team", "comms", "claude-channel", "session.json");
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  fs.writeFileSync(
+    sessionFile,
+    JSON.stringify(
+      {
+        ok: true,
+        target: "codex-thread",
+        endpoint: {
+          endpoint_id: "ep_exact",
+          display_name: "codex-thread"
+        },
+        delivery_ready: true
+      },
+      null,
+      2
+    )
+  );
+  const notify = JSON.parse(
+    run(
+      cwd,
+      [
+        "mailbox",
+        "send",
+        "--from",
+        "codex",
+        "--to",
+        "claude",
+        "--kind",
+        "notify",
+        "--subject",
+        "Hi",
+        "--body",
+        "hi"
+      ],
+      env
+    ).stdout
+  );
+
+  const daemon = JSON.parse(run(cwd, ["daemon", "run", "--once", "--roles", "claude"], env).stdout);
+  assert.equal(daemon.ok, true);
+  assert.equal(daemon.messages.length, 1);
+  assert.equal(daemon.messages[0].id, notify.message.id);
+  assert.equal(daemon.messages[0].semantic_ack_required, false);
+  assert.equal(daemon.messages[0].live_push.required, true);
+  assert.equal(daemon.messages[0].live_push.target, "ep_exact");
+  assert.equal(daemon.messages[0].live_push.result_state, "queued");
+
+  const args = fs.readFileSync(argsFile, "utf8").trim().split(/\r?\n/);
+  assert.deepEqual(args.slice(args.indexOf("--to"), args.indexOf("--to") + 2), ["--to", "ep_exact"]);
+  const prompt = fs.readFileSync(promptCopy, "utf8");
+  assert.match(prompt, /mailbox message has just been queued/);
+  assert.match(prompt, /Visible action:/);
+  assert.match(prompt, /hi/);
 });
 
 test("CLI smoke: daemon queues and delivers Codex wake payloads for Claude check-ins", () => {
