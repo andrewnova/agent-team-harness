@@ -23,7 +23,8 @@ function processAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (_error) {
+  } catch (error) {
+    if (error && error.code === "EPERM") return true;
     return false;
   }
 }
@@ -430,5 +431,6 @@ module.exports = {
   receiptAckRequired,
   findReceiptAck,
   semanticAckRequired,
-  semanticAckInstruction
+  semanticAckInstruction,
+  processAlive
 };

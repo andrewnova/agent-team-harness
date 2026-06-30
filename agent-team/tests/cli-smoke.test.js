@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const { tempRoot, backendTaskInput, frontendTaskInput, frontendContract, writeExecutable } = require("./helpers");
+const { processAlive } = require("../src/daemon");
 
 const cli = path.join(__dirname, "..", "src", "cli.js");
 
@@ -36,6 +37,23 @@ function initGitRepo(cwd) {
   git(cwd, ["add", "README.md"]);
   git(cwd, ["-c", "user.name=Agent Team", "-c", "user.email=agent-team@example.test", "commit", "-m", "init"]);
 }
+
+test("CLI smoke: daemon liveness treats EPERM probes as alive", () => {
+  const originalKill = process.kill;
+  process.kill = (pid, signal) => {
+    if (pid === 424242 && signal === 0) {
+      const error = new Error("operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalKill(pid, signal);
+  };
+  try {
+    assert.equal(processAlive(424242), true);
+  } finally {
+    process.kill = originalKill;
+  }
+});
 
 test("CLI smoke: init, goal, plan claude via mock, task create, board", () => {
   const cwd = tempRoot();
