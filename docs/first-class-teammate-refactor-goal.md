@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 15 startup fallback import implemented; next focus is visible Terminal MCP/boot-ACK auto-handshake and first-party session registry cleanup
+Status: Active refactor charter; Phase 16 per-launch Claude MCP config dogfooded; next focus is MCP server start proof and first-party session registry cleanup
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -1218,3 +1218,54 @@ Next phase:
 
 - Investigate whether the visible Terminal launch prompt is being submitted to Claude and whether the first-party MCP server loads in that exact launch path.
 - Start demoting legacy endpoint-list readiness behind first-party session registry, MCP init, and boot ACK state where that can be done without losing compatibility diagnostics.
+
+### 2026-06-30 - Phase 16 Per-Launch Claude MCP Config
+
+What changed:
+
+- Visible, Codex Terminal, background, and PTY Claude launches now generate a per-launch MCP config file under `.agent-team/comms/claude-channel/mcp-configs/<launch-id>.json` when the first-party Claude MCP channel is enabled.
+- Claude launch args now include `--mcp-config <generated-file>` before the channel flags, so the first-party `agent-team-claude` MCP server is registered directly for that launch.
+- The generated MCP config points at the repo-local `claudeServer.js` through the current Node executable and passes `--cwd <harness-root>`.
+- The generated MCP config explicitly carries `AGENT_TEAM_LAUNCH_ID`, session name, project directory, harness root, Codex thread id, and Claude channel display/project env.
+- Startup diagnostics now preserve the generated MCP config path in `start.command.mcp_config`.
+- README and the installed skill contract now describe per-launch MCP config as the visible-startup source of launch context, with global Claude MCP config retained as install/status compatibility.
+
+Why it changed:
+
+- Phase 14 dogfood opened visible Claude but did not record MCP init or boot ACK. Depending only on global Claude MCP config and inherited environment is too implicit for a production teammate launch.
+- A visible launch should carry its own MCP server registration and launch identity. That gives the first-party MCP server enough context to write an `mcp_initialized` row keyed to the exact launch id.
+- This demotes one more hidden global dependency without removing legacy channel compatibility or endpoint diagnostics.
+
+Files touched:
+
+- `agent-team/src/paths.js`
+- `agent-team/src/bridge/claudeChannel/launcher.js`
+- `agent-team/tests/bridge-review-handoff-reground.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/bridge-review-handoff-reground.test.js --test-name-pattern "CH-3b|CH-3g|CH-3d"` from repo root: bridge test file ran and 35 tests passed.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+- `npm test` from `agent-team/`: 129 tests passed.
+- Real visible dogfood with `node agent-team/src/cli.js start --fresh-claude --daemon --timeout-ms 12000 --poll-ms 1000 --handshake-timeout-ms 5000 --boot-ack-timeout-ms 10000 --allow-degraded-claude` opened Terminal tab `1` of window id `30873` and generated launch id `launch_mr0jqktf_e2c87be7a5`.
+- Dogfood generated `.agent-team/comms/claude-channel/mcp-configs/launch_mr0jqktf_e2c87be7a5.json` and the launch command included `--mcp-config <that file>` plus `--dangerously-load-development-channels server:agent-team-claude`.
+- Dogfood cockpit state: `launch-marker=recorded`, `mcp=missing`, `boot-ack=missing`, `fresh_start_no_new_endpoint`, `new=0`, `existing=2`, and `fallback_packet.ok=true`.
+- `mcp-inits.jsonl` and `boot-acks.jsonl` were absent after dogfood, so no first-party MCP initialized event or boot ACK was recorded.
+
+Remaining architectural discomfort:
+
+- The per-launch config is generated, passed to Claude, and covered by tests, but real visible dogfood still did not prove Claude Code spawned the configured first-party MCP server.
+- The initial user prompt may still not auto-submit in visible Terminal; boot ACK remains unproven until dogfood shows it.
+- The startup model currently reports only `mcp_init=missing`. It cannot yet distinguish "Claude never spawned the MCP server" from "server spawned but Claude did not complete the MCP initialized lifecycle".
+- Endpoint readiness still participates in live steering readiness. First-party MCP/session registry state is stronger now but not yet dominant.
+
+Next phase:
+
+- Add a separate MCP server process-start marker before MCP `notifications/initialized`, keyed by launch id/session/project.
+- Render `mcp-start` separately from `mcp_init` in startup/cockpit state so the operator can see whether Claude ignored `--mcp-config`, spawned the server but failed initialization, or initialized MCP but did not run the boot ACK.
+- Keep endpoint readiness as compatibility diagnostics while first-party session readiness becomes sharper.

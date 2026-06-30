@@ -165,6 +165,15 @@ function channelStartupPacketPath(cwd, launchId) {
   return path.join(channelStartupPacketsDir(cwd), `${safeId}.md`);
 }
 
+function channelLaunchMcpConfigDir(cwd) {
+  return path.join(rootDir(cwd), "comms", "claude-channel", "mcp-configs");
+}
+
+function channelLaunchMcpConfigPath(cwd, launchId) {
+  const safeId = String(launchId || "launch").replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 120);
+  return path.join(channelLaunchMcpConfigDir(cwd), `${safeId}.json`);
+}
+
 function channelLaunchLogPath(cwd, name) {
   const safeName = String(name || "claude").replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 80);
   return path.join(rootDir(cwd), "comms", "claude-channel", `${safeName}.log`);
@@ -285,6 +294,8 @@ module.exports = {
   channelMcpInitsPath,
   channelStartupPacketsDir,
   channelStartupPacketPath,
+  channelLaunchMcpConfigDir,
+  channelLaunchMcpConfigPath,
   channelLaunchLogPath,
   claudeMcpDir,
   claudeMcpOutboxPath,
