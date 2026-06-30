@@ -20,6 +20,9 @@ test("public skill keeps Claude work mailbox-first and nonblocking", () => {
   assert.match(skill, /agent-team-codex-mcp/);
   assert.match(skill, /agent_team_codex_watch_mailbox/);
   assert.match(skill, /per-message timeline/);
+  assert.match(skill, /remembered endpoint id/);
+  assert.match(skill, /Display names are labels\/fallbacks, not primary identity/);
+  assert.match(skill, /fresh_launch_probe/);
 });
 
 test("README explains daemon-backed mailbox delegation", () => {
@@ -41,4 +44,7 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /cockpit` and `agent-team watch` show Claude MCP outbox totals/);
   assert.match(readme, /CODEX_THREAD_ID/);
   assert.match(readme, /short wake-up copy; the mailbox reply remains the completion truth/);
+  assert.match(readme, /remembered endpoint id/);
+  assert.match(readme, /Display names are human labels and fallback selectors, not the primary continuity proof/);
+  assert.match(readme, /fresh_launch_probe/);
 });

@@ -168,29 +168,39 @@ function waitForStartedEndpoint(cliCommand, cwd, beforeList, timeoutMs, pollMs, 
   if (!beforeList || !beforeList.ok) {
     return { ok: false, reason: "list_unavailable", list: beforeList };
   }
-  const beforeIds = new Set(targetsFromList(beforeList).map(endpointTarget));
+  const beforeTargets = targetsFromList(beforeList);
+  const beforeIds = new Set(beforeTargets.map(endpointTarget));
+  const beforeProjectTargets = beforeTargets.filter((endpoint) => sameProject(endpoint, cwd));
   const deadline = Date.now() + timeoutMs;
   let latestList = beforeList;
   let latestStatus = null;
+  let latestProbe = endpointLaunchProbe(cwd, beforeProjectTargets, beforeIds, latestList, [], [], null, options);
   do {
     latestList = listTargets(cliCommand, cwd);
     const projectTargets = targetsFromList(latestList).filter((endpoint) => sameProject(endpoint, cwd)).sort(newestFirst);
     const newTargets = projectTargets.filter((endpoint) => !beforeIds.has(endpointTarget(endpoint)));
+    const existingProjectTargets = projectTargets.filter((endpoint) => beforeIds.has(endpointTarget(endpoint)));
     const candidates = options.require_new
       ? newTargets
-      : [...newTargets, ...projectTargets.filter((endpoint) => beforeIds.has(endpointTarget(endpoint)))];
+      : [...newTargets, ...existingProjectTargets];
+    const checked = [];
+    latestProbe = endpointLaunchProbe(cwd, beforeProjectTargets, beforeIds, latestList, candidates, checked, null, options);
     for (const endpoint of candidates) {
       const target = endpointTarget(endpoint);
       if (!target) continue;
       latestStatus = channelStatus(cliCommand, target, cwd);
+      checked.push(endpointProbeCheck(endpoint, beforeIds, latestStatus));
+      latestProbe = endpointLaunchProbe(cwd, beforeProjectTargets, beforeIds, latestList, candidates, checked, null, options);
       if (latestStatus.ok || latestStatus.presence_ok) {
+        const selected = { target, is_new: !beforeIds.has(target) };
         return {
           ok: true,
           endpoint,
           target,
-          is_new: !beforeIds.has(target),
+          is_new: selected.is_new,
           status: latestStatus,
-          list: latestList
+          list: latestList,
+          probe: endpointLaunchProbe(cwd, beforeProjectTargets, beforeIds, latestList, candidates, checked, selected, options)
         };
       }
     }
@@ -201,7 +211,57 @@ function waitForStartedEndpoint(cliCommand, cwd, beforeList, timeoutMs, pollMs, 
     ok: false,
     reason: options.require_new ? "no_new_endpoint_after_fresh_launch" : "no_reachable_endpoint_after_launch",
     status: latestStatus,
-    list: latestList
+    list: latestList,
+    probe: latestProbe
+  };
+}
+
+function endpointProbeTarget(endpoint, beforeIds) {
+  const target = endpointTarget(endpoint);
+  return {
+    target,
+    display_name: endpoint && endpoint.display_name ? endpoint.display_name : null,
+    project_dir: endpoint && endpoint.project_dir ? endpoint.project_dir : null,
+    is_new: beforeIds ? !beforeIds.has(target) : null,
+    started_at: endpoint && endpoint.started_at ? endpoint.started_at : null,
+    pid: endpoint && Number.isInteger(endpoint.pid) ? endpoint.pid : null,
+    last_seen_seconds:
+      endpoint && Number.isFinite(endpoint.last_seen_seconds) ? endpoint.last_seen_seconds : endpointSeenSeconds(endpoint)
+  };
+}
+
+function endpointProbeCheck(endpoint, beforeIds, status) {
+  return {
+    ...endpointProbeTarget(endpoint, beforeIds),
+    status_kind: status ? status.status_kind : null,
+    delivery_ready: status ? status.delivery_ready : false,
+    presence_ok: status ? status.presence_ok : false,
+    health_error_class: status ? status.health_error_class : null
+  };
+}
+
+function endpointLaunchProbe(cwd, beforeProjectTargets, beforeIds, latestList, candidates, checked, selected, options = {}) {
+  const allTargets = targetsFromList(latestList);
+  const projectTargets = allTargets.filter((endpoint) => sameProject(endpoint, cwd)).sort(newestFirst);
+  const newProjectTargets = projectTargets.filter((endpoint) => !beforeIds.has(endpointTarget(endpoint)));
+  const existingProjectTargets = projectTargets.filter((endpoint) => beforeIds.has(endpointTarget(endpoint)));
+  const wrongProjectTargets = allTargets.filter((endpoint) => !sameProject(endpoint, cwd));
+  return {
+    require_new: Boolean(options.require_new),
+    before_project_count: beforeProjectTargets.length,
+    after_project_count: projectTargets.length,
+    new_project_count: newProjectTargets.length,
+    existing_project_count: existingProjectTargets.length,
+    wrong_project_count: wrongProjectTargets.length,
+    candidate_count: candidates.length,
+    checked_count: checked.length,
+    new_project_targets: newProjectTargets.slice(0, 8).map((endpoint) => endpointProbeTarget(endpoint, beforeIds)),
+    existing_project_targets: existingProjectTargets.slice(0, 8).map((endpoint) => endpointProbeTarget(endpoint, beforeIds)),
+    wrong_project_targets: wrongProjectTargets.slice(0, 4).map((endpoint) => endpointProbeTarget(endpoint, beforeIds)),
+    candidates: candidates.slice(0, 8).map((endpoint) => endpointProbeTarget(endpoint, beforeIds)),
+    checked: checked.slice(0, 8),
+    selected_target: selected ? selected.target : null,
+    selected_is_new: selected ? selected.is_new : null
   };
 }
 
@@ -215,6 +275,18 @@ function findReachableProjectEndpoint(cliCommand, cwd, listResult, options = {})
     if (status.ok || status.presence_ok) return { ok: true, endpoint, target, status };
   }
   return { ok: false };
+}
+
+function findProjectEndpointByTarget(cliCommand, cwd, listResult, target) {
+  if (!target) return { ok: false, reason: "remembered_endpoint_missing" };
+  const endpoint = targetsFromList(listResult)
+    .filter((candidate) => sameProject(candidate, cwd))
+    .sort(newestFirst)
+    .find((candidate) => endpointTarget(candidate) === target);
+  if (!endpoint) return { ok: false, reason: "remembered_endpoint_not_listed", target };
+  const status = channelStatus(cliCommand, target, cwd);
+  if (status.ok || status.presence_ok) return { ok: true, endpoint, target, status };
+  return { ok: false, reason: "remembered_endpoint_unreachable", endpoint, target, status };
 }
 
 function runSmoke(cliCommand, cwd, target, timeoutMs) {
@@ -298,7 +370,8 @@ function compactDiscovered(discovered) {
     is_new: discovered.is_new,
     endpoint: compactTarget(discovered.endpoint),
     status: compactStatus(discovered.status),
-    list: compactList(discovered.list)
+    list: compactList(discovered.list),
+    probe: discovered.probe || null
   };
 }
 
@@ -313,6 +386,7 @@ module.exports = {
   renameTarget,
   waitForReachable,
   waitForStartedEndpoint,
+  findProjectEndpointByTarget,
   findReachableProjectEndpoint,
   runSmoke,
   endpointFromStatus,

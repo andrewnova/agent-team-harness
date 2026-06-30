@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { readJson, readJsonl } = require("../src/fsutil");
+const { readJson, readJsonl, writeJson } = require("../src/fsutil");
 const paths = require("../src/paths");
 const state = require("../src/state");
 const { createBridge } = require("../src/bridge");
@@ -275,6 +275,10 @@ test("CH-2c default Claude session name is Codex-thread scoped and avoids unrela
     assert.equal(result.skipped_reuse, null);
     assert.equal(result.background.name, expectedName);
     assert.equal(result.endpoint.display_name, expectedName);
+    const session = readJson(paths.channelSessionPath(cwd));
+    assert.equal(session.session_identity.thread_ref, "019f0fc3-3dd");
+    assert.equal(session.session_identity.strict_project_reuse, true);
+    assert.equal(session.identity_confidence, "launched_new_endpoint");
   } finally {
     process.env.PATH = previousPath;
     if (previousReady === undefined) delete process.env.FAKE_READY;
@@ -283,6 +287,81 @@ test("CH-2c default Claude session name is Codex-thread scoped and avoids unrela
     else process.env.FAKE_EXPECTED_NAME = previousExpected;
     if (previousThread === undefined) delete process.env.CODEX_THREAD_ID;
     else process.env.CODEX_THREAD_ID = previousThread;
+    if (previousName === undefined) delete process.env.AGENT_TEAM_CLAUDE_NAME;
+    else process.env.AGENT_TEAM_CLAUDE_NAME = previousName;
+  }
+});
+
+test("CH-2d channel ensure reuses prior same-thread endpoint id before display-name fallback", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const fakeCli = path.join(binDir, "claude-channel");
+  const threadId = "019f0fc3-3dd8-75c0-b15c-09fcb96bd921";
+  const expectedName = defaultSessionName(cwd, { CODEX_THREAD_ID: threadId });
+  writeJson(paths.channelSessionPath(cwd), {
+    ok: true,
+    action: "started",
+    name: expectedName,
+    target: "ep_remembered",
+    project_dir: fs.realpathSync.native(cwd),
+    session_identity: {
+      source: "CODEX_THREAD_ID",
+      thread_ref: "019f0fc3-3dd",
+      strict_project_reuse: true
+    },
+    endpoint: {
+      target: "ep_remembered",
+      display_name: expectedName,
+      project_dir: fs.realpathSync.native(cwd)
+    }
+  });
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  if [ \"$3\" = \"$FAKE_EXPECTED_NAME\" ]; then",
+    "    echo '{\"target\":\"ep_wrong\",\"endpoint\":{\"endpoint_id\":\"ep_wrong\",\"display_name\":\"'$FAKE_EXPECTED_NAME'\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "    exit 0",
+    "  fi",
+    "  if [ \"$3\" = \"ep_remembered\" ]; then",
+    "    echo '{\"target\":\"ep_remembered\",\"endpoint\":{\"endpoint_id\":\"ep_remembered\",\"display_name\":\"'$FAKE_EXPECTED_NAME'\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "    exit 0",
+    "  fi",
+    "  if [ \"$3\" = \"ep_wrong\" ]; then",
+    "    echo '{\"target\":\"ep_wrong\",\"endpoint\":{\"endpoint_id\":\"ep_wrong\",\"display_name\":\"'$FAKE_EXPECTED_NAME'\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "    exit 0",
+    "  fi",
+    "  exit 1",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    "  echo '{\"targets\":[{\"target\":\"ep_wrong\",\"endpoint_id\":\"ep_wrong\",\"display_name\":\"'$FAKE_EXPECTED_NAME'\",\"project_dir\":\"'$PWD'\",\"started_at\":\"2026-06-28T00:00:03.000Z\"},{\"target\":\"ep_remembered\",\"endpoint_id\":\"ep_remembered\",\"display_name\":\"'$FAKE_EXPECTED_NAME'\",\"project_dir\":\"'$PWD'\",\"started_at\":\"2026-06-28T00:00:01.000Z\"}]}'",
+    "  exit 0",
+    "fi",
+    "exit 1"
+  ]);
+  const previousPath = process.env.PATH;
+  const previousThread = process.env.CODEX_THREAD_ID;
+  const previousExpected = process.env.FAKE_EXPECTED_NAME;
+  const previousName = process.env.AGENT_TEAM_CLAUDE_NAME;
+  process.env.PATH = `${binDir}:${previousPath}`;
+  process.env.CODEX_THREAD_ID = threadId;
+  process.env.FAKE_EXPECTED_NAME = expectedName;
+  delete process.env.AGENT_TEAM_CLAUDE_NAME;
+  try {
+    const bridge = createBridge("claude-channel");
+    const result = bridge.ensure(cwd, { timeout_ms: 1000, poll_ms: 10 });
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "reused_project_endpoint");
+    assert.equal(result.target, "ep_remembered");
+    assert.equal(result.reuse_source, "remembered_endpoint_id");
+    assert.equal(result.identity_confidence, "remembered_endpoint_id_reused");
+    assert.equal(result.remembered_endpoint.ok, true);
+    assert.equal(result.remembered_endpoint.target, "ep_remembered");
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousThread === undefined) delete process.env.CODEX_THREAD_ID;
+    else process.env.CODEX_THREAD_ID = previousThread;
+    if (previousExpected === undefined) delete process.env.FAKE_EXPECTED_NAME;
+    else process.env.FAKE_EXPECTED_NAME = previousExpected;
     if (previousName === undefined) delete process.env.AGENT_TEAM_CLAUDE_NAME;
     else process.env.AGENT_TEAM_CLAUDE_NAME = previousName;
   }
@@ -394,6 +473,72 @@ test("CH-3b channel ensure defaults to a visible Claude teammate launch", () => 
     process.env.PATH = previousPath;
     if (previousReady === undefined) delete process.env.FAKE_READY;
     else process.env.FAKE_READY = previousReady;
+  }
+});
+
+test("CH-3f channel ensure fresh visible launch fails with endpoint probe when no new endpoint appears", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const launchFile = path.join(cwd, "visible-launched");
+  const fakeCli = path.join(binDir, "claude-channel");
+  const fakeClaude = path.join(binDir, "claude");
+  const fakeOsascript = path.join(binDir, "osascript");
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  echo '{\"target\":\"ep_old\",\"endpoint\":{\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "  exit 0",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    "  echo '{\"targets\":[{\"target\":\"ep_old\",\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"started_at\":\"2026-06-28T00:00:01.000Z\"}]}'",
+    "  exit 0",
+    "fi",
+    "if [ \"$1\" = \"rename\" ]; then",
+    "  echo 'rename should not be called for failed fresh visible launch' >&2",
+    "  exit 12",
+    "fi",
+    "exit 1"
+  ]);
+  writeExecutable(fakeClaude, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
+    "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
+    "  exit 0",
+    "fi",
+    "exit 0"
+  ]);
+  writeExecutable(fakeOsascript, ["#!/bin/sh", "touch \"$FAKE_LAUNCH_FILE\"", "echo visible-window-opened", "exit 0"]);
+  const previousPath = process.env.PATH;
+  const previousLaunchFile = process.env.FAKE_LAUNCH_FILE;
+  process.env.PATH = `${binDir}:${previousPath}`;
+  process.env.FAKE_LAUNCH_FILE = launchFile;
+  try {
+    const bridge = createBridge("claude-channel");
+    const result = bridge.ensure(cwd, {
+      name: "fresh-thread",
+      fresh_claude: true,
+      timeout_ms: 100,
+      poll_ms: 10,
+      launch_mode: "visible"
+    });
+    assert.equal(fs.existsSync(launchFile), true);
+    assert.equal(result.ok, false);
+    assert.equal(result.action, "fresh_start_no_new_endpoint");
+    assert.equal(result.launch_mode, "visible");
+    assert.equal(result.start.mode, "visible");
+    assert.equal(result.identity_confidence, "fresh_launch_unverified_no_new_endpoint");
+    assert.equal(result.discovered.reason, "no_new_endpoint_after_fresh_launch");
+    assert.equal(result.discovered.probe.require_new, true);
+    assert.equal(result.discovered.probe.before_project_count, 1);
+    assert.equal(result.discovered.probe.after_project_count, 1);
+    assert.equal(result.discovered.probe.new_project_count, 0);
+    assert.equal(result.discovered.probe.existing_project_targets[0].target, "ep_old");
+    assert.equal(result.fresh_launch_probe.new_project_count, 0);
+    assert.equal(result.rename, undefined);
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousLaunchFile === undefined) delete process.env.FAKE_LAUNCH_FILE;
+    else process.env.FAKE_LAUNCH_FILE = previousLaunchFile;
   }
 });
 

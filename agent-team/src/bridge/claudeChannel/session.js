@@ -1,4 +1,4 @@
-const { appendJsonl, writeJson } = require("../../fsutil");
+const { appendJsonl, exists, readJson, writeJson } = require("../../fsutil");
 const harnessPaths = require("../../paths");
 const { redactSensitiveDiagnostics } = require("./utils");
 const { compactDiscovered, compactList, compactStatus } = require("./status");
@@ -10,7 +10,18 @@ function compactEnsureRecord(record) {
   if (compacted.before_list) compacted.before_list = compactList(compacted.before_list);
   if (compacted.discovered) compacted.discovered = compactDiscovered(compacted.discovered);
   if (compacted.recovered_endpoint) compacted.recovered_endpoint = compactDiscovered(compacted.recovered_endpoint);
+  if (compacted.remembered_endpoint) compacted.remembered_endpoint = compactDiscovered(compacted.remembered_endpoint);
   return redactSensitiveDiagnostics(compacted);
+}
+
+function loadEnsureSession(cwd) {
+  const file = harnessPaths.channelSessionPath(cwd);
+  if (!exists(file)) return null;
+  try {
+    return readJson(file);
+  } catch {
+    return null;
+  }
 }
 
 function persistEnsure(cwd, record) {
@@ -29,5 +40,6 @@ function persistEnsure(cwd, record) {
 
 module.exports = {
   compactEnsureRecord,
+  loadEnsureSession,
   persistEnsure
 };

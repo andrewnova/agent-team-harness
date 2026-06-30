@@ -3,13 +3,16 @@ const manual = require("./manual");
 const {
   findCli,
   findClaudeCli,
-  pluginRootFromCli
+  pluginRootFromCli,
+  canonicalPath
 } = require("./claudeChannel/utils");
 const {
   channelStatus,
   compactList,
   compactStatus,
+  endpointTarget,
   endpointFromStatus,
+  findProjectEndpointByTarget,
   findReachableProjectEndpoint,
   listTargets,
   renameTarget,
@@ -37,7 +40,23 @@ const {
   launchVisible
 } = require("./claudeChannel/launcher");
 const { sendChannelRequest } = require("./claudeChannel/request");
-const { persistEnsure } = require("./claudeChannel/session");
+const { loadEnsureSession, persistEnsure } = require("./claudeChannel/session");
+
+function rememberedSessionTarget(session, identity, projectCwd, strictSessionIdentity) {
+  if (!strictSessionIdentity || !session || !session.ok || !identity || !identity.token) return null;
+  const sessionIdentity = session.session_identity || {};
+  if (sessionIdentity.thread_ref !== identity.token) return null;
+  if (session.project_dir && canonicalPath(session.project_dir) !== canonicalPath(projectCwd)) return null;
+  return endpointTarget(session.endpoint) || session.target || null;
+}
+
+function launchedIdentityConfidence(discovered, rename, recoveredEndpoint) {
+  if (discovered && discovered.ok && discovered.is_new && rename && rename.ok) return "launched_new_endpoint_renamed";
+  if (discovered && discovered.ok && discovered.is_new) return "launched_new_endpoint";
+  if (discovered && discovered.ok) return "launched_existing_endpoint";
+  if (recoveredEndpoint && recoveredEndpoint.ok) return "recovered_project_endpoint";
+  return "launch_unverified";
+}
 
 function diagnose(cwd, options = {}) {
   const cli = findCli();
@@ -94,6 +113,8 @@ function ensure(cwd, options = {}) {
   const target = options.target || name;
   const projectCwd = workspaceCwd(cwd, options);
   const strictSessionIdentity = Boolean(inferredDefaultName && identity && identity.token && !options.allow_cross_project_reuse);
+  const previousSession = loadEnsureSession(cwd);
+  const rememberedTarget = rememberedSessionTarget(previousSession, identity, projectCwd, strictSessionIdentity);
   const baseRecord = {
     name,
     target,
@@ -112,12 +133,19 @@ function ensure(cwd, options = {}) {
   const pollMs = options.poll_ms || 1000;
   const initialStatus = channelStatus(cli.command, target, projectCwd);
   const initialMismatch = workspaceMismatch(endpointFromStatus(initialStatus), projectCwd);
-  if (initialStatus.ok && !options.fresh_claude && (!initialMismatch || options.allow_cross_project_reuse)) {
+  const initialEndpoint = endpointFromStatus(initialStatus);
+  const initialEndpointTarget = endpointTarget(initialEndpoint);
+  const initialMatchesRemembered = !rememberedTarget || initialEndpointTarget === rememberedTarget || initialStatus.parsed.target === rememberedTarget;
+  if (initialStatus.ok && !options.fresh_claude && (!initialMismatch || options.allow_cross_project_reuse) && initialMatchesRemembered) {
     const smoke = options.smoke ? runSmoke(cli.command, projectCwd, target, options.smoke_timeout_ms || 120000) : null;
     return persist({
       ok: smoke ? smoke.ok : true,
       action: smoke && !smoke.ok ? "reused_smoke_failed" : "reused",
-      endpoint: endpointFromStatus(initialStatus),
+      identity_confidence: rememberedTarget ? "remembered_endpoint_status_reused" : "target_status_reused",
+      remembered_endpoint: rememberedTarget
+        ? { ok: true, target: rememberedTarget, endpoint: initialEndpoint, status: initialStatus }
+        : null,
+      endpoint: initialEndpoint,
       workspace_mismatch: initialMismatch,
       cross_project_reuse_allowed: Boolean(initialMismatch && options.allow_cross_project_reuse),
       status: initialStatus,
@@ -126,9 +154,20 @@ function ensure(cwd, options = {}) {
     });
   }
   const beforeList = listTargets(cli.command, projectCwd);
+  const rememberedProjectEndpoint =
+    !options.fresh_claude && rememberedTarget
+      ? findProjectEndpointByTarget(cli.command, projectCwd, beforeList, rememberedTarget)
+      : { ok: false, reason: rememberedTarget ? "--fresh-claude" : "no_remembered_endpoint", target: rememberedTarget };
   const reusableProjectEndpoint = options.fresh_claude
     ? { ok: false, skipped: true, reason: "--fresh-claude" }
+    : rememberedProjectEndpoint.ok
+      ? rememberedProjectEndpoint
     : findReachableProjectEndpoint(cli.command, projectCwd, beforeList, strictSessionIdentity ? { display_name: name } : {});
+  const reuseSource = options.fresh_claude
+    ? "fresh_claude"
+    : rememberedProjectEndpoint.ok
+      ? "remembered_endpoint_id"
+      : "project_endpoint";
   if (reusableProjectEndpoint.ok && !options.fresh_claude) {
     let rename = null;
     if (reusableProjectEndpoint.endpoint.display_name !== name) {
@@ -141,7 +180,9 @@ function ensure(cwd, options = {}) {
           rename,
           initial_status: initialStatus,
           workspace_mismatch: initialMismatch,
-          before_list: beforeList
+          before_list: beforeList,
+          remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
+          reuse_source: reuseSource
         });
       }
     }
@@ -156,6 +197,12 @@ function ensure(cwd, options = {}) {
     const acceptable = deliveryReady || (!options.smoke && channelLoaded);
     return persist({
       ok: acceptable && (!smoke || smoke.ok),
+      identity_confidence:
+        reuseSource === "remembered_endpoint_id"
+          ? "remembered_endpoint_id_reused"
+          : strictSessionIdentity
+            ? "thread_display_name_project_reused"
+            : "same_project_endpoint_reused",
       action:
         smoke && !smoke.ok
           ? rename
@@ -178,6 +225,8 @@ function ensure(cwd, options = {}) {
       initial_status: initialStatus,
       workspace_mismatch: initialMismatch,
       before_list: beforeList,
+      remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
+      reuse_source: reuseSource,
       status: finalStatus,
       reply_ready: smoke ? smoke.ok : "unchecked",
       smoke
@@ -191,7 +240,9 @@ function ensure(cwd, options = {}) {
       reason: claude.reason,
       initial_status: initialStatus,
       workspace_mismatch: initialMismatch,
-      skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null
+      skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
+      remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
+      reuse_source: reuseSource
     });
   }
   const authStatus = claudeAuthStatus(claude, projectCwd);
@@ -206,6 +257,8 @@ function ensure(cwd, options = {}) {
       initial_status: initialStatus,
       workspace_mismatch: initialMismatch,
       skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
+      remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
+      reuse_source: reuseSource,
       before_list: beforeList
     });
   }
@@ -221,7 +274,9 @@ function ensure(cwd, options = {}) {
       action: "invalid_launch_mode",
       reason: "launch_mode must be codex-terminal, visible, pty, or background",
       initial_status: initialStatus,
-      workspace_mismatch: initialMismatch
+      workspace_mismatch: initialMismatch,
+      remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
+      reuse_source: reuseSource
     });
   }
   const started =
@@ -241,7 +296,9 @@ function ensure(cwd, options = {}) {
       background: started.background,
       initial_status: initialStatus,
       workspace_mismatch: initialMismatch,
-      skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null
+      skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
+      remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
+      reuse_source: reuseSource
     });
   }
   const discovered = waitForStartedEndpoint(cli.command, projectCwd, beforeList, timeoutMs, pollMs, {
@@ -270,6 +327,9 @@ function ensure(cwd, options = {}) {
           workspace_mismatch: initialMismatch,
           skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
           before_list: beforeList,
+          remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
+          reuse_source: reuseSource,
+          identity_confidence: launchedIdentityConfidence(discovered, rename, null),
           discovered
         });
       }
@@ -284,6 +344,7 @@ function ensure(cwd, options = {}) {
       ok: false,
       action: "fresh_start_no_new_endpoint",
       reason: "Claude launch command completed, but no new same-project Claude channel endpoint appeared. Existing endpoints were intentionally not reused because --fresh-claude was requested.",
+      identity_confidence: "fresh_launch_unverified_no_new_endpoint",
       launch_mode: started.mode,
       claude_path: claude.path,
       channel_path: cli.path,
@@ -294,6 +355,7 @@ function ensure(cwd, options = {}) {
       skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
       before_list: beforeList,
       discovered,
+      fresh_launch_probe: discovered.probe || null,
       command: started.command
     });
   } else {
@@ -322,6 +384,7 @@ function ensure(cwd, options = {}) {
       : null;
   return persist({
     ok: channelAcceptable && (!finalMismatch || options.allow_cross_project_reuse) && (!smoke || smoke.ok),
+    identity_confidence: launchedIdentityConfidence(discovered, rename, recoveredEndpoint),
     action:
       finalMismatch && !options.allow_cross_project_reuse
         ? "workspace_mismatch"
@@ -350,6 +413,9 @@ function ensure(cwd, options = {}) {
     skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
     before_list: beforeList,
     discovered,
+    fresh_launch_probe: options.fresh_claude && discovered ? discovered.probe || null : null,
+    remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
+    reuse_source: reuseSource,
     recovered_endpoint: recoveredEndpoint && recoveredEndpoint.ok ? recoveredEndpoint : null,
     status: finalStatus,
     command: started.command,

@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 4 first-party Claude MCP install/cockpit visibility verified locally, full architecture review still open
+Status: Active refactor charter; Phase 8 endpoint-id continuity and fresh visible-launch probe verified locally, full architecture review still open
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -814,3 +814,50 @@ Remaining architectural discomfort:
 Next phase:
 
 - Either expose the message timeline as a first-class CLI/API command for debugging, or return to visible-Claude startup identity and reduce dependency on the legacy endpoint-name registry. Prefer visible-Claude identity next because it is still the biggest user-visible trust gap.
+
+### 2026-06-30 - Phase 8 Endpoint-Id Continuity And Fresh Launch Probe
+
+What changed:
+
+- Added prior-session endpoint-id reuse for default same-Codex-thread Claude startup. If `.agent-team/comms/claude-channel/session.json` has a matching `session_identity.thread_ref` and `project_dir`, `channel ensure` now tries that exact endpoint id before falling back to display-name/project matching.
+- Added `identity_confidence` to startup records for reused target status, remembered endpoint-id reuse, launched new endpoint, renamed new endpoint, recovered project endpoint, and fresh-launch failure cases.
+- Expanded `waitForStartedEndpoint` with an endpoint launch probe that records prior same-project endpoint count, after-launch endpoint count, new/existing/wrong-project targets, checked candidates, selected target, and whether a fresh endpoint was required.
+- Added `fresh_launch_probe` to failed fresh startup records so visible-Claude launch blockers explain what changed after the launch command.
+- Added compact persisted diagnostics for `remembered_endpoint`, `discovered.probe`, and startup identity confidence.
+- Updated the README and skill contract to say display names are labels/fallbacks, not primary identity, and synced the installed skill at `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md`.
+
+Why it changed:
+
+- The user asked why old Codex chats cannot naturally resume old Claude threads, and why endpoint naming is doing so much work. The harness needed a stable continuity layer based on the previously selected endpoint id plus Codex thread identity.
+- Fresh visible Claude launch failures were still too hard to inspect. A blocker should prove whether no endpoint appeared, only old endpoints remained, or candidates were checked but unhealthy.
+- This phase reduces endpoint-name luck without pretending the legacy endpoint registry is gone. It makes the remaining legacy dependency explicit and auditable.
+
+Files touched:
+
+- `agent-team/src/bridge/claudeChannel.js`
+- `agent-team/src/bridge/claudeChannel/status.js`
+- `agent-team/src/bridge/claudeChannel/session.js`
+- `agent-team/tests/bridge-review-handoff-reground.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/bridge-review-handoff-reground.test.js` from repo root: 33 tests passed.
+- `node --test agent-team/tests/cli-smoke.test.js` from repo root: 57 tests passed.
+- `npm test` from `agent-team/`: 121 tests passed.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+
+Remaining architectural discomfort:
+
+- The remembered endpoint id still comes from the legacy Claude channel endpoint registry. It is stronger than a display name, but not a first-party Claude session id owned by Agent Team Harness.
+- There is still no real captured visible-Claude dogfood proof showing a fresh visible launch producing a new endpoint under the first-party MCP channel path.
+- The probe makes failure legible, but cockpit does not yet render this startup probe in a friendly timeline-like UI.
+- Codex wake is still not true push into the current Codex thread unless a local Codex consumer reads the Codex MCP/wake stream.
+
+Next phase:
+
+- Promote startup identity/probe details into cockpit/watch so visible-Claude blockers are obvious without opening JSON, then dogfood a real visible Claude launch and decide whether the legacy endpoint registry can be demoted further behind first-party MCP/session identity.
