@@ -61,6 +61,7 @@ const { daemonStatus, startDaemon, stopDaemon, runDaemon } = require("./daemon")
 const { installClaudeMcp, statusClaudeMcp } = require("./mcp/claudeInstall");
 const { installCodexMcp, statusCodexMcp } = require("./mcp/codexInstall");
 const { recordBootAck, recordLaunchMarker } = require("./bridge/claudeChannel/boot");
+const { createStartupPacket } = require("./bridge/claudeChannel/startupPacket");
 const {
   appendMessage,
   appendMessagesBatch,
@@ -184,7 +185,8 @@ Commands:
   channel list
   channel launch-marker --launch-id <id> [--name <name>] [--project-dir <path>] [--mode <mode>]
   channel boot-ack --launch-id <id> [--name <name>] [--project-dir <path>] [--body <text>]
-  channel ensure [--name <name>] [--target <target>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--timeout-ms <ms>] [--poll-ms <ms>] [--launch-mode <codex-terminal|visible|pty|background>] [--codex-terminal-launcher <path>] [--visible-app <app>] [--plugin-dir <path>] [--effort <level>] [--permission-mode <mode>] [--smoke] [--smoke-timeout-ms <ms>] [--approved-channel] [--no-chrome]
+  channel startup-packet --launch-id <id> [--text]
+  channel ensure [--name <name>] [--target <target>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--timeout-ms <ms>] [--poll-ms <ms>] [--launch-mode <codex-terminal|visible|pty|background>] [--codex-terminal-launcher <path>] [--visible-app <app>] [--plugin-dir <path>] [--effort <level>] [--permission-mode <mode>] [--handshake-timeout-ms <ms>] [--boot-ack-timeout-ms <ms>] [--smoke] [--smoke-timeout-ms <ms>] [--approved-channel] [--no-chrome]
   channel auth [login] [--claudeai|--console] [--email <email>] [--sso] [--timeout-ms <ms>]
   channel doctor [--fix] [--target <target>] [--smoke] [--smoke-timeout-ms <ms>]
   channel status [--target <target>]
@@ -293,6 +295,8 @@ function channelEnsureOptions(args) {
     timeout_ms: optionalNumberArg(args, "--timeout-ms") || optionalNumberArg(args, "--ensure-timeout-ms"),
     poll_ms: optionalNumberArg(args, "--poll-ms"),
     start_timeout_ms: optionalNumberArg(args, "--start-timeout-ms"),
+    handshake_timeout_ms: optionalNumberArg(args, "--handshake-timeout-ms"),
+    boot_ack_timeout_ms: optionalNumberArg(args, "--boot-ack-timeout-ms"),
     launch_mode: argValue(args, "--launch-mode"),
     codex_terminal_launcher: argValue(args, "--codex-terminal-launcher"),
     visible_app: argValue(args, "--visible-app"),
@@ -1712,6 +1716,18 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
       source: "claude-boot-ack"
     });
     print(result);
+    return 0;
+  }
+  if (command === "channel" && subcommand === "startup-packet") {
+    const result = createStartupPacket(cwd, {
+      launch_id: argValue(rest, "--launch-id"),
+      include_text: hasFlag(rest, "--text")
+    });
+    if (hasFlag(rest, "--text")) {
+      process.stdout.write(`${result.text}\n`);
+    } else {
+      print(result);
+    }
     return 0;
   }
   if (command === "channel" && subcommand === "auth") {

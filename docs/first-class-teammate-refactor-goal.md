@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 13 cockpit projection now preserves visible launch proof, real visible-Claude endpoint/MCP dogfood still open
+Status: Active refactor charter; Phase 14 active visible startup prompt, MCP init recording, and startup-packet recovery verified; Phase 15 should finish fallback import/session registry cleanup
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -1111,3 +1111,64 @@ Next phase:
 
 - Refactor toward first-party Claude MCP/session identity for visible startup. The launched visible Claude session should create a durable boot ACK or manual fallback packet tied to the Codex thread/project without relying on endpoint-name/list inference.
 - Add a cleaner diagnostic or repair command for "visible shell ran, Claude did not boot ACK" so the next action is operational, not just descriptive.
+
+### 2026-06-30 - Phase 14 Session Handshake v1 Starter
+
+What changed:
+
+- Visible Claude launch now passes launch/session context into the Claude process environment: `AGENT_TEAM_LAUNCH_ID`, `AGENT_TEAM_SESSION_NAME`, `AGENT_TEAM_PROJECT_DIR`, `AGENT_TEAM_HARNESS_CWD`, and `AGENT_TEAM_CODEX_THREAD_ID`.
+- Visible Claude launch now provides an initial user prompt, not just an appended system prompt. The first prompt instructs Claude to run the exact `channel boot-ack` command immediately and visibly acknowledge the mailbox contract.
+- The first-party Claude MCP server now records a durable `mcp_initialized` row under `.agent-team/comms/claude-channel/mcp-inits.jsonl` when Claude sends `notifications/initialized`, keyed by launch id when launch context is available.
+- `channel ensure` now waits briefly for first-party MCP init and boot ACK on visible/codex-terminal launches, persists `mcp_init`, and preserves `launch_marker`, `mcp_init`, and `boot_ack` as separate startup facts.
+- Added `channel startup-packet --launch-id <id> [--text]`, which generates a copy/paste recovery packet under `.agent-team/comms/claude-channel/startup-packets/` when visible shell launch happened but Claude did not boot ACK.
+- Cockpit/watch now renders `mcp=loaded|missing` in the `Claude startup:` line and points missing-boot-ACK cases to the startup-packet command instead of dead-ending at `fresh_launch_probe`.
+- Fresh-start failure records now carry the same name, target, project, harness root, and session identity used by cockpit persistence before creating a fallback packet, so recovery packets do not degrade to `(unknown)` session labels.
+- Updated README, plugin skill contract, and public contract tests to document the manual packet as first-class recovery that cannot bypass mailbox, review, merge, proof, or done gates.
+
+Why it changed:
+
+- Phase 13 made the failure honest, but still left Codex with a passive instruction that Claude might never act on.
+- A visible teammate handshake should actively ask Claude to ACK startup in the visible session and should record first-party MCP initialization separately from legacy endpoint readiness.
+- When Claude still does not ACK, the harness should create a polished recovery packet immediately. Copy/paste fallback is acceptable; pretending a missing ACK is "working" is not.
+
+Files touched:
+
+- `agent-team/src/paths.js`
+- `agent-team/src/bridge/claudeChannel/boot.js`
+- `agent-team/src/bridge/claudeChannel/startupPacket.js`
+- `agent-team/src/bridge/claudeChannel/launcher.js`
+- `agent-team/src/bridge/claudeChannel.js`
+- `agent-team/src/mcp/claudeServer.js`
+- `agent-team/src/cli.js`
+- `agent-team/src/cockpit.js`
+- `agent-team/tests/bridge-review-handoff-reground.test.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/mcp-claude-channel.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/bridge-review-handoff-reground.test.js --test-name-pattern "CH-3g|CH-3f"` from repo root: bridge test file ran and 35 tests passed.
+- `node --test agent-team/tests/cli-smoke.test.js --test-name-pattern "cockpit preserves visible Claude startup proof|startup-packet"` from repo root: CLI smoke file ran and 61 tests passed.
+- `node --test agent-team/tests/mcp-claude-channel.test.js --test-name-pattern "stdio server waits|stdio server initializes"` from repo root: Claude MCP test file ran and 6 tests passed.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+- `npm test` from `agent-team/`: 127 tests passed.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+- Live visible dogfood with `node agent-team/src/cli.js start --fresh-claude --daemon --timeout-ms 12000 --poll-ms 1000 --handshake-timeout-ms 3000 --boot-ack-timeout-ms 10000 --allow-degraded-claude` opened a visible Terminal and correctly classified startup as `fresh_start_no_new_endpoint` with `launch_marker.ok=true`, `mcp_init.ok=false`, `boot_ack.ok=false`, and `fallback_packet.ok=true`.
+- Dogfood recovery packet proof: `channel startup-packet --launch-id launch_mr0ir886_3ebd0fb933 --text` rendered the real project, harness root, and session name `codex-agent-team-harness-019f0fc3-3dd`.
+
+Remaining architectural discomfort:
+
+- This is Session Handshake v1 starter, not the final architecture. Endpoint/smoke checks still decide live steering readiness.
+- MCP init proves the first-party MCP server loaded, not that Claude's model understood or accepted the teammate contract. Boot ACK remains the model-level proof.
+- `channel startup-packet` creates a good manual recovery artifact, but fallback import is not implemented yet. Pasted replies still need normal mailbox/import paths.
+- Real visible-Claude dogfood proved the harness now fails clearly and generates a usable recovery packet, but did not prove automatic Claude MCP init or model-level boot ACK in the user's environment.
+- The active first prompt may not be auto-submitted by the visible Terminal launch path, or Claude may be loading without the first-party MCP server in that startup path. This needs a narrower investigation before claiming real-time visible delegation is production-grade.
+
+Next phase:
+
+- Implement fallback import for startup packets and Claude pasted replies so manual recovery is a full workflow, not just a packet.
+- Investigate the visible Terminal launch path to determine why MCP init and boot ACK did not land during dogfood, then demote endpoint guessing behind first-party session registry and ACK state wherever possible.

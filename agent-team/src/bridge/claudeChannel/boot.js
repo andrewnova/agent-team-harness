@@ -77,6 +77,26 @@ function recordBootAck(cwd, input = {}) {
   };
 }
 
+function recordMcpInitialized(cwd, input = {}) {
+  const launchId = input.launch_id || process.env.AGENT_TEAM_LAUNCH_ID;
+  const init = normalizeRecord({
+    ...input,
+    launch_id: launchId,
+    name: input.name || process.env.AGENT_TEAM_SESSION_NAME || process.env.CLAUDE_CHANNEL_DISPLAY_NAME,
+    project_dir: input.project_dir || process.env.AGENT_TEAM_PROJECT_DIR || process.env.CLAUDE_CHANNEL_PROJECT_DIR || cwd,
+    harness_cwd: input.harness_cwd || process.env.AGENT_TEAM_HARNESS_CWD || cwd,
+    source: input.source || "claude-mcp-initialized"
+  });
+  init.event = "mcp_initialized";
+  appendJsonl(paths.channelMcpInitsPath(cwd), init);
+  return {
+    ok: true,
+    record: init,
+    launch_id: init.launch_id,
+    path: paths.channelMcpInitsPath(cwd)
+  };
+}
+
 function latestByLaunchId(file, launchId) {
   if (!launchId) return null;
   return readJsonl(file)
@@ -91,6 +111,10 @@ function latestLaunchMarker(cwd, launchId) {
 
 function latestBootAck(cwd, launchId) {
   return latestByLaunchId(paths.channelBootAcksPath(cwd), launchId);
+}
+
+function latestMcpInitialized(cwd, launchId) {
+  return latestByLaunchId(paths.channelMcpInitsPath(cwd), launchId);
 }
 
 function waitForRecord(readFn, cwd, launchId, timeoutMs = 0, pollMs = 100) {
@@ -112,12 +136,19 @@ function waitForBootAck(cwd, launchId, timeoutMs = 0, pollMs = 100) {
   return waitForRecord(latestBootAck, cwd, launchId, timeoutMs, pollMs);
 }
 
+function waitForMcpInitialized(cwd, launchId, timeoutMs = 0, pollMs = 100) {
+  return waitForRecord(latestMcpInitialized, cwd, launchId, timeoutMs, pollMs);
+}
+
 module.exports = {
   createLaunchId,
   latestBootAck,
   latestLaunchMarker,
+  latestMcpInitialized,
   recordBootAck,
   recordLaunchMarker,
+  recordMcpInitialized,
   waitForBootAck,
+  waitForMcpInitialized,
   waitForLaunchMarker
 };

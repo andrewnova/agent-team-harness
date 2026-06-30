@@ -2210,6 +2210,11 @@ test("CLI smoke: cockpit preserves visible Claude startup proof from session his
           source: "visible-launch-command"
         }
       },
+      mcp_init: {
+        ok: false,
+        reason: "not_recorded",
+        launch_id: "launch_test_123"
+      },
       boot_ack: {
         ok: false,
         reason: "not_recorded",
@@ -2229,17 +2234,51 @@ test("CLI smoke: cockpit preserves visible Claude startup proof from session his
   const cockpit = JSON.parse(run(cwd, ["watch", "--once", "--json", "--no-live-channel"]).stdout);
   assert.equal(cockpit.claude_channel.session.launch_id, "launch_test_123");
   assert.equal(cockpit.claude_channel.session.launch_marker.ok, true);
+  assert.equal(cockpit.claude_channel.session.mcp_init.ok, false);
   assert.equal(cockpit.claude_channel.session.boot_ack.ok, false);
   const next = cockpit.next_actions.join("\n");
   assert.match(next, /Fresh Claude launch did not register a new same-project endpoint/);
   assert.match(next, /visible launch marker recorded/);
+  assert.match(next, /Claude MCP init missing/);
   assert.match(next, /Claude boot ACK missing/);
+  assert.match(next, /channel startup-packet --launch-id launch_test_123 --text/);
   assert.doesNotMatch(next, /no visible launch marker recorded/);
   assert.doesNotMatch(next, /Claude boot ACK recorded/);
   const cockpitText = run(cwd, ["watch", "--once", "--no-live-channel"]).stdout;
-  assert.match(cockpitText, /Claude startup: .*launch-marker=recorded boot-ack=missing/);
+  assert.match(cockpitText, /Claude startup: .*launch-marker=recorded mcp=missing boot-ack=missing/);
   assert.match(cockpitText, /visible launch marker recorded/);
   assert.match(cockpitText, /Claude boot ACK missing/);
+});
+
+test("CLI smoke: channel startup-packet renders copy-paste Claude recovery packet", () => {
+  const cwd = tempRoot();
+  const historyFile = paths.channelSessionsPath(cwd);
+  fs.mkdirSync(path.dirname(historyFile), { recursive: true });
+  fs.appendFileSync(
+    historyFile,
+    `${JSON.stringify({
+      ok: false,
+      action: "fresh_start_no_new_endpoint",
+      name: "fresh-thread",
+      project_dir: cwd,
+      harness_cwd: cwd,
+      launch_id: "launch_test_packet",
+      launch_marker: { ok: true },
+      boot_ack: { ok: false, reason: "not_recorded" },
+      updated_at: "2026-06-30T10:20:00.000Z"
+    })}\n`
+  );
+
+  const text = run(cwd, ["channel", "startup-packet", "--launch-id", "launch_test_packet", "--text"]).stdout;
+  assert.match(text, /From Codex to Claude/);
+  assert.match(text, /Project:/);
+  assert.match(text, /What I Need From You/);
+  assert.match(text, /Do Not Change/);
+  assert.match(text, /Relevant Files And Context/);
+  assert.match(text, /Reply Required/);
+  assert.match(text, /channel boot-ack --launch-id '?launch_test_packet'?/);
+  assert.doesNotMatch(text, /token=/i);
+  assert.equal(fs.existsSync(paths.channelStartupPacketPath(cwd, "launch_test_packet")), true);
 });
 
 test("CLI smoke: start can launch Claude from an explicit project directory", () => {

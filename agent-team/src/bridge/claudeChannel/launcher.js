@@ -146,6 +146,26 @@ function startupPrompt(name, cwd, options = {}) {
   ].join("\n");
 }
 
+function startupUserPrompt(name, cwd, options = {}) {
+  if (!options.launch_id) return null;
+  const harnessRoot = path.resolve(options.harness_cwd || options.harness_root || cwd);
+  const cliPath = path.resolve(options.cli_path || defaultCliPath());
+  const cliCommand = `${shellQuote(process.execPath)} ${shellQuote(cliPath)} --cwd ${shellQuote(harnessRoot)}`;
+  const bootAckCommand = `${cliCommand} channel boot-ack --launch-id ${shellQuote(options.launch_id)} --name ${shellQuote(name)} --project-dir ${shellQuote(cwd)}`;
+  return [
+    "Codex is starting this visible Claude teammate session now.",
+    "",
+    "First action: run this exact durable boot ACK command once using Bash:",
+    "",
+    "```bash",
+    bootAckCommand,
+    "```",
+    "",
+    "Then visibly say: ACK Agent Team quickstart loaded; mailbox is truth.",
+    "Stay in this visible session for Codex steering after the ACK."
+  ].join("\n");
+}
+
 function parseBackgroundOutput(stdout) {
   const text = stdout || "";
   const match = text.match(/backgrounded\s+[^A-Za-z0-9]+([A-Za-z0-9-]+)\s+[^A-Za-z0-9]+(.+)$/m);
@@ -156,9 +176,16 @@ function parseBackgroundOutput(stdout) {
   };
 }
 
-function channelEnv(name, cwd) {
+function channelEnv(name, cwd, options = {}) {
+  const harnessRoot = path.resolve(options.harness_cwd || options.harness_root || cwd);
   return {
     ...process.env,
+    AGENT_TEAM_SESSION_NAME: name,
+    AGENT_TEAM_PROJECT_DIR: cwd,
+    AGENT_TEAM_HARNESS_CWD: harnessRoot,
+    AGENT_TEAM_LAUNCH_ID: options.launch_id || "",
+    AGENT_TEAM_CODEX_THREAD_ID:
+      process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || process.env.AGENT_TEAM_SESSION_ID || "",
     CLAUDE_CHANNEL_DISPLAY_NAME: name,
     CLAUDE_CHANNEL_PROJECT_DIR: cwd
   };
@@ -207,12 +234,19 @@ function launchMarkerCommand(cwd, name, options = {}) {
 }
 
 function visibleShellCommand(claude, cwd, name, options) {
-  const env = channelEnv(name, cwd);
+  const env = channelEnv(name, cwd, options);
   const envAssignments = [
+    `AGENT_TEAM_SESSION_NAME=${shellQuote(env.AGENT_TEAM_SESSION_NAME)}`,
+    `AGENT_TEAM_PROJECT_DIR=${shellQuote(env.AGENT_TEAM_PROJECT_DIR)}`,
+    `AGENT_TEAM_HARNESS_CWD=${shellQuote(env.AGENT_TEAM_HARNESS_CWD)}`,
+    `AGENT_TEAM_LAUNCH_ID=${shellQuote(env.AGENT_TEAM_LAUNCH_ID)}`,
+    `AGENT_TEAM_CODEX_THREAD_ID=${shellQuote(env.AGENT_TEAM_CODEX_THREAD_ID)}`,
     `CLAUDE_CHANNEL_DISPLAY_NAME=${shellQuote(env.CLAUDE_CHANNEL_DISPLAY_NAME)}`,
     `CLAUDE_CHANNEL_PROJECT_DIR=${shellQuote(env.CLAUDE_CHANNEL_PROJECT_DIR)}`
   ];
   const args = claudeSessionArgs(name, cwd, options, false);
+  const initialPrompt = startupUserPrompt(name, cwd, options);
+  if (initialPrompt) args.push(initialPrompt);
   return [
     `cd ${shellQuote(cwd)}`,
     launchMarkerCommand(cwd, name, options),
@@ -245,7 +279,7 @@ function launchVisible(claude, cwd, name, options) {
       cwd,
       encoding: "utf8",
       timeout: options.start_timeout_ms || 45000,
-      env: channelEnv(name, cwd)
+      env: channelEnv(name, cwd, options)
     });
     return {
       ok: result.status === 0 && !result.error,
@@ -271,7 +305,7 @@ function launchVisible(claude, cwd, name, options) {
     cwd,
     encoding: "utf8",
     timeout: options.start_timeout_ms || 45000,
-    env: channelEnv(name, cwd)
+    env: channelEnv(name, cwd, options)
   });
   return {
     ok: result.status === 0 && !result.error,
@@ -306,7 +340,7 @@ function launchCodexTerminal(claude, cwd, name, options) {
     cwd,
     encoding: "utf8",
     timeout: options.start_timeout_ms || 45000,
-    env: channelEnv(name, cwd)
+    env: channelEnv(name, cwd, options)
   });
   return {
     ok: result.status === 0 && !result.error,
@@ -326,7 +360,7 @@ function launchBackground(claude, cwd, name, options) {
     cwd,
     encoding: "utf8",
     timeout: options.start_timeout_ms || 45000,
-    env: channelEnv(name, cwd)
+    env: channelEnv(name, cwd, options)
   });
   return {
     ok: result.status === 0 && !result.error,
@@ -360,7 +394,7 @@ function launchPty(claude, cwd, name, options) {
       cwd,
       detached: true,
       stdio: "ignore",
-      env: channelEnv(name, cwd)
+      env: channelEnv(name, cwd, options)
     });
     child.unref();
     return {
@@ -400,6 +434,7 @@ module.exports = {
   defaultSessionName,
   codexSessionIdentity,
   startupPrompt,
+  startupUserPrompt,
   teammateQuickstartPath,
   teammateQuickstartBlock,
   parseBackgroundOutput,

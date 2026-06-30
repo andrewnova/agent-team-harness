@@ -664,12 +664,21 @@ test("CH-3g channel ensure records visible launch marker when endpoint registry 
     assert.equal(result.launch_marker.record.launch_id, result.launch_id);
     assert.equal(result.launch_marker.record.name, "fresh-thread");
     assert.equal(result.launch_marker.record.mode, "visible");
+    assert.equal(result.mcp_init.ok, false);
     assert.equal(result.boot_ack.ok, false);
+    assert.equal(result.fallback_packet.ok, true);
+    assert.match(result.fallback_packet.relative_path, /startup-packets\/launch_/);
     assert.match(fs.readFileSync(commandFile, "utf8"), /channel launch-marker/);
+    assert.match(fs.readFileSync(commandFile, "utf8"), /AGENT_TEAM_LAUNCH_ID=/);
+    assert.match(fs.readFileSync(commandFile, "utf8"), /First action: run this exact durable boot ACK command once using Bash/);
     const markers = readJsonl(paths.channelLaunchMarkersPath(cwd));
     assert.equal(markers.length, 1);
     assert.equal(markers[0].launch_id, result.launch_id);
     assert.equal(fs.realpathSync(markers[0].project_dir), fs.realpathSync(cwd));
+    const packet = fs.readFileSync(paths.channelStartupPacketPath(cwd, result.launch_id), "utf8");
+    assert.match(packet, /From Codex to Claude/);
+    assert.match(packet, /Session name: fresh-thread/);
+    assert.doesNotMatch(packet, /Session name: \(unknown\)/);
   } finally {
     process.env.PATH = previousPath;
     if (previousCommandFile === undefined) delete process.env.FAKE_COMMAND_FILE;

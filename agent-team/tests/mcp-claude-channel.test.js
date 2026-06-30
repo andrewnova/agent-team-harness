@@ -4,6 +4,8 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { tempRoot } = require("./helpers");
 const { appendMessage, listMessages, loadMessage } = require("../src/mailbox");
+const paths = require("../src/paths");
+const { readJsonl } = require("../src/fsutil");
 const {
   CHANNEL_ID,
   initializeResult,
@@ -212,7 +214,14 @@ test("Claude MCP stdio server waits for initialized before emitting queued Agent
       encodeFrame({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } }),
       encodeFrame({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })
     ]),
-    encoding: "buffer"
+    encoding: "buffer",
+    env: {
+      ...process.env,
+      AGENT_TEAM_LAUNCH_ID: "launch_mcp_test",
+      AGENT_TEAM_SESSION_NAME: "mcp-visible-test",
+      AGENT_TEAM_PROJECT_DIR: cwd,
+      AGENT_TEAM_HARNESS_CWD: cwd
+    }
   });
   assert.equal(result.status, 0, result.stderr.toString("utf8"));
   const decoded = decodeFrames(result.stdout);
@@ -224,4 +233,8 @@ test("Claude MCP stdio server waits for initialized before emitting queued Agent
   assert.equal(notification.params.meta.mailbox_message_id, message.id);
   assert.match(notification.params.content, /hello visible Claude/);
   assert.equal(listDeliveredNotifications(cwd).length, 1);
+  const inits = readJsonl(paths.channelMcpInitsPath(cwd));
+  assert.equal(inits.length, 1);
+  assert.equal(inits[0].launch_id, "launch_mcp_test");
+  assert.equal(inits[0].event, "mcp_initialized");
 });

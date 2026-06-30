@@ -30,7 +30,7 @@ const {
   claudeVersion
 } = require("./claudeChannel/auth");
 const { installBridge } = require("./claudeChannel/install");
-const { createLaunchId, waitForBootAck, waitForLaunchMarker } = require("./claudeChannel/boot");
+const { createLaunchId, waitForBootAck, waitForLaunchMarker, waitForMcpInitialized } = require("./claudeChannel/boot");
 const {
   codexSessionIdentity,
   codexTerminalLauncher,
@@ -42,6 +42,7 @@ const {
 } = require("./claudeChannel/launcher");
 const { sendChannelRequest } = require("./claudeChannel/request");
 const { loadEnsureSession, persistEnsure } = require("./claudeChannel/session");
+const { createStartupPacket } = require("./claudeChannel/startupPacket");
 
 function rememberedSessionTarget(session, identity, projectCwd, strictSessionIdentity) {
   if (!strictSessionIdentity || !session || !session.ok || !identity || !identity.token) return null;
@@ -312,10 +313,23 @@ function ensure(cwd, options = {}) {
         : options.launch_marker_timeout_ms
       : 0;
   const launchMarker = waitForLaunchMarker(cwd, launchOptions.launch_id, markerWaitMs, Math.min(pollMs, 100));
+  const handshakeWaitMs =
+    launchMode === "visible" || launchMode === "codex-terminal"
+      ? options.handshake_timeout_ms === undefined
+        ? Math.min(3000, timeoutMs)
+        : options.handshake_timeout_ms
+      : 0;
+  const mcpInit = waitForMcpInitialized(cwd, launchOptions.launch_id, handshakeWaitMs, Math.min(pollMs, 100));
   const discovered = waitForStartedEndpoint(cli.command, projectCwd, beforeList, timeoutMs, pollMs, {
     require_new: Boolean(options.fresh_claude)
   });
-  const bootAck = waitForBootAck(cwd, launchOptions.launch_id, options.boot_ack_timeout_ms || 0, Math.min(pollMs, 100));
+  const bootAckWaitMs =
+    launchMode === "visible" || launchMode === "codex-terminal"
+      ? options.boot_ack_timeout_ms === undefined
+        ? Math.min(5000, timeoutMs)
+        : options.boot_ack_timeout_ms
+      : options.boot_ack_timeout_ms || 0;
+  const bootAck = waitForBootAck(cwd, launchOptions.launch_id, bootAckWaitMs, Math.min(pollMs, 100));
   let rename = null;
   let finalStatus = null;
   let endpoint = discovered.ok ? discovered.endpoint : null;
@@ -352,14 +366,26 @@ function ensure(cwd, options = {}) {
         : waitForReachable(cli.command, discovered.target, projectCwd, timeoutMs, pollMs);
     finalTarget = discovered.target;
   } else if (options.fresh_claude) {
-    return persist({
+    const record = {
       ok: false,
       action: "fresh_start_no_new_endpoint",
       reason: "Claude launch command completed, but no new same-project Claude channel endpoint appeared. Existing endpoints were intentionally not reused because --fresh-claude was requested.",
+      name,
+      target,
+      project_dir: projectCwd,
+      harness_cwd: path.resolve(cwd),
+      session_identity: identity
+        ? {
+            source: identity.source,
+            thread_ref: identity.token,
+            strict_project_reuse: strictSessionIdentity
+          }
+        : null,
       identity_confidence: "fresh_launch_unverified_no_new_endpoint",
       launch_id: launchOptions.launch_id,
       launch_mode: started.mode,
       launch_marker: launchMarker,
+      mcp_init: mcpInit,
       boot_ack: bootAck,
       claude_path: claude.path,
       channel_path: cli.path,
@@ -372,7 +398,9 @@ function ensure(cwd, options = {}) {
       discovered,
       fresh_launch_probe: discovered.probe || null,
       command: started.command
-    });
+    };
+    if (launchMarker.ok && !bootAck.ok) record.fallback_packet = createStartupPacket(cwd, { launch_id: launchOptions.launch_id, session: record });
+    return persist(record);
   } else {
     recoveredEndpoint = findReachableProjectEndpoint(
       cli.command,
@@ -418,6 +446,7 @@ function ensure(cwd, options = {}) {
     visible_loaded: visibleLoaded,
     launch_mode: started.mode,
     launch_marker: launchMarker,
+    mcp_init: mcpInit,
     boot_ack: bootAck,
     claude_path: claude.path,
     channel_path: cli.path,

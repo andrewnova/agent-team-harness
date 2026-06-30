@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const path = require("node:path");
 const { initializeResult, toolDefinitions, callTool, watchChannelOutbox } = require("./claudeChannel");
+const { recordMcpInitialized } = require("../bridge/claudeChannel/boot");
 
 function argValue(args, name, fallback = null) {
   const index = args.indexOf(name);
@@ -122,6 +123,7 @@ function runServer(options = {}) {
     for (const message of parsed.messages) {
       try {
         if (message?.method === "notifications/initialized") {
+          recordMcpInitialized(cwd);
           startOutboxWatcher();
           continue;
         }
