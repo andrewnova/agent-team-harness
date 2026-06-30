@@ -60,6 +60,7 @@ const database = require("./db");
 const { daemonStatus, startDaemon, stopDaemon, runDaemon } = require("./daemon");
 const { installClaudeMcp, statusClaudeMcp } = require("./mcp/claudeInstall");
 const { installCodexMcp, statusCodexMcp } = require("./mcp/codexInstall");
+const { listDeliveredNotifications } = require("./mcp/claudeChannel");
 const { recordBootAck, recordLaunchMarker } = require("./bridge/claudeChannel/boot");
 const { createStartupPacket, importStartupReply } = require("./bridge/claudeChannel/startupPacket");
 const {
@@ -632,6 +633,26 @@ function nonSemanticWakeState(live) {
   return candidates.find((state) => NON_SEMANTIC_WAKE_STATES.has(String(state))) || null;
 }
 
+function firstPartyMcpStateForMessage(cwd, messageId, live) {
+  const firstParty = (live && live.first_party) || null;
+  const delivered = listDeliveredNotifications(cwd)
+    .filter((row) => row.message_id === messageId)
+    .at(-1);
+  if (!firstParty && !delivered) return null;
+  const state = delivered?.result_state || firstParty?.result_state || null;
+  return {
+    transport: "agent-team-claude-mcp",
+    outbox_transport: firstParty?.transport || "claude-mcp-outbox",
+    result_state: state,
+    queued: Boolean(firstParty && (firstParty.queued || firstParty.duplicate || firstParty.result_state)),
+    emitted: state === "mcp_emitted",
+    notification_id: delivered?.notification_id || firstParty?.notification_id || null,
+    message_id: messageId,
+    outbox_path: firstParty?.outbox_path,
+    delivered_at: delivered?.delivered_at
+  };
+}
+
 async function waitForSemanticReply(cwd, requestId, live, waitMs) {
   const initial = replyForRequest(cwd, requestId);
   if (initial || !waitMs || !liveWakeWasAttempted(live)) {
@@ -674,15 +695,21 @@ function commandToAwaitReply({ requestId }) {
 function visibleDeliveryBlocker(cwd, durable, live, reply) {
   if (reply || liveDeliverySucceeded(live)) return null;
   const legacy = live && live.legacy;
+  const firstPartyMcp = firstPartyMcpStateForMessage(cwd, durable.mailbox_message_id, live);
   const promptPath = legacy && legacy.prompt_path ? legacy.prompt_path : null;
   const target = (live && live.target) || (legacy && legacy.target) || null;
   const wakeState = nonSemanticWakeState(live);
+  const legacyReason = legacy && (legacy.stderr || legacy.error || legacy.reason || legacy.result_state);
   const reason =
-    (wakeState && `Visible Claude wake reached a non-semantic state (${wakeState}), but no real Claude mailbox reply has landed.`) ||
-    (legacy && (legacy.stderr || legacy.error || legacy.reason || legacy.result_state)) ||
+    (firstPartyMcp?.emitted &&
+      "First-party Claude MCP emitted the mailbox notification, but Claude has not replied through agent_team_reply or agent_team_ack.") ||
+    (firstPartyMcp?.queued &&
+      "First-party Claude MCP queued the mailbox notification, but no semantic Claude mailbox reply has landed yet.") ||
+    (wakeState && `Compatibility live wake reached a non-semantic state (${wakeState}), but no real Claude mailbox reply has landed.`) ||
+    legacyReason ||
     (live && (live.stderr || live.error || live.reason || live.result_state)) ||
     "visible Claude wake was not proven";
-  const permissionHint = /fetch failed|claude_auth_required|auth/i.test(String(reason))
+  const permissionHint = /fetch failed|claude_auth_required|auth/i.test(`${reason || ""}\n${legacyReason || ""}`)
     ? {
         kind: "rerun_live_channel_with_local_permissions",
         reason:
@@ -694,8 +721,22 @@ function visibleDeliveryBlocker(cwd, durable, live, reply) {
     : null;
   return {
     blocking: true,
-    kind: wakeState ? "claude_semantic_reply_missing" : "visible_claude_delivery_unproven",
+    kind: firstPartyMcp ? "first_party_mcp_reply_missing" : wakeState ? "claude_semantic_reply_missing" : "visible_claude_delivery_unproven",
     reason,
+    primary_transport: firstPartyMcp ? "agent-team-claude-mcp" : undefined,
+    first_party_mcp: firstPartyMcp || undefined,
+    compatibility_wake: legacy
+      ? {
+          transport: legacy.transport,
+          result_state: legacy.result_state,
+          status: legacy.status,
+          target: legacy.target,
+          prompt_path: legacy.prompt_path,
+          stderr: legacy.stderr,
+          error: legacy.error,
+          reason: legacy.reason
+        }
+      : undefined,
     semantic_reply_required: true,
     semantic_reply_missing: true,
     request_id: durable.request_id,
@@ -709,8 +750,16 @@ function visibleDeliveryBlocker(cwd, durable, live, reply) {
     diagnostic_command: "node agent-team/src/cli.js daemon status && node agent-team/src/cli.js cockpit --json --no-live-channel",
     operator_hint: permissionHint || undefined,
     directive:
-      "Do not claim Claude is working until a semantic mailbox reply lands. If Claude is visibly waiting, paste/show the recovery packet, then await the mailbox reply."
+      "Do not claim Claude is working until Claude replies through the first-party mailbox tools (agent_team_reply or agent_team_ack) or an equivalent semantic mailbox reply lands."
   };
+}
+
+function codexNextForBlocker(blockingNextStep) {
+  if (!blockingNextStep) return "continue working; watch mailbox/cockpit for Claude ACKs, replies, and check-ins";
+  if (blockingNextStep.kind === "first_party_mcp_reply_missing") {
+    return "first-party Claude MCP wake is queued/emitted, but Claude's semantic mailbox reply is missing; await reply before claiming Claude is working";
+  }
+  return "visible Claude delivery is unproven; follow blocking_next_step before claiming Claude is working";
 }
 
 function channelSessionForStart(cwd, claudeStartup) {
@@ -2115,9 +2164,7 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
       blocking_next_step: blockingNextStep || undefined,
       blocked_next_step: blockingNextStep || undefined,
       next: {
-        codex: blockingNextStep
-          ? "visible Claude delivery is unproven; follow blocking_next_step before claiming Claude is working"
-          : "continue working; watch mailbox/cockpit for Claude ACKs, replies, and check-ins",
+        codex: codexNextForBlocker(blockingNextStep),
         claude: `reply with mailbox send --from claude --to codex --kind reply --request-id ${durable.request_id} --in-reply-to ${durable.mailbox_message_id} --body <answer>`
       }
     };

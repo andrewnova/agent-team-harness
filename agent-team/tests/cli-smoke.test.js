@@ -655,11 +655,14 @@ test("CLI smoke: channel steer default blocks when visible Claude delivery is un
   assert.equal(steer.live_channel.first_party.result_state, "mcp_outbox_queued");
   assert.equal(steer.live_channel.legacy.result_state, "legacy_no_session");
   assert.equal(steer.blocking_next_step.blocking, true);
-  assert.equal(steer.blocking_next_step.kind, "visible_claude_delivery_unproven");
+  assert.equal(steer.blocking_next_step.kind, "first_party_mcp_reply_missing");
+  assert.equal(steer.blocking_next_step.primary_transport, "agent-team-claude-mcp");
+  assert.equal(steer.blocking_next_step.first_party_mcp.result_state, "mcp_outbox_queued");
+  assert.equal(steer.blocking_next_step.compatibility_wake.result_state, "legacy_no_session");
   assert.equal(steer.blocking_next_step.request_id, steer.durable_ack.request_id);
   assert.equal(steer.blocking_next_step.mailbox_message_id, steer.durable_ack.mailbox_message_id);
   assert.match(steer.blocking_next_step.await_reply_command, new RegExp(steer.durable_ack.request_id));
-  assert.match(steer.next.codex, /visible Claude delivery is unproven/);
+  assert.match(steer.next.codex, /first-party Claude MCP wake is queued\/emitted/);
 
   const emitted = deliverQueuedNotifications(cwd, () => {});
   assert.equal(emitted.count, 1);
@@ -729,6 +732,10 @@ test("CLI smoke: channel steer reports wake packet path when legacy live wake fa
   assert.equal(steer.live_channel.target, "ep_exact");
   assert.equal(steer.live_channel.first_party.result_state, "mcp_outbox_queued");
   assert.equal(steer.live_channel.legacy.stderr, "fetch failed");
+  assert.equal(steer.blocking_next_step.kind, "first_party_mcp_reply_missing");
+  assert.equal(steer.blocking_next_step.primary_transport, "agent-team-claude-mcp");
+  assert.equal(steer.blocking_next_step.first_party_mcp.result_state, "mcp_outbox_queued");
+  assert.equal(steer.blocking_next_step.compatibility_wake.result_state, "failed");
   assert.equal(steer.blocking_next_step.request_id, steer.durable_ack.request_id);
   assert.equal(steer.blocking_next_step.target, "ep_exact");
   assert.equal(steer.blocking_next_step.operator_hint.kind, "rerun_live_channel_with_local_permissions");
@@ -798,9 +805,12 @@ test("CLI smoke: channel steer blocks when legacy wake is sent but semantic repl
   const steer = JSON.parse(result.stdout);
   assert.equal(steer.ok, false);
   assert.equal(steer.live_channel.result_state, "wake_sent_reply_pending");
-  assert.equal(steer.blocking_next_step.kind, "claude_semantic_reply_missing");
+  assert.equal(steer.blocking_next_step.kind, "first_party_mcp_reply_missing");
+  assert.equal(steer.blocking_next_step.primary_transport, "agent-team-claude-mcp");
+  assert.equal(steer.blocking_next_step.first_party_mcp.result_state, "mcp_outbox_queued");
+  assert.equal(steer.blocking_next_step.compatibility_wake.result_state, "wake_sent_reply_pending");
   assert.equal(steer.blocking_next_step.semantic_reply_missing, true);
-  assert.match(steer.blocking_next_step.reason, /no real Claude mailbox reply has landed/);
+  assert.match(steer.blocking_next_step.reason, /First-party Claude MCP queued/);
   assert.match(steer.blocking_next_step.directive, /Do not claim Claude is working/);
   assert.match(steer.blocking_next_step.wake_packet_path, /wake-req_/);
   assert.equal(steer.semantic_reply, null);
