@@ -89,6 +89,50 @@ function endpointMatchesRequested(endpoint, parsedTarget, name, target) {
   );
 }
 
+function channelDiagnosticHint(authStatus, status) {
+  if (status && status.operator_hint) {
+    const hint = { ...status.operator_hint };
+    if (authStatus && !authStatus.ok) {
+      hint.auth_note =
+        "This same restricted context may also make Claude auth look logged out. Run channel auth/login and channel doctor from the same local-permission context before deciding auth is still broken.";
+    }
+    return hint;
+  }
+  if (authStatus && !authStatus.ok) {
+    return {
+      kind: "claude_auth_unverified",
+      confidence: "medium",
+      reason: "Claude Code auth could not be verified in this process.",
+      next_step:
+        "Run channel auth login through the harness, then rerun channel doctor/status from the same local-permission context before delegating Claude-owned work.",
+      blocking_for_claiming_claude_working: true
+    };
+  }
+  return null;
+}
+
+function proofResult(current, selected) {
+  if (current && current.ok) return current;
+  if (!selected) return current;
+  return {
+    ok: true,
+    record: selected,
+    recovered_from_startup_proof: true
+  };
+}
+
+function attachStartupProof(cwd, launchId, record) {
+  const proof = startupProofDiagnostics(cwd, launchId);
+  return {
+    ...record,
+    launch_marker: proofResult(record.launch_marker, proof.selected.launch_marker),
+    mcp_start: proofResult(record.mcp_start, proof.selected.mcp_start),
+    mcp_init: proofResult(record.mcp_init, proof.selected.mcp_init),
+    boot_ack: proofResult(record.boot_ack, proof.selected.boot_ack),
+    startup_proof: proof
+  };
+}
+
 function diagnose(cwd, options = {}) {
   const cli = findCli();
   const claude = findClaudeCli();
@@ -117,6 +161,7 @@ function diagnose(cwd, options = {}) {
   if (status && !status.ok) issues.push(`No healthy Claude channel endpoint resolved for target ${target}`);
   const smoke = options.smoke && cli.ok && status && status.ok ? runSmoke(cli.command, cwd, target, options.smoke_timeout_ms || 120000) : null;
   if (smoke && !smoke.ok) issues.push("Claude channel endpoint is healthy, but Claude did not complete the reply request");
+  const hint = channelDiagnosticHint(authStatus, status);
   return {
     ok: issues.length === 0,
     checked_at: new Date().toISOString(),
@@ -131,6 +176,7 @@ function diagnose(cwd, options = {}) {
     endpoint_status: compactStatus(status),
     reply_ready: smoke ? smoke.ok : "unchecked",
     smoke,
+    operator_hint: hint,
     issues
   };
 }
@@ -501,9 +547,11 @@ function ensure(cwd, options = {}) {
       fresh_launch_probe: discovered.probe || null,
       command: started.command
     };
-    record.startup_proof = startupProofDiagnostics(cwd, launchOptions.launch_id);
-    if (launchMarker.ok && !bootAck.ok) record.fallback_packet = createStartupPacket(cwd, { launch_id: launchOptions.launch_id, session: record });
-    return persist(record);
+    const reconciled = attachStartupProof(cwd, launchOptions.launch_id, record);
+    if (reconciled.launch_marker.ok && !reconciled.boot_ack.ok) {
+      reconciled.fallback_packet = createStartupPacket(cwd, { launch_id: launchOptions.launch_id, session: reconciled });
+    }
+    return persist(reconciled);
   } else {
     recoveredEndpoint = findReachableProjectEndpoint(
       cli.command,
@@ -528,7 +576,7 @@ function ensure(cwd, options = {}) {
     options.smoke && deliveryReady && (!finalMismatch || options.allow_cross_project_reuse)
       ? runSmoke(cli.command, projectCwd, finalTarget, options.smoke_timeout_ms || 120000)
       : null;
-  return persist({
+  const record = {
     ok: channelAcceptable && (!finalMismatch || options.allow_cross_project_reuse) && (!smoke || smoke.ok),
     identity_confidence: launchedIdentityConfidence(discovered, rename, recoveredEndpoint),
     launch_id: launchOptions.launch_id,
@@ -570,7 +618,6 @@ function ensure(cwd, options = {}) {
     mcp_start: mcpStart,
     mcp_init: mcpInit,
     boot_ack: bootAck,
-    startup_proof: startupProofDiagnostics(cwd, launchOptions.launch_id),
     claude_path: claude.path,
     channel_path: cli.path,
     start: started,
@@ -591,7 +638,8 @@ function ensure(cwd, options = {}) {
     command: started.command,
     reply_ready: smoke ? smoke.ok : "unchecked",
     smoke
-  });
+  };
+  return persist(attachStartupProof(cwd, launchOptions.launch_id, record));
 }
 
 function create() {

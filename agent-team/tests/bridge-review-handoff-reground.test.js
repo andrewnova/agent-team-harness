@@ -863,6 +863,100 @@ test("CH-3e explicit Codex Terminal launch reports missing launcher with command
   }
 });
 
+test("CH-3h channel ensure reconciles boot ACK that lands during smoke", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const readyFile = path.join(cwd, "ready");
+  const launchIdFile = path.join(cwd, "launch-id");
+  const commandFile = path.join(cwd, "visible-command.txt");
+  const fakeCli = path.join(binDir, "claude-channel");
+  const fakeClaude = path.join(binDir, "claude");
+  const fakeLauncher = path.join(binDir, "visible-launcher");
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  if [ -f \"$FAKE_READY\" ]; then",
+    "    echo '{\"target\":\"ep_fresh\",\"endpoint\":{\"endpoint_id\":\"ep_fresh\",\"display_name\":\"fresh-thread\",\"project_dir\":\"'$PWD'\",\"started_at\":\"2026-06-30T10:00:00.000Z\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "    exit 0",
+    "  fi",
+    "  echo 'No live Claude Code channel endpoint matched target fresh-thread' >&2",
+    "  exit 1",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    "  if [ -f \"$FAKE_READY\" ]; then",
+    "    echo '{\"targets\":[{\"target\":\"ep_fresh\",\"endpoint_id\":\"ep_fresh\",\"display_name\":\"fresh-thread\",\"project_dir\":\"'$PWD'\",\"started_at\":\"2026-06-30T10:00:00.000Z\"}]}'",
+    "  else",
+    "    echo '{\"targets\":[]}'",
+    "  fi",
+    "  exit 0",
+    "fi",
+    "if [ \"$1\" = \"ask\" ]; then",
+    "  launch_id=$(cat \"$FAKE_LAUNCH_ID_FILE\")",
+    "  printf '{\"launch_id\":\"%s\",\"name\":\"fresh-thread\",\"project_dir\":\"%s\",\"harness_cwd\":\"%s\",\"source\":\"claude-boot-ack\",\"pid\":123,\"created_at\":\"2026-06-30T10:00:05.000Z\",\"body\":\"ACK Agent Team quickstart loaded; mailbox is truth.\"}\\n' \"$launch_id\" \"$PWD\" \"$PWD\" >> \"$FAKE_BOOT_ACKS\"",
+    "  echo '{\"answer\":\"\"}'",
+    "  exit 1",
+    "fi",
+    "exit 1"
+  ]);
+  writeExecutable(fakeClaude, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
+    "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
+    "  exit 0",
+    "fi",
+    "printf '%s\\n' \"$AGENT_TEAM_LAUNCH_ID\" > \"$FAKE_LAUNCH_ID_FILE\"",
+    "touch \"$FAKE_READY\"",
+    "exit 0"
+  ]);
+  writeExecutable(fakeLauncher, [
+    "#!/bin/sh",
+    "printf '%s\\n' \"$1\" > \"$FAKE_COMMAND_FILE\"",
+    "sh -c \"$1\"",
+    "exit $?"
+  ]);
+  const previousPath = process.env.PATH;
+  const previousReady = process.env.FAKE_READY;
+  const previousLaunchIdFile = process.env.FAKE_LAUNCH_ID_FILE;
+  const previousBootAcks = process.env.FAKE_BOOT_ACKS;
+  const previousCommandFile = process.env.FAKE_COMMAND_FILE;
+  process.env.PATH = `${binDir}:${previousPath}`;
+  process.env.FAKE_READY = readyFile;
+  process.env.FAKE_LAUNCH_ID_FILE = launchIdFile;
+  process.env.FAKE_BOOT_ACKS = paths.channelBootAcksPath(cwd);
+  process.env.FAKE_COMMAND_FILE = commandFile;
+  try {
+    const bridge = createBridge("claude-channel");
+    const result = bridge.ensure(cwd, {
+      name: "fresh-thread",
+      fresh_claude: true,
+      timeout_ms: 1000,
+      poll_ms: 10,
+      launch_mode: "visible",
+      visible_launcher: fakeLauncher,
+      boot_ack_timeout_ms: 0,
+      smoke: true,
+      smoke_timeout_ms: 100
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.action, "started_smoke_failed");
+    assert.equal(result.delivery_ready, true);
+    assert.equal(result.boot_ack.ok, true);
+    assert.equal(result.boot_ack.recovered_from_startup_proof, true);
+    assert.equal(result.boot_ack.record.source, "claude-boot-ack");
+    assert.equal(result.startup_proof.selected.boot_ack.source, "claude-boot-ack");
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousReady === undefined) delete process.env.FAKE_READY;
+    else process.env.FAKE_READY = previousReady;
+    if (previousLaunchIdFile === undefined) delete process.env.FAKE_LAUNCH_ID_FILE;
+    else process.env.FAKE_LAUNCH_ID_FILE = previousLaunchIdFile;
+    if (previousBootAcks === undefined) delete process.env.FAKE_BOOT_ACKS;
+    else process.env.FAKE_BOOT_ACKS = previousBootAcks;
+    if (previousCommandFile === undefined) delete process.env.FAKE_COMMAND_FILE;
+    else process.env.FAKE_COMMAND_FILE = previousCommandFile;
+  }
+});
+
 test("CH-4 channel ensure renames a started endpoint to the Codex session name", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();

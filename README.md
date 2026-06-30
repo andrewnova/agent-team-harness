@@ -86,6 +86,8 @@ Automatic reuse is intentionally narrow: the remembered endpoint id wins for the
 
 When startup is blocked, the JSON output includes `blocked_next_step` with a concrete repair command and suppresses the normal Planning/Dev prompt. Follow that blocker first. For example, `claude_auth_required` points to `channel auth login`, missing bridge dependencies point to `doctor --fix`, and smoke failures make endpoint reachability explicit without treating it as Claude confirmation.
 
+If `channel status`, `channel doctor`, or `channel steer` reports a loaded/recent endpoint with `fetch_failed`, check the `operator_hint` before assuming Claude is broken. In Codex App or other sandboxed shells, Claude auth files or localhost channel access may be hidden from the process; rerun the live channel command from a local-permission context, then decide whether auth or endpoint repair is actually needed.
+
 Visible launches use Claude's approved `--channels` mode by default. `--use-development-channel` is reserved for local channel diagnostics because Claude may pause on an interactive development-channel warning before any MCP server or boot ACK can run.
 
 For offline or deterministic local testing:
@@ -137,6 +139,8 @@ The cockpit timeline is derived from existing mailbox rows, ACK rows, MCP outbox
 Do not delegate real Claude work through raw `ask_claude` or a direct live-channel wait. Planning, implementation, review, refactor, and debugging work should go through mailbox-backed harness commands such as `plan claude`, `review request`, `channel steer`, or `mailbox send --to claude --kind request --reply-required`. The raw live channel is for health checks, smoke tests, low-level diagnostics, and the daemon's short wake-up copy; the mailbox reply remains the completion truth.
 
 `agent-team channel steer` is visible-or-blocking by default. It first queues the durable reply-required mailbox request, immediately runs a bounded daemon wake pass for that exact mailbox message, and returns success only when visible delivery is proven or a semantic mailbox reply already exists. If the live wake fails, the JSON includes `blocking_next_step` with the request id, target when known, wake packet path when available, and `await reply` command. Use `--no-live` or `--mailbox-only` only when quiet mailbox-only delegation is intentional.
+
+When `blocking_next_step.operator_hint.kind` is `rerun_live_channel_with_local_permissions`, the mailbox request still exists. Rerun `channel status`, `channel doctor`, or the steering smoke with local auth/loopback permissions before reauthenticating Claude or opening another teammate window.
 
 Claude can check in at any time:
 

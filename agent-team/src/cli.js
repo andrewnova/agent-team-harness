@@ -616,6 +616,16 @@ function visibleDeliveryBlocker(cwd, durable, live, reply) {
     (legacy && (legacy.stderr || legacy.error || legacy.reason || legacy.result_state)) ||
     (live && (live.stderr || live.error || live.reason || live.result_state)) ||
     "visible Claude wake was not proven";
+  const permissionHint = /fetch failed|claude_auth_required|auth/i.test(String(reason))
+    ? {
+        kind: "rerun_live_channel_with_local_permissions",
+        reason:
+          "Codex App sandboxing can hide Claude auth or block localhost channel fetches even when the visible Claude endpoint is healthy.",
+        command: `node agent-team/src/cli.js channel status${target ? ` --target ${target}` : ""}`,
+        directive:
+          "Run channel status/doctor/steer from a local-permission context before treating this as a real Claude endpoint failure."
+      }
+    : null;
   return {
     blocking: true,
     kind: "visible_claude_delivery_unproven",
@@ -629,6 +639,7 @@ function visibleDeliveryBlocker(cwd, durable, live, reply) {
       ? `cat ${path.resolve(cwd, promptPath)}`
       : `node agent-team/src/cli.js mailbox show ${durable.mailbox_message_id}`,
     diagnostic_command: "node agent-team/src/cli.js daemon status && node agent-team/src/cli.js cockpit --json --no-live-channel",
+    operator_hint: permissionHint || undefined,
     directive:
       "Visible Claude did not prove it received this steering. Do not claim Claude is working; inspect the wake packet or await the mailbox reply."
   };

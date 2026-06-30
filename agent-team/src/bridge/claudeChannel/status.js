@@ -15,13 +15,15 @@ function channelStatus(cliCommand, target, cwd) {
   const deliveryReady = result.status === 0 && Boolean(parsed) && reachable && healthy;
   const presence = endpointPresence(parsed && parsed.endpoint);
   const healthErrorClass = healthErrorKind(parsed, result);
+  const statusKindValue = statusKind(deliveryReady, parsed, presence, healthErrorClass);
   return {
     ok: deliveryReady,
     delivery_ready: deliveryReady,
     presence_ok: presence.loaded,
     presence,
-    status_kind: statusKind(deliveryReady, parsed, presence, healthErrorClass),
+    status_kind: statusKindValue,
     health_error_class: healthErrorClass,
+    operator_hint: operatorHint(statusKindValue, presence, healthErrorClass),
     command: cliCommand,
     exit_code: result.status,
     stdout: result.stdout.trim(),
@@ -88,6 +90,21 @@ function statusKind(deliveryReady, parsed, presence, healthErrorClass) {
   if (presence.loaded) return "loaded_channel_unverified";
   if (presence.endpoint_present) return "endpoint_registered_not_live";
   return "no_matching_endpoint";
+}
+
+function operatorHint(statusKindValue, presence, healthErrorClass) {
+  if (statusKindValue === "loaded_fetch_failed" && presence && presence.loaded && healthErrorClass === "fetch_failed") {
+    return {
+      kind: "local_loopback_or_sandbox_blocked",
+      confidence: "medium",
+      reason:
+        "A recent Claude endpoint is loaded, but the local health fetch failed. In Codex App or sandboxed shells, Claude auth files or localhost channel access may be hidden from the command.",
+      next_step:
+        "Rerun channel doctor/status/steer from a local process with Claude auth and localhost permissions before treating the endpoint as broken.",
+      blocking_for_claiming_claude_working: true
+    };
+  }
+  return null;
 }
 
 function listTargets(cliCommand, cwd) {
@@ -359,6 +376,7 @@ function compactStatus(status) {
     endpoint: status.parsed ? compactTarget(status.parsed.endpoint) : null,
     reachable: status.parsed ? status.parsed.reachable : undefined,
     health: status.parsed ? status.parsed.health : undefined,
+    operator_hint: status.operator_hint || undefined,
     stderr: status.stderr,
     error: status.error
   };

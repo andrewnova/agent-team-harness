@@ -647,6 +647,8 @@ test("CLI smoke: channel steer reports wake packet path when legacy live wake fa
   assert.equal(steer.live_channel.legacy.stderr, "fetch failed");
   assert.equal(steer.blocking_next_step.request_id, steer.durable_ack.request_id);
   assert.equal(steer.blocking_next_step.target, "ep_exact");
+  assert.equal(steer.blocking_next_step.operator_hint.kind, "rerun_live_channel_with_local_permissions");
+  assert.match(steer.blocking_next_step.operator_hint.directive, /local-permission/);
   assert.match(steer.blocking_next_step.await_reply_command, new RegExp(steer.durable_ack.request_id));
   assert.match(steer.blocking_next_step.wake_packet_path, /wake-req_/);
   assert.equal(fs.existsSync(path.join(cwd, steer.blocking_next_step.wake_packet_path)), true);
@@ -2772,10 +2774,13 @@ test("CLI smoke: cockpit reports loaded Claude when local health fetch is blocke
   assert.equal(status.delivery_ready, false);
   assert.equal(status.presence_ok, true);
   assert.equal(status.status_kind, "loaded_fetch_failed");
+  assert.equal(status.operator_hint.kind, "local_loopback_or_sandbox_blocked");
+  assert.equal(status.operator_hint.blocking_for_claiming_claude_working, true);
   const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--target", "codex-thread"], env).stdout);
   assert.equal(cockpit.claude_channel.runtime.ok, false);
   assert.equal(cockpit.claude_channel.runtime.presence_ok, true);
   assert.equal(cockpit.claude_channel.runtime.status_kind, "loaded_fetch_failed");
+  assert.equal(cockpit.claude_channel.runtime.operator_hint.kind, "local_loopback_or_sandbox_blocked");
   const text = run(cwd, ["cockpit", "--target", "codex-thread"], env).stdout;
   assert.match(text, /Claude: loaded-channel-unverified/);
   assert.doesNotMatch(text, /Claude: not-live/);
