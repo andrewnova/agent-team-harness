@@ -23,6 +23,7 @@ test("public skill keeps Claude work mailbox-first and nonblocking", () => {
   assert.match(skill, /remembered endpoint id/);
   assert.match(skill, /Display names are labels\/fallbacks, not primary identity/);
   assert.match(skill, /fresh_launch_probe/);
+  assert.match(skill, /Claude startup:/);
 });
 
 test("README explains daemon-backed mailbox delegation", () => {
@@ -47,4 +48,5 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /remembered endpoint id/);
   assert.match(readme, /Display names are human labels and fallback selectors, not the primary continuity proof/);
   assert.match(readme, /fresh_launch_probe/);
+  assert.match(readme, /Claude startup:/);
 });

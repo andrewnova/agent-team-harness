@@ -107,8 +107,16 @@ function inferMode(goals, tasks, plans) {
 
 function channelSession(cwd) {
   const file = paths.channelSessionPath(cwd);
-  if (!exists(file)) return null;
-  const session = redact(readJson(file));
+  const historyFile = paths.channelSessionsPath(cwd);
+  const current = exists(file) ? readJson(file) : null;
+  const history = readJsonl(historyFile);
+  const latestHistory = history.length ? history[history.length - 1] : null;
+  const currentTime = current && current.updated_at ? Date.parse(current.updated_at) : 0;
+  const historyTime = latestHistory && latestHistory.updated_at ? Date.parse(latestHistory.updated_at) : 0;
+  const useHistory = latestHistory && (!current || historyTime >= currentTime);
+  const rawSession = useHistory ? latestHistory : current;
+  if (!rawSession) return null;
+  const session = redact(rawSession);
   return {
     ok: session.ok,
     action: session.action,
@@ -118,12 +126,20 @@ function channelSession(cwd) {
     harness_cwd: session.harness_cwd,
     session_identity: session.session_identity,
     launch_mode: session.launch_mode,
+    session_source: useHistory ? "history_latest" : "session",
+    identity_confidence: session.identity_confidence,
+    reuse_source: session.reuse_source,
+    remembered_endpoint: session.remembered_endpoint,
+    skipped_reuse: session.skipped_reuse,
+    discovered: session.discovered,
+    fresh_launch_probe: session.fresh_launch_probe,
     delivery_ready: session.delivery_ready,
     visible_loaded: session.visible_loaded,
     channel_loaded: session.channel_loaded,
     reply_ready: session.reply_ready,
     updated_at: session.updated_at,
     session_path: file,
+    history_path: historyFile,
     auth_help: session.auth_help,
     reason: session.reason
   };
@@ -182,6 +198,31 @@ function claudeAgentSessions(cwd, sessionName) {
     stderr: result.stderr.trim(),
     error: result.error ? result.error.message : undefined
   };
+}
+
+function startupProbeLine(probe) {
+  if (!probe) return "probe=none";
+  const required = probe.require_new ? "yes" : "no";
+  const selected = probe.selected_target || "none";
+  return `probe=require-new:${required} new=${probe.new_project_count || 0} existing=${probe.existing_project_count || 0} checked=${probe.checked_count || 0} selected=${selected}`;
+}
+
+function rememberedEndpointLine(record) {
+  if (!record) return "none";
+  if (record.ok) return record.target || (record.endpoint && record.endpoint.target) || "ok";
+  return record.reason || "not-used";
+}
+
+function channelStartupLine(channel) {
+  if (!channel) return "none";
+  const probe = channel.fresh_launch_probe || (channel.discovered && channel.discovered.probe);
+  return [
+    `source=${channel.session_source || "unknown"}`,
+    `confidence=${channel.identity_confidence || "unknown"}`,
+    `reuse=${channel.reuse_source || "n/a"}`,
+    `remembered=${rememberedEndpointLine(channel.remembered_endpoint)}`,
+    startupProbeLine(probe)
+  ].join(" ");
 }
 
 function taskStatusMap(tasks = []) {
@@ -675,6 +716,12 @@ function topNextActions(mode, goals, activeTasks, plans, claude, blockers = [], 
   if (!goals.length && !activeTasks.length && claude.session && claude.session.ok === false) {
     actions.push("Fix Claude channel startup before live teammate requests");
   }
+  if (claude.session && claude.session.action === "fresh_start_no_new_endpoint") {
+    const probe = claude.session.fresh_launch_probe || (claude.session.discovered && claude.session.discovered.probe);
+    const existing = probe ? probe.existing_project_count || 0 : 0;
+    const fresh = probe ? probe.new_project_count || 0 : 0;
+    actions.push(`Fresh Claude launch did not register a new same-project endpoint; new=${fresh} existing=${existing}. Inspect claude_channel.session.fresh_launch_probe.`);
+  }
   if (claude.session && claude.session.action === "claude_auth_required") {
     actions.push("Authenticate Claude Code with channel auth login before live teammate startup");
   }
@@ -944,6 +991,7 @@ function renderCockpit(snapshot) {
     `Generated: ${snapshot.generated_at}`,
     `Mode: ${snapshot.mode}`,
     `Claude: ${channelLine} ${runtimeLine}`,
+    `Claude startup: ${channelStartupLine(channel)}`,
     `Claude agents: ${agentsLine}`,
     `Receiver daemon: ${snapshot.daemon.running ? "running" : "not-running"} active-runs=${snapshot.daemon.active_runs.length}${snapshot.daemon.stale_pid ? " stale-pid=true" : ""}`,
     `Session push: ${snapshot.daemon.session_push && snapshot.daemon.session_push.native_model_ui_push ? "native" : "mailbox-daemon"} fallback=${snapshot.daemon.session_push ? snapshot.daemon.session_push.fallback_waiter : "await reply --request-id <id>"}`,

@@ -163,7 +163,7 @@ The MCP server uses standard stdio newline-delimited JSON-RPC. It waits until Cl
 
 For clean teammate launches, `--fresh-claude` requires a genuinely new same-project channel endpoint. If no new endpoint appears, the harness reports `fresh_start_no_new_endpoint` instead of silently reusing or renaming an old Claude session.
 
-For same Codex thread resumes, Claude channel ensure now prefers the remembered endpoint id from `.agent-team/comms/claude-channel/session.json` when `session_identity.thread_ref` and `project_dir` match. Display names are human labels and fallback selectors, not the primary continuity proof. Fresh launch failures include an endpoint probe (`discovered.probe` / `fresh_launch_probe`) with old endpoints, new endpoint counts, checked candidates, and the selected target when one exists.
+For same Codex thread resumes, Claude channel ensure now prefers the remembered endpoint id from `.agent-team/comms/claude-channel/session.json` when `session_identity.thread_ref` and `project_dir` match. Display names are human labels and fallback selectors, not the primary continuity proof. Fresh launch failures include an endpoint probe (`discovered.probe` / `fresh_launch_probe`) with old endpoints, new endpoint counts, checked candidates, and the selected target when one exists. `agent-team cockpit` and `agent-team watch` render this as a `Claude startup:` line so visible-launch blockers are readable without opening JSON.
 
 ## First-Party Codex MCP Adapter
 

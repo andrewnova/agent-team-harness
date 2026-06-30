@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 8 endpoint-id continuity and fresh visible-launch probe verified locally, full architecture review still open
+Status: Active refactor charter; Phase 9 cockpit startup identity/probe visibility verified locally, full architecture review still open
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -861,3 +861,48 @@ Remaining architectural discomfort:
 Next phase:
 
 - Promote startup identity/probe details into cockpit/watch so visible-Claude blockers are obvious without opening JSON, then dogfood a real visible Claude launch and decide whether the legacy endpoint registry can be demoted further behind first-party MCP/session identity.
+
+### 2026-06-30 - Phase 9 Cockpit Startup Identity And Probe Visibility
+
+What changed:
+
+- Changed cockpit session loading to compare the last successful `.agent-team/comms/claude-channel/session.json` against the latest `.agent-team/comms/claude-channel/sessions.jsonl` history row, then show the latest startup record when it is newer. This makes failed startup records visible instead of hiding behind an older last-good session.
+- Added `session_source`, `identity_confidence`, `reuse_source`, `remembered_endpoint`, `skipped_reuse`, `discovered`, and `fresh_launch_probe` to `cockpit` / `watch --json` Claude session output.
+- Added a rendered `Claude startup:` line to `cockpit` / `watch` text output with source, identity confidence, reuse source, remembered endpoint status, and compact probe counts.
+- Added a Next Action for `fresh_start_no_new_endpoint` that names the missing new endpoint and points to `claude_channel.session.fresh_launch_probe`.
+- Extended the fresh-start CLI smoke test to prove a failed fresh launch is visible in watch JSON and text.
+- Updated README and the Agent Team Harness skill contract to document the `Claude startup:` line, then synced the installed skill copy.
+
+Why it changed:
+
+- Phase 8 produced better startup evidence, but operators still had to open JSON logs to understand a visible-Claude blocker.
+- Failed startup rows are important current state, not just audit history. Cockpit must not hide them just because the last successful session still exists.
+- The user’s core complaint is trust and immediacy. A dashboard line that says exactly what startup identity/probe state exists is a product-level improvement, not cosmetic polish.
+
+Files touched:
+
+- `agent-team/src/cockpit.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/cli-smoke.test.js --test-name-pattern "fresh Claude start|public"` from repo root: CLI smoke suite ran and 57 tests passed.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+- `npm test` from `agent-team/`: 121 tests passed.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+
+Remaining architectural discomfort:
+
+- The cockpit now renders startup proof, but it still depends on legacy channel endpoint history for visible-Claude launch identity.
+- The fresh-launch probe is human-readable but not yet a dedicated `channel startup diagnose` command.
+- Real visible-Claude dogfood remains the next hard proof gap.
+- Codex wake still requires a local consumer for true push into the active Codex thread.
+
+Next phase:
+
+- Dogfood a real visible Claude startup path and capture evidence. If the endpoint registry still fails to produce a new endpoint even when Claude visibly opens, focus the next refactor on first-party MCP/session identity or a stricter local launch handshake that does not require endpoint-name or endpoint-list inference.
