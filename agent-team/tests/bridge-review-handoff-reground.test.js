@@ -719,7 +719,7 @@ test("CH-3g channel ensure records visible launch marker when endpoint registry 
   }
 });
 
-test("CH-3d channel ensure prefers Codex Terminal launcher when configured", () => {
+test("CH-3d channel ensure uses Codex Terminal launcher when explicitly requested", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();
   const readyFile = path.join(cwd, "ready");
@@ -777,7 +777,12 @@ test("CH-3d channel ensure prefers Codex Terminal launcher when configured", () 
   process.env.AGENT_TEAM_CODEX_TERMINAL_LAUNCHER = fakeLauncher;
   try {
     const bridge = createBridge("claude-channel");
-    const result = bridge.ensure(cwd, { name: "codex-thread", timeout_ms: 1000, poll_ms: 10 });
+    const result = bridge.ensure(cwd, {
+      name: "codex-thread",
+      timeout_ms: 1000,
+      poll_ms: 10,
+      launch_mode: "codex-terminal"
+    });
     assert.equal(result.ok, true);
     assert.equal(result.action, "started");
     assert.equal(result.launch_mode, "codex-terminal");
@@ -926,7 +931,7 @@ test("CH-4 channel ensure renames a started endpoint to the Codex session name",
   }
 });
 
-test("CH-5 channel ensure renames an existing project endpoint before launching", () => {
+test("CH-5 channel ensure can explicitly reuse and rename an existing project endpoint", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();
   const renamedFile = path.join(cwd, "renamed");
@@ -961,9 +966,10 @@ test("CH-5 channel ensure renames an existing project endpoint before launching"
   process.env.FAKE_RENAMED = renamedFile;
   try {
     const bridge = createBridge("claude-channel");
-    const result = bridge.ensure(cwd, { name: "codex-thread", timeout_ms: 1000, poll_ms: 10 });
+    const result = bridge.ensure(cwd, { name: "codex-thread", reuse_claude: true, timeout_ms: 1000, poll_ms: 10 });
     assert.equal(result.ok, true);
     assert.equal(result.action, "renamed_reused");
+    assert.equal(result.endpoint_selection.strategy, "explicit_same_project_endpoint");
     assert.equal(result.rename.ok, true);
     assert.equal(fs.existsSync(renamedFile), true);
   } finally {

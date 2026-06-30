@@ -180,9 +180,12 @@ function waitForStartedEndpoint(cliCommand, cwd, beforeList, timeoutMs, pollMs, 
     const projectTargets = targetsFromList(latestList).filter((endpoint) => sameProject(endpoint, cwd)).sort(newestFirst);
     const newTargets = projectTargets.filter((endpoint) => !beforeIds.has(endpointTarget(endpoint)));
     const existingProjectTargets = projectTargets.filter((endpoint) => beforeIds.has(endpointTarget(endpoint)));
+    const reusableExistingTargets = options.display_name
+      ? existingProjectTargets.filter((endpoint) => endpoint.display_name === options.display_name)
+      : existingProjectTargets;
     const candidates = options.require_new
       ? newTargets
-      : [...newTargets, ...existingProjectTargets];
+      : [...newTargets, ...reusableExistingTargets];
     const checked = [];
     latestProbe = endpointLaunchProbe(cwd, beforeProjectTargets, beforeIds, latestList, candidates, checked, null, options);
     for (const endpoint of candidates) {

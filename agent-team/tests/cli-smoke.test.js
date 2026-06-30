@@ -2186,6 +2186,71 @@ test("CLI smoke: fresh Claude start does not reuse or rename an old endpoint", (
   assert.match(cockpitText, /Fresh Claude launch did not register a new same-project endpoint/);
 });
 
+test("CLI smoke: new named Claude start does not reuse unrelated same-project history", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const readyFile = path.join(cwd, "ready");
+  const renameFile = path.join(cwd, "rename-called");
+  writeExecutable(path.join(binDir, "claude-channel"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  if [ -f \"$FAKE_READY\" ]; then",
+    "    printf '%s\\n' '{\"target\":\"ep_new\",\"endpoint\":{\"endpoint_id\":\"ep_new\",\"display_name\":\"new-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "    exit 0",
+    "  fi",
+    "  printf '%s\\n' '{\"target\":\"ep_old\",\"endpoint\":{\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "  exit 0",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    "  if [ -f \"$FAKE_READY\" ]; then",
+    "    printf '%s\\n' '{\"targets\":[{\"target\":\"ep_new\",\"endpoint_id\":\"ep_new\",\"display_name\":\"new-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1,\"started_at\":\"2026-06-28T00:00:02.000Z\"},{\"target\":\"ep_old\",\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1,\"started_at\":\"2026-06-28T00:00:01.000Z\"}]}'",
+    "  else",
+    "    printf '%s\\n' '{\"targets\":[{\"target\":\"ep_old\",\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1,\"started_at\":\"2026-06-28T00:00:01.000Z\"}]}'",
+    "  fi",
+    "  exit 0",
+    "fi",
+    "if [ \"$1\" = \"rename\" ]; then",
+    "  touch \"$FAKE_RENAME_FILE\"",
+    "  exit 12",
+    "fi",
+    "exit 1"
+  ]);
+  writeExecutable(path.join(binDir, "claude"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
+    "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
+    "  exit 0",
+    "fi",
+    "touch \"$FAKE_READY\"",
+    "echo 'backgrounded - fake123 - new-thread'",
+    "exit 0"
+  ]);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    FAKE_ENDPOINT_PID: String(process.pid),
+    FAKE_READY: readyFile,
+    FAKE_RENAME_FILE: renameFile
+  };
+  const result = spawnSync(
+    process.execPath,
+    [cli, "start", "--name", "new-thread", "--timeout-ms", "1000", "--poll-ms", "10", "--launch-mode", "background"],
+    {
+      cwd,
+      env,
+      encoding: "utf8"
+    }
+  );
+  assert.equal(result.status, 0);
+  const start = JSON.parse(result.stdout);
+  assert.equal(fs.existsSync(renameFile), false);
+  assert.equal(start.claude_channel_startup.ok, true);
+  assert.equal(start.claude_channel_startup.action, "started");
+  assert.equal(start.claude_channel_startup.endpoint_selection.strategy, "launched_new_endpoint");
+  assert.equal(start.claude_channel_startup.endpoint_selection.selected_target, "ep_new");
+  assert.equal(start.claude_channel_startup.endpoint_selection.matched_display_name, true);
+});
+
 test("CLI smoke: cockpit preserves visible Claude startup proof from session history", () => {
   const cwd = tempRoot();
   const historyFile = paths.channelSessionsPath(cwd);

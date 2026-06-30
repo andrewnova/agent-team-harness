@@ -77,7 +77,7 @@ function usage() {
   return `agent-team [--cwd <harness-root>] <command>
 
 Commands:
-  start [--name <name>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--daemon] [--no-daemon] [--no-ensure-claude] [--allow-degraded-claude] [channel ensure options]
+  start [--name <name>] [--project-dir <path>] [--fresh-claude] [--reuse-claude] [--allow-cross-project-reuse] [--daemon] [--no-daemon] [--no-ensure-claude] [--allow-degraded-claude] [channel ensure options]
   init
   config
   doctor [--fix] [--target <target>] [--smoke] [--smoke-timeout-ms <ms>]
@@ -187,7 +187,7 @@ Commands:
   channel boot-ack --launch-id <id> [--name <name>] [--project-dir <path>] [--body <text>]
   channel startup-packet --launch-id <id> [--text]
   channel startup-import --launch-id <id> (--text <text>|--file <path>) [--boot-ack] [--kind checkin|reply] [--request-id <id>] [--in-reply-to <id>]
-  channel ensure [--name <name>] [--target <target>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--timeout-ms <ms>] [--poll-ms <ms>] [--launch-mode <codex-terminal|visible|pty|background>] [--codex-terminal-launcher <path>] [--visible-app <app>] [--plugin-dir <path>] [--effort <level>] [--permission-mode <mode>] [--handshake-timeout-ms <ms>] [--boot-ack-timeout-ms <ms>] [--smoke] [--smoke-timeout-ms <ms>] [--use-development-channel] [--no-chrome]
+  channel ensure [--name <name>] [--target <target>] [--project-dir <path>] [--fresh-claude] [--reuse-claude|--no-fresh-claude] [--allow-cross-project-reuse] [--timeout-ms <ms>] [--poll-ms <ms>] [--launch-mode <codex-terminal|visible|pty|background>] [--codex-terminal-launcher <path>] [--visible-app <app>] [--plugin-dir <path>] [--effort <level>] [--permission-mode <mode>] [--handshake-timeout-ms <ms>] [--boot-ack-timeout-ms <ms>] [--smoke] [--smoke-timeout-ms <ms>] [--use-development-channel] [--no-chrome]
   channel auth [login] [--claudeai|--console] [--email <email>] [--sso] [--timeout-ms <ms>]
   channel doctor [--fix] [--target <target>] [--smoke] [--smoke-timeout-ms <ms>]
   channel status [--target <target>]
@@ -292,6 +292,7 @@ function channelEnsureOptions(args) {
     target: argValue(args, "--target"),
     project_dir: argValue(args, "--project-dir"),
     fresh_claude: hasFlag(args, "--fresh-claude"),
+    reuse_claude: hasFlag(args, "--reuse-claude") || hasFlag(args, "--no-fresh-claude"),
     allow_cross_project_reuse: hasFlag(args, "--allow-cross-project-reuse"),
     timeout_ms: optionalNumberArg(args, "--timeout-ms") || optionalNumberArg(args, "--ensure-timeout-ms"),
     poll_ms: optionalNumberArg(args, "--poll-ms"),

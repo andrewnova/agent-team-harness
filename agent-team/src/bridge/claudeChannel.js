@@ -40,7 +40,6 @@ const {
 } = require("./claudeChannel/boot");
 const {
   codexSessionIdentity,
-  codexTerminalLauncher,
   defaultSessionName,
   launchBackground,
   launchCodexTerminal,
@@ -77,6 +76,17 @@ function compactEndpoint(endpoint) {
     started_at: endpoint.started_at || null,
     pid: Number.isInteger(endpoint.pid) ? endpoint.pid : null
   };
+}
+
+function endpointMatchesRequested(endpoint, parsedTarget, name, target) {
+  const resolvedTarget = endpointTarget(endpoint);
+  return Boolean(
+    resolvedTarget === target ||
+      resolvedTarget === name ||
+      parsedTarget === target ||
+      parsedTarget === name ||
+      (endpoint && endpoint.display_name === name)
+  );
 }
 
 function diagnose(cwd, options = {}) {
@@ -157,7 +167,8 @@ function ensure(cwd, options = {}) {
     strict_session_identity: strictSessionIdentity,
     remembered_target: rememberedTarget || null,
     allow_cross_project_reuse: Boolean(options.allow_cross_project_reuse),
-    fresh_claude: Boolean(options.fresh_claude)
+    fresh_claude: Boolean(options.fresh_claude),
+    reuse_claude: Boolean(options.reuse_claude)
   };
   const persist = (record) => {
     const { endpoint_selection: endpointSelection, ...rest } = record;
@@ -178,7 +189,15 @@ function ensure(cwd, options = {}) {
   const initialEndpointTarget = endpointTarget(initialEndpoint);
   const initialParsedTarget = initialStatus.parsed ? initialStatus.parsed.target : null;
   const initialMatchesRemembered = !rememberedTarget || initialEndpointTarget === rememberedTarget || initialParsedTarget === rememberedTarget;
-  if (initialStatus.ok && !options.fresh_claude && (!initialMismatch || options.allow_cross_project_reuse) && initialMatchesRemembered) {
+  const initialMatchesRequested = endpointMatchesRequested(initialEndpoint, initialParsedTarget, name, target);
+  const automaticReuseFilter = options.reuse_claude ? {} : { display_name: name };
+  if (
+    initialStatus.ok &&
+    !options.fresh_claude &&
+    (!initialMismatch || options.allow_cross_project_reuse) &&
+    initialMatchesRemembered &&
+    (options.reuse_claude || rememberedTarget || initialMatchesRequested)
+  ) {
     const smoke = options.smoke ? runSmoke(cli.command, projectCwd, target, options.smoke_timeout_ms || 120000) : null;
     return persist({
       ok: smoke ? smoke.ok : true,
@@ -188,7 +207,8 @@ function ensure(cwd, options = {}) {
         strategy: rememberedTarget ? "remembered_target_status" : "target_status",
         selected_target: initialEndpointTarget || initialParsedTarget || target,
         selected_endpoint: compactEndpoint(initialEndpoint),
-        matched_display_name: initialEndpoint && initialEndpoint.display_name === name
+        matched_display_name: initialEndpoint && initialEndpoint.display_name === name,
+        automatic_reuse_filter: options.reuse_claude ? "target" : "target_or_display_name"
       },
       remembered_endpoint: rememberedTarget
         ? { ok: true, target: rememberedTarget, endpoint: initialEndpoint, status: initialStatus }
@@ -210,11 +230,13 @@ function ensure(cwd, options = {}) {
     ? { ok: false, skipped: true, reason: "--fresh-claude" }
     : rememberedProjectEndpoint.ok
       ? rememberedProjectEndpoint
-    : findReachableProjectEndpoint(cli.command, projectCwd, beforeList, strictSessionIdentity ? { display_name: name } : {});
+      : findReachableProjectEndpoint(cli.command, projectCwd, beforeList, automaticReuseFilter);
   const reuseSource = options.fresh_claude
     ? "fresh_claude"
     : rememberedProjectEndpoint.ok
       ? "remembered_endpoint_id"
+      : options.reuse_claude
+        ? "explicit_project_endpoint"
       : "project_endpoint";
   if (reusableProjectEndpoint.ok && !options.fresh_claude) {
     let rename = null;
@@ -255,14 +277,19 @@ function ensure(cwd, options = {}) {
         strategy:
           reuseSource === "remembered_endpoint_id"
             ? "remembered_endpoint_id"
+            : reuseSource === "explicit_project_endpoint"
+              ? "explicit_same_project_endpoint"
             : strictSessionIdentity
               ? "thread_display_name_project_endpoint"
               : "same_project_endpoint",
         selected_target: finalTarget,
         selected_endpoint: compactEndpoint(reusableProjectEndpoint.endpoint),
         matched_display_name: reusableProjectEndpoint.endpoint && reusableProjectEndpoint.endpoint.display_name === name,
+        automatic_reuse_filter: options.reuse_claude ? "none" : "display_name",
         compatibility_note:
-          strictSessionIdentity && reuseSource !== "remembered_endpoint_id"
+          reuseSource === "explicit_project_endpoint"
+            ? "--reuse-claude allowed loose same-project endpoint reuse"
+            : strictSessionIdentity && reuseSource !== "remembered_endpoint_id"
             ? "strict thread identity limited endpoint reuse to matching display name"
             : null
       },
@@ -333,7 +360,7 @@ function ensure(cwd, options = {}) {
     plugin_dir: options.plugin_dir || pluginRootFromCli(cli),
     launch_id: options.launch_id || createLaunchId(name, projectCwd)
   };
-  const launchMode = options.launch_mode || (codexTerminalLauncher(launchOptions) ? "codex-terminal" : "visible");
+  const launchMode = options.launch_mode || "visible";
   launchOptions.launch_mode = launchMode;
   if (!["codex-terminal", "visible", "pty", "background"].includes(launchMode)) {
     return persist({
@@ -388,7 +415,8 @@ function ensure(cwd, options = {}) {
     ? waitForMcpInitialized(cwd, launchOptions.launch_id, handshakeWaitMs, Math.min(pollMs, 100))
     : { ok: false, reason: "mcp_start_not_recorded", launch_id: launchOptions.launch_id };
   const discovered = waitForStartedEndpoint(cli.command, projectCwd, beforeList, timeoutMs, pollMs, {
-    require_new: Boolean(options.fresh_claude)
+    require_new: Boolean(options.fresh_claude),
+    display_name: options.reuse_claude ? null : name
   });
   const bootAckWaitMs =
     launchMode === "visible" || launchMode === "codex-terminal"
@@ -481,7 +509,7 @@ function ensure(cwd, options = {}) {
       cli.command,
       projectCwd,
       listTargets(cli.command, projectCwd),
-      strictSessionIdentity ? { display_name: name } : {}
+      automaticReuseFilter
     );
     if (recoveredEndpoint.ok) {
       finalTarget = recoveredEndpoint.target;
@@ -532,6 +560,7 @@ function ensure(cwd, options = {}) {
       selected_target: finalTarget,
       selected_endpoint: compactEndpoint(endpoint),
       matched_display_name: endpoint && endpoint.display_name === name,
+      automatic_reuse_filter: options.reuse_claude ? "none" : "display_name",
       probe: discovered && discovered.probe ? discovered.probe : null
     },
     delivery_ready: deliveryReady,
