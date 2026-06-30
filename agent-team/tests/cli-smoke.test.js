@@ -767,6 +767,16 @@ test("CLI smoke: daemon queues and delivers Codex wake payloads for Claude check
   assert.equal(events.length, 1);
   assert.equal(events[0].detail.message_id, checkin.message.id);
   assert.equal(events[0].detail.result_state, "delivered");
+
+  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"], env).stdout);
+  assert.equal(cockpit.daemon.codex_wake.total, 1);
+  assert.equal(cockpit.daemon.codex_wake.delivered, 1);
+  assert.equal(cockpit.daemon.codex_wake.adapter_configured, true);
+  assert.equal(cockpit.daemon.codex_wake.recent[0].message_id, checkin.message.id);
+
+  const cockpitText = run(cwd, ["cockpit", "--no-live-channel"], env).stdout;
+  assert.match(cockpitText, /Codex wake: total=1 delivered=1/);
+  assert.match(cockpitText, /## Codex Wake Stream/);
 });
 
 test("CLI smoke: duplicate deterministic receipt ACK ids do not create cockpit noise", () => {

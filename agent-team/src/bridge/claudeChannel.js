@@ -28,6 +28,7 @@ const {
 } = require("./claudeChannel/auth");
 const { installBridge } = require("./claudeChannel/install");
 const {
+  codexSessionIdentity,
   codexTerminalLauncher,
   defaultSessionName,
   launchBackground,
@@ -87,14 +88,24 @@ function diagnose(cwd, options = {}) {
 function ensure(cwd, options = {}) {
   const cli = findCli();
   if (!cli.ok) return persistEnsure(cwd, { ok: false, action: "missing_channel_cli", reason: cli.reason });
+  const inferredDefaultName = !(options.name || options.target);
+  const identity = codexSessionIdentity();
   const name = options.name || options.target || defaultSessionName(cwd);
   const target = options.target || name;
   const projectCwd = workspaceCwd(cwd, options);
+  const strictSessionIdentity = Boolean(inferredDefaultName && identity && identity.token && !options.allow_cross_project_reuse);
   const baseRecord = {
     name,
     target,
     project_dir: projectCwd,
-    harness_cwd: path.resolve(cwd)
+    harness_cwd: path.resolve(cwd),
+    session_identity: identity
+      ? {
+          source: identity.source,
+          thread_ref: identity.token,
+          strict_project_reuse: strictSessionIdentity
+        }
+      : null
   };
   const persist = (record) => persistEnsure(cwd, { ...baseRecord, ...record });
   const timeoutMs = options.timeout_ms || 45000;
@@ -115,7 +126,9 @@ function ensure(cwd, options = {}) {
     });
   }
   const beforeList = listTargets(cli.command, projectCwd);
-  const reusableProjectEndpoint = options.fresh_claude ? { ok: false, skipped: true, reason: "--fresh-claude" } : findReachableProjectEndpoint(cli.command, projectCwd, beforeList);
+  const reusableProjectEndpoint = options.fresh_claude
+    ? { ok: false, skipped: true, reason: "--fresh-claude" }
+    : findReachableProjectEndpoint(cli.command, projectCwd, beforeList, strictSessionIdentity ? { display_name: name } : {});
   if (reusableProjectEndpoint.ok && !options.fresh_claude) {
     let rename = null;
     if (reusableProjectEndpoint.endpoint.display_name !== name) {
@@ -265,7 +278,12 @@ function ensure(cwd, options = {}) {
         : waitForReachable(cli.command, discovered.target, projectCwd, timeoutMs, pollMs);
     finalTarget = discovered.target;
   } else {
-    recoveredEndpoint = findReachableProjectEndpoint(cli.command, projectCwd, listTargets(cli.command, projectCwd));
+    recoveredEndpoint = findReachableProjectEndpoint(
+      cli.command,
+      projectCwd,
+      listTargets(cli.command, projectCwd),
+      strictSessionIdentity ? { display_name: name } : {}
+    );
     if (recoveredEndpoint.ok) {
       finalTarget = recoveredEndpoint.target;
       finalStatus = recoveredEndpoint.status;

@@ -68,7 +68,7 @@ function sendChannelRequest(cwd, row, request, cliCommand) {
     error: result.error ? result.error.message : undefined,
     timeout_ms: replyTimeoutMs || request.timeout_ms,
     note: timeout
-      ? "Claude endpoint timed out waiting for complete_channel_request; the visible Claude session may still be working."
+      ? "Claude live channel timed out waiting for an immediate ask-file reply. The durable mailbox request is still authoritative; inspect mailbox replies/check-ins or use await reply --request-id."
       : undefined
   };
 }

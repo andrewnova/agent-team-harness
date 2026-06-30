@@ -10,6 +10,7 @@ const { cockpitSnapshot } = require("../src/cockpit");
 const { recordReview, requestReview, importReview, loadReview } = require("../src/review");
 const { evaluateHandoff } = require("../src/handoff");
 const { storeReground, requestReground, importReground } = require("../src/reground");
+const { defaultSessionName } = require("../src/bridge/claudeChannel/launcher");
 const { tempRoot, backendTaskInput, frontendTaskInput, writeExecutable, withPathEnv } = require("./helpers");
 
 test("MB-1 mock adapter records request and response without live Claude", () => {
@@ -127,7 +128,8 @@ test("CH-1c live adapter keeps long-form timeout responses recoverable", () => {
     assert.equal(request.response.result_state, "timeout_pending");
     assert.equal(request.response.timeout_ms, 1800000);
     assert.equal(responses[0].result_state, "timeout_pending");
-    assert.match(responses[0].note, /may still be working/);
+    assert.match(responses[0].note, /durable mailbox request is still authoritative/);
+    assert.doesNotMatch(responses[0].note, /complete_channel_request/);
   } finally {
     process.env.PATH = previousPath;
   }
@@ -210,6 +212,79 @@ test("CH-2b channel status rejects non-json success output", () => {
     assert.equal(result.parsed, null);
   } finally {
     process.env.PATH = previousPath;
+  }
+});
+
+test("CH-2c default Claude session name is Codex-thread scoped and avoids unrelated same-project reuse", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const readyFile = path.join(cwd, "ready");
+  const fakeCli = path.join(binDir, "claude-channel");
+  const fakeClaude = path.join(binDir, "claude");
+  const threadId = "019f0fc3-3dd8-75c0-b15c-09fcb96bd921";
+  const expectedName = defaultSessionName(cwd, { CODEX_THREAD_ID: threadId });
+  assert.match(expectedName, /^codex-.+-019f0fc3-3d/);
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  if [ -f \"$FAKE_READY\" ] && { [ \"$3\" = \"$FAKE_EXPECTED_NAME\" ] || [ \"$3\" = \"ep_thread\" ]; }; then",
+    "    echo '{\"target\":\"ep_thread\",\"endpoint\":{\"endpoint_id\":\"ep_thread\",\"display_name\":\"'$FAKE_EXPECTED_NAME'\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "    exit 0",
+    "  fi",
+    "  echo '{\"reachable\":false,\"health\":{\"ok\":false}}'",
+    "  exit 1",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    "  if [ -f \"$FAKE_READY\" ]; then",
+    "    echo '{\"targets\":[{\"target\":\"ep_thread\",\"endpoint_id\":\"ep_thread\",\"display_name\":\"'$FAKE_EXPECTED_NAME'\",\"project_dir\":\"'$PWD'\",\"started_at\":\"2026-06-28T00:00:02.000Z\"}]}'",
+    "  else",
+    "    echo '{\"targets\":[{\"target\":\"ep_old\",\"endpoint_id\":\"ep_old\",\"display_name\":\"codex-old-thread\",\"project_dir\":\"'$PWD'\",\"started_at\":\"2026-06-28T00:00:01.000Z\"}]}'",
+    "  fi",
+    "  exit 0",
+    "fi",
+    "exit 1"
+  ]);
+  writeExecutable(fakeClaude, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
+    "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
+    "  exit 0",
+    "fi",
+    "touch \"$FAKE_READY\"",
+    "echo 'backgrounded - fake123 - '$FAKE_EXPECTED_NAME",
+    "exit 0"
+  ]);
+  const previousPath = process.env.PATH;
+  const previousReady = process.env.FAKE_READY;
+  const previousExpected = process.env.FAKE_EXPECTED_NAME;
+  const previousThread = process.env.CODEX_THREAD_ID;
+  const previousName = process.env.AGENT_TEAM_CLAUDE_NAME;
+  process.env.PATH = `${binDir}:${previousPath}`;
+  process.env.FAKE_READY = readyFile;
+  process.env.FAKE_EXPECTED_NAME = expectedName;
+  process.env.CODEX_THREAD_ID = threadId;
+  delete process.env.AGENT_TEAM_CLAUDE_NAME;
+  try {
+    const bridge = createBridge("claude-channel");
+    const result = bridge.ensure(cwd, { timeout_ms: 1000, poll_ms: 10, launch_mode: "background" });
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "started");
+    assert.equal(result.name, expectedName);
+    assert.equal(result.session_identity.thread_ref, "019f0fc3-3dd");
+    assert.equal(result.session_identity.strict_project_reuse, true);
+    assert.equal(result.skipped_reuse, null);
+    assert.equal(result.background.name, expectedName);
+    assert.equal(result.endpoint.display_name, expectedName);
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousReady === undefined) delete process.env.FAKE_READY;
+    else process.env.FAKE_READY = previousReady;
+    if (previousExpected === undefined) delete process.env.FAKE_EXPECTED_NAME;
+    else process.env.FAKE_EXPECTED_NAME = previousExpected;
+    if (previousThread === undefined) delete process.env.CODEX_THREAD_ID;
+    else process.env.CODEX_THREAD_ID = previousThread;
+    if (previousName === undefined) delete process.env.AGENT_TEAM_CLAUDE_NAME;
+    else process.env.AGENT_TEAM_CLAUDE_NAME = previousName;
   }
 });
 

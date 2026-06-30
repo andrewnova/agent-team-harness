@@ -114,6 +114,7 @@ function channelSession(cwd) {
     target: session.target,
     project_dir: session.project_dir,
     harness_cwd: session.harness_cwd,
+    session_identity: session.session_identity,
     launch_mode: session.launch_mode,
     delivery_ready: session.delivery_ready,
     visible_loaded: session.visible_loaded,
@@ -262,6 +263,53 @@ function channelQueues(cwd, tasks = []) {
   };
 }
 
+function codexWakeLogPath(cwd) {
+  return path.join(paths.commsDir(cwd), "codex-wake", "wake.jsonl");
+}
+
+function codexWakeState(cwd) {
+  const wakeLogPath = codexWakeLogPath(cwd);
+  const rows = exists(wakeLogPath) ? readJsonl(wakeLogPath) : [];
+  const events = state.listEvents(cwd, { type: "daemon.codex_push_attempted", limit: 100 });
+  const queuedEvents = state.listEvents(cwd, { type: "daemon.codex_push_queued", limit: 100 });
+  const latestByMessage = new Map();
+  for (const event of [...queuedEvents, ...events]) {
+    const messageId = event.detail && event.detail.message_id;
+    if (messageId) latestByMessage.set(messageId, event);
+  }
+  const delivered = Array.from(latestByMessage.values()).filter((event) => event.detail && event.detail.result_state === "delivered").length;
+  const failed = Array.from(latestByMessage.values()).filter((event) => event.detail && event.detail.result_state === "failed").length;
+  const queuedNoAdapter = Array.from(latestByMessage.values()).filter(
+    (event) => event.detail && event.detail.result_state === "queued_no_adapter"
+  ).length;
+  const queuedPushDisabled = Array.from(latestByMessage.values()).filter(
+    (event) => event.detail && event.detail.result_state === "queued_push_disabled"
+  ).length;
+  return {
+    stream_path: path.relative(cwd, wakeLogPath),
+    adapter_configured: Boolean(process.env.AGENT_TEAM_CODEX_WAKE_COMMAND),
+    adapter_command: process.env.AGENT_TEAM_CODEX_WAKE_COMMAND || null,
+    total: rows.length,
+    delivered,
+    failed,
+    queued_no_adapter: queuedNoAdapter,
+    queued_push_disabled: queuedPushDisabled,
+    recent: rows.slice(-5).map((row) => ({
+      wake_id: row.wake_id,
+      message_id: row.message_id,
+      from: row.from,
+      to: row.to,
+      kind: row.kind,
+      task_id: row.task_id,
+      goal_id: row.goal_id,
+      subject: row.subject,
+      payload_path: row.payload_path,
+      created_at: row.created_at,
+      result_state: latestByMessage.get(row.message_id)?.detail?.result_state || "queued"
+    }))
+  };
+}
+
 function mailboxState(cwd, tasks = []) {
   const diagnostics = mailboxDiagnostics(cwd);
   const messages = listMessages(cwd);
@@ -382,6 +430,12 @@ function topNextActions(mode, goals, activeTasks, plans, claude, blockers = [], 
   if (daemon && !daemon.running) {
     actions.push("Start the receiver daemon for fast mailbox routing: daemon start --roles codex,claude --include-existing");
   }
+  if (daemon?.codex_wake?.queued_no_adapter) {
+    actions.push(`Configure AGENT_TEAM_CODEX_WAKE_COMMAND or inspect ${daemon.codex_wake.stream_path}; ${daemon.codex_wake.queued_no_adapter} Codex wake payload(s) are queued without a local adapter`);
+  }
+  if (daemon?.codex_wake?.failed) {
+    actions.push(`Inspect failed Codex wake adapter delivery in ${daemon.codex_wake.stream_path}`);
+  }
   if (mailbox?.diagnostics?.malformed_total) {
     actions.push(`Repair mailbox JSONL corruption before importing replies: ${mailbox.diagnostics.malformed_total} malformed row(s)`);
   }
@@ -459,6 +513,7 @@ function cockpitSnapshot(cwd, options = {}) {
   const pendingRefactorOffers = listRefactorOffers(cwd, { status: "offered", limit: 5 });
   const mailbox = mailboxState(cwd, tasks);
   const daemon = daemonStatus(cwd);
+  const codexWake = codexWakeState(cwd);
   const session = channelSession(cwd);
   const target = options.target || (session && (session.target || session.name));
   const channelCwd = (session && session.project_dir) || cwd;
@@ -619,6 +674,7 @@ function cockpitSnapshot(cwd, options = {}) {
       stale_pid: daemon.stale_pid,
       pid_record: daemon.pid_record,
       session_push: daemon.session_push,
+      codex_wake: codexWake,
       active_runs: daemon.active_runs.map((run) => ({
         run_id: run.run_id,
         status: run.status,
@@ -632,7 +688,20 @@ function cockpitSnapshot(cwd, options = {}) {
     },
     claude_channel: claude,
     latest_events: events,
-    next_actions: topNextActions(mode, goals, activeTasks, plans, claude, blockers, notices, pendingCheckins, pendingSelfHeal, pendingRefactorOffers, mailbox, daemon)
+    next_actions: topNextActions(
+      mode,
+      goals,
+      activeTasks,
+      plans,
+      claude,
+      blockers,
+      notices,
+      pendingCheckins,
+      pendingSelfHeal,
+      pendingRefactorOffers,
+      mailbox,
+      { ...daemon, codex_wake: codexWake }
+    )
   };
 }
 
@@ -662,7 +731,7 @@ function renderCockpit(snapshot) {
         : "last-known-not-ready"
     : "no-session";
   const channelLine = channel
-    ? `${channelState} action=${channel.action || "unknown"} target=${channel.target || channel.name || "unknown"} reply=${channel.reply_ready}`
+    ? `${channelState} action=${channel.action || "unknown"} target=${channel.target || channel.name || "unknown"}${channel.session_identity && channel.session_identity.thread_ref ? ` identity=${channel.session_identity.thread_ref}` : ""} reply=${channel.reply_ready}`
     : "no session yet";
   const runtimeLine = liveChecked
     ? `live-ok=${liveOk}${presenceOk ? " presence=loaded" : ""}${runtime && runtime.status_kind ? ` status=${runtime.status_kind}` : ""}`
@@ -685,6 +754,7 @@ function renderCockpit(snapshot) {
     `Claude agents: ${agentsLine}`,
     `Receiver daemon: ${snapshot.daemon.running ? "running" : "not-running"} active-runs=${snapshot.daemon.active_runs.length}${snapshot.daemon.stale_pid ? " stale-pid=true" : ""}`,
     `Session push: ${snapshot.daemon.session_push && snapshot.daemon.session_push.native_model_ui_push ? "native" : "mailbox-daemon"} fallback=${snapshot.daemon.session_push ? snapshot.daemon.session_push.fallback_waiter : "await reply --request-id <id>"}`,
+    `Codex wake: total=${snapshot.daemon.codex_wake.total} delivered=${snapshot.daemon.codex_wake.delivered} queued-no-adapter=${snapshot.daemon.codex_wake.queued_no_adapter} failed=${snapshot.daemon.codex_wake.failed} adapter=${snapshot.daemon.codex_wake.adapter_configured ? "configured" : "missing"} stream=${snapshot.daemon.codex_wake.stream_path}`,
     `Queues: requests=${snapshot.claude_channel.queues.requests} responses=${snapshot.claude_channel.queues.responses} pending=${snapshot.claude_channel.queues.pending.length}${snapshot.claude_channel.queues.stale_completed_pending ? ` completed-stale=${snapshot.claude_channel.queues.stale_completed_pending}` : ""}`,
     `Mailbox: total=${snapshot.mailbox.total} codex-unread=${snapshot.mailbox.codex_unread} claude-unread=${snapshot.mailbox.claude_unread} pending-receipts=${snapshot.mailbox.pending_receipt_ack} pending-replies=${snapshot.mailbox.pending_reply_required}${snapshot.mailbox.stale_completed_unread || snapshot.mailbox.stale_completed_receipt_ack || snapshot.mailbox.stale_completed_reply_required ? ` completed-stale=${snapshot.mailbox.stale_completed_unread + snapshot.mailbox.stale_completed_receipt_ack + snapshot.mailbox.stale_completed_reply_required}` : ""}${snapshot.mailbox.duplicate_receipt_acks_collapsed ? ` receipt-duplicates-collapsed=${snapshot.mailbox.duplicate_receipt_acks_collapsed}` : ""} malformed=${snapshot.mailbox.diagnostics.malformed_total}`,
     `Tasks: total=${snapshot.tasks.total} ${statusParts || "none"}`,
@@ -756,6 +826,12 @@ function renderCockpit(snapshot) {
     ...(snapshot.daemon.active_runs.length
       ? snapshot.daemon.active_runs.map((run) => `- ${run.run_id} [${run.status}] ${run.title} roles=${(run.metadata && run.metadata.roles || []).join(",") || "unknown"}`)
       : [`- ${snapshot.daemon.running ? "Running without active run record" : "Not running"}`]),
+    "",
+    "## Codex Wake Stream",
+    "",
+    ...(snapshot.daemon.codex_wake.recent.length
+      ? snapshot.daemon.codex_wake.recent.map((wake) => `- ${wake.message_id}${wake.task_id ? ` ${wake.task_id}` : ""} ${wake.from}->${wake.to}/${wake.kind} ${wake.result_state}: ${wake.subject || wake.payload_path}`)
+      : [`- No wake payloads yet (${snapshot.daemon.codex_wake.stream_path})`]),
     "",
     "## Claude Pending Inbox",
     "",

@@ -27,5 +27,7 @@ test("README explains daemon-backed mailbox delegation", () => {
   assert.match(readme, /immediately wakes the visible Claude channel/);
   assert.match(readme, /queues Codex wake payloads/);
   assert.match(readme, /AGENT_TEAM_CODEX_WAKE_COMMAND/);
+  assert.match(readme, /cockpit` and `agent-team watch` show Codex wake totals/);
+  assert.match(readme, /CODEX_THREAD_ID/);
   assert.match(readme, /short wake-up copy; the mailbox reply remains the completion truth/);
 });

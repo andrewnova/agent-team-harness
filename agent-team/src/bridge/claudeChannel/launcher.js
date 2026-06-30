@@ -57,8 +57,28 @@ const DEFAULT_TEAMMATE_QUICKSTART = [
   "If the CLI, skill, plugin, mailbox, browser proof, or coordination workflow hiccups, keep the main task moving when safe and record a self-heal recommendation."
 ].join("\n");
 
-function defaultSessionName(cwd) {
-  return process.env.AGENT_TEAM_CLAUDE_NAME || `codex-${path.basename(cwd)}`;
+function safeNameToken(value, max = 24) {
+  return String(value || "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, max);
+}
+
+function codexSessionIdentity(env = process.env) {
+  const value = env.AGENT_TEAM_SESSION_ID || env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "";
+  if (!value) return null;
+  return {
+    value,
+    token: safeNameToken(value, 12),
+    source: env.AGENT_TEAM_SESSION_ID ? "AGENT_TEAM_SESSION_ID" : env.CODEX_THREAD_ID ? "CODEX_THREAD_ID" : "CODEX_SESSION_ID"
+  };
+}
+
+function defaultSessionName(cwd, env = process.env) {
+  if (env.AGENT_TEAM_CLAUDE_NAME) return env.AGENT_TEAM_CLAUDE_NAME;
+  const base = safeNameToken(path.basename(cwd), 32) || "project";
+  const identity = codexSessionIdentity(env);
+  return identity && identity.token ? `codex-${base}-${identity.token}` : `codex-${base}`;
 }
 
 function teammateQuickstartPath(harnessRoot) {
@@ -344,6 +364,7 @@ module.exports = {
   DEFAULT_TEAMMATE_QUICKSTART,
   defaultCliPath,
   defaultSessionName,
+  codexSessionIdentity,
   startupPrompt,
   teammateQuickstartPath,
   teammateQuickstartBlock,

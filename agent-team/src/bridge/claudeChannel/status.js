@@ -198,8 +198,9 @@ function waitForStartedEndpoint(cliCommand, cwd, beforeList, timeoutMs, pollMs) 
   return { ok: false, status: latestStatus, list: latestList };
 }
 
-function findReachableProjectEndpoint(cliCommand, cwd, listResult) {
-  const projectTargets = targetsFromList(listResult).filter((endpoint) => sameProject(endpoint, cwd)).sort(newestFirst);
+function findReachableProjectEndpoint(cliCommand, cwd, listResult, options = {}) {
+  let projectTargets = targetsFromList(listResult).filter((endpoint) => sameProject(endpoint, cwd)).sort(newestFirst);
+  if (options.display_name) projectTargets = projectTargets.filter((endpoint) => endpoint.display_name === options.display_name);
   for (const endpoint of projectTargets) {
     const target = endpointTarget(endpoint);
     if (!target) continue;
