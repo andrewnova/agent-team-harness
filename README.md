@@ -174,7 +174,13 @@ If a visible shell launch is recorded but Claude does not boot-ACK, generate the
 agent-team channel startup-packet --launch-id launch_... --text
 ```
 
-The packet includes the exact `channel boot-ack` command and manual recovery instructions. It does not bypass mailbox, review, merge, proof, or done gates.
+The packet includes the exact `channel boot-ack` command and manual recovery instructions. If Claude cannot run the command but gives you a status or error in chat, import that pasted text back into the same durable mailbox:
+
+```bash
+agent-team channel startup-import --launch-id launch_... --text "Claude pasted status or error"
+```
+
+Use `--file <path>` for longer replies, `--boot-ack` when the pasted reply is a valid startup ACK, and `--kind reply --request-id <id>` only when the pasted text is answering a specific mailbox request. Startup import records either a boot ACK or a Claude-to-Codex mailbox check-in/reply. It does not bypass mailbox, review, merge, proof, or done gates.
 
 Claude can manually or automatically acknowledge a boot prompt with:
 

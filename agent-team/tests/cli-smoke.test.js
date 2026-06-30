@@ -2281,6 +2281,75 @@ test("CLI smoke: channel startup-packet renders copy-paste Claude recovery packe
   assert.equal(fs.existsSync(paths.channelStartupPacketPath(cwd, "launch_test_packet")), true);
 });
 
+test("CLI smoke: channel startup-import records pasted Claude startup status in mailbox", () => {
+  const cwd = tempRoot();
+  const historyFile = paths.channelSessionsPath(cwd);
+  fs.mkdirSync(path.dirname(historyFile), { recursive: true });
+  fs.appendFileSync(
+    historyFile,
+    `${JSON.stringify({
+      ok: false,
+      action: "fresh_start_no_new_endpoint",
+      name: "fresh-thread",
+      project_dir: cwd,
+      harness_cwd: cwd,
+      launch_id: "launch_test_import",
+      updated_at: "2026-06-30T10:25:00.000Z"
+    })}\n`
+  );
+
+  const imported = JSON.parse(
+    run(cwd, [
+      "channel",
+      "startup-import",
+      "--launch-id",
+      "launch_test_import",
+      "--text",
+      "Claude visible session opened, but MCP init failed before the boot ACK command could run."
+    ]).stdout
+  );
+  assert.equal(imported.ok, true);
+  assert.equal(imported.mode, "checkin");
+  assert.equal(imported.launch_id, "launch_test_import");
+  const message = JSON.parse(run(cwd, ["mailbox", "show", imported.mailbox_message_id]).stdout).message;
+  assert.equal(message.from, "claude");
+  assert.equal(message.to, "codex");
+  assert.equal(message.kind, "checkin");
+  assert.equal(message.metadata.channel_startup_import, true);
+  assert.equal(message.metadata.launch_id, "launch_test_import");
+  assert.match(message.subject, /Claude startup check-in: fresh-thread/);
+  assert.match(message.body, /MCP init failed/);
+  const cockpit = JSON.parse(run(cwd, ["watch", "--once", "--json", "--no-live-channel"]).stdout);
+  assert.equal(cockpit.mailbox.codex_inbox.some((row) => row.id === imported.mailbox_message_id), true);
+});
+
+test("CLI smoke: channel startup-import records pasted boot ACK through boot ack log", () => {
+  const cwd = tempRoot();
+  const imported = JSON.parse(
+    run(cwd, [
+      "channel",
+      "startup-import",
+      "--launch-id",
+      "launch_test_ack",
+      "--name",
+      "fresh-thread",
+      "--text",
+      "ACK Agent Team quickstart loaded; mailbox is truth."
+    ]).stdout
+  );
+  assert.equal(imported.ok, true);
+  assert.equal(imported.mode, "boot_ack");
+  assert.equal(imported.launch_id, "launch_test_ack");
+  const bootAcks = fs.readFileSync(paths.channelBootAcksPath(cwd), "utf8");
+  assert.match(bootAcks, /launch_test_ack/);
+  assert.match(bootAcks, /startup-import/);
+  const message = JSON.parse(run(cwd, ["mailbox", "show", imported.mailbox_message_id]).stdout).message;
+  assert.equal(message.kind, "checkin");
+  assert.equal(message.metadata.channel_boot_ack, true);
+  assert.equal(message.metadata.channel_startup_import, true);
+  assert.match(message.body, /mailbox is truth/);
+});
+
 test("CLI smoke: start can launch Claude from an explicit project directory", () => {
   const cwd = tempRoot();
   const projectDir = tempRoot();

@@ -61,7 +61,7 @@ const { daemonStatus, startDaemon, stopDaemon, runDaemon } = require("./daemon")
 const { installClaudeMcp, statusClaudeMcp } = require("./mcp/claudeInstall");
 const { installCodexMcp, statusCodexMcp } = require("./mcp/codexInstall");
 const { recordBootAck, recordLaunchMarker } = require("./bridge/claudeChannel/boot");
-const { createStartupPacket } = require("./bridge/claudeChannel/startupPacket");
+const { createStartupPacket, importStartupReply } = require("./bridge/claudeChannel/startupPacket");
 const {
   appendMessage,
   appendMessagesBatch,
@@ -186,6 +186,7 @@ Commands:
   channel launch-marker --launch-id <id> [--name <name>] [--project-dir <path>] [--mode <mode>]
   channel boot-ack --launch-id <id> [--name <name>] [--project-dir <path>] [--body <text>]
   channel startup-packet --launch-id <id> [--text]
+  channel startup-import --launch-id <id> (--text <text>|--file <path>) [--boot-ack] [--kind checkin|reply] [--request-id <id>] [--in-reply-to <id>]
   channel ensure [--name <name>] [--target <target>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--timeout-ms <ms>] [--poll-ms <ms>] [--launch-mode <codex-terminal|visible|pty|background>] [--codex-terminal-launcher <path>] [--visible-app <app>] [--plugin-dir <path>] [--effort <level>] [--permission-mode <mode>] [--handshake-timeout-ms <ms>] [--boot-ack-timeout-ms <ms>] [--smoke] [--smoke-timeout-ms <ms>] [--approved-channel] [--no-chrome]
   channel auth [login] [--claudeai|--console] [--email <email>] [--sso] [--timeout-ms <ms>]
   channel doctor [--fix] [--target <target>] [--smoke] [--smoke-timeout-ms <ms>]
@@ -1728,6 +1729,24 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     } else {
       print(result);
     }
+    return 0;
+  }
+  if (command === "channel" && subcommand === "startup-import") {
+    const result = importStartupReply(cwd, {
+      launch_id: argValue(rest, "--launch-id"),
+      body: textArg(cwd, rest, "--text", "--file", ""),
+      boot_ack: hasFlag(rest, "--boot-ack"),
+      kind: argValue(rest, "--kind"),
+      subject: argValue(rest, "--subject"),
+      name: argValue(rest, "--name"),
+      project_dir: argValue(rest, "--project-dir"),
+      goal_id: argValue(rest, "--goal"),
+      task_id: argValue(rest, "--task"),
+      run_id: argValue(rest, "--run"),
+      request_id: argValue(rest, "--request-id"),
+      in_reply_to: argValue(rest, "--in-reply-to")
+    });
+    print(result);
     return 0;
   }
   if (command === "channel" && subcommand === "auth") {

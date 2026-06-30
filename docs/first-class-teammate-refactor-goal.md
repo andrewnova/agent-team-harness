@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 14 active visible startup prompt, MCP init recording, and startup-packet recovery verified; Phase 15 should finish fallback import/session registry cleanup
+Status: Active refactor charter; Phase 15 startup fallback import implemented; next focus is visible Terminal MCP/boot-ACK auto-handshake and first-party session registry cleanup
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -1172,3 +1172,49 @@ Next phase:
 
 - Implement fallback import for startup packets and Claude pasted replies so manual recovery is a full workflow, not just a packet.
 - Investigate the visible Terminal launch path to determine why MCP init and boot ACK did not land during dogfood, then demote endpoint guessing behind first-party session registry and ACK state wherever possible.
+
+### 2026-06-30 - Phase 15 Startup Fallback Import
+
+What changed:
+
+- Added `channel startup-import --launch-id <id> (--text <text>|--file <path>)` as the matching import half of `channel startup-packet`.
+- `startup-import` records a pasted Claude startup ACK through the durable boot ACK path and also writes the Claude-to-Codex mailbox check-in that cockpit already understands.
+- `startup-import` records pasted Claude startup status/errors as a normal Claude-to-Codex mailbox `checkin` by default.
+- `startup-import --kind reply --request-id <id>` can deliberately import a pasted startup response as a mailbox `reply` only when a request correlation key is provided.
+- Boot ACK mailbox records can now carry request/task/goal/run correlation and startup-import metadata without changing the default `channel boot-ack` behavior.
+- README and the installed skill contract now tell operators to import pasted Claude status/error text instead of leaving fallback recovery outside the mailbox.
+
+Why it changed:
+
+- Phase 14 made fallback packet generation first-class, but the workflow still ended with human copy/paste unless Claude successfully ran the boot ACK command.
+- The production-grade fallback should round-trip back into the durable mailbox with the same cockpit/wake/await behavior as any other Claude message.
+- A pasted startup error is not a task result, review approval, proof, or done gate. It should be visible and importable without mutating canonical task state.
+
+Files touched:
+
+- `agent-team/src/bridge/claudeChannel/boot.js`
+- `agent-team/src/bridge/claudeChannel/startupPacket.js`
+- `agent-team/src/cli.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/cli-smoke.test.js --test-name-pattern "startup-packet|startup-import"` from repo root: CLI smoke file ran and 63 tests passed, including both new startup-import cases.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+- `npm test` from `agent-team/`: 129 tests passed.
+
+Remaining architectural discomfort:
+
+- Manual fallback is now a full mailbox workflow, but it still relies on a human copying Claude's pasted status/error text when the visible session does not auto-ACK.
+- The visible Terminal launch path still needs a focused investigation: Phase 14 dogfood opened Claude visibly but did not produce MCP init or boot ACK.
+- Endpoint readiness remains part of live steering readiness; the intended first-party session registry/ACK state is not yet the dominant routing truth.
+
+Next phase:
+
+- Investigate whether the visible Terminal launch prompt is being submitted to Claude and whether the first-party MCP server loads in that exact launch path.
+- Start demoting legacy endpoint-list readiness behind first-party session registry, MCP init, and boot ACK state where that can be done without losing compatibility diagnostics.

@@ -58,10 +58,16 @@ function recordBootAck(cwd, input = {}) {
   const mailbox = appendMessage(cwd, {
     from: "claude",
     to: "codex",
-    kind: "checkin",
+    kind: input.kind || "checkin",
     subject: `Claude boot ACK: ${ack.name || ack.launch_id}`,
     body: ack.body,
+    task_id: input.task_id || input.task,
+    goal_id: input.goal_id || input.goal,
+    run_id: input.run_id || input.run,
+    request_id: input.request_id,
+    in_reply_to: input.in_reply_to,
     metadata: {
+      ...(input.metadata || {}),
       channel_boot_ack: true,
       launch_id: ack.launch_id,
       project_dir: ack.project_dir,
