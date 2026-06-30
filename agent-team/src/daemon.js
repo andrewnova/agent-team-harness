@@ -1,15 +1,20 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const paths = require("./paths");
-const { ensureDir, exists, readJson, writeJson } = require("./fsutil");
+const { ensureDir, exists, readJson, writeJson, writeText } = require("./fsutil");
 const state = require("./state");
 const { appendMessage, listMessages, watchInbox, compactMessage } = require("./mailbox");
+const { findCli, parseJsonOutput, shellQuote } = require("./bridge/claudeChannel/utils");
+const { isReplyTimeout } = require("./bridge/claudeChannel/request");
 
 const DEFAULT_ROLES = ["codex", "claude"];
 const RECEIPT_ACK_KIND = "receipt_ack";
 const RESPONSE_KINDS = new Set(["reply", RECEIPT_ACK_KIND]);
 const ACK_EXEMPT_KINDS = new Set(["heartbeat", ...RESPONSE_KINDS]);
+const LIVE_PUSH_TIMEOUT_MS = 1200;
+const LIVE_PUSH_TRANSPORT_TIMEOUT_MS = 4000;
+const LIVE_PUSH_SENT_STATES = new Set(["answered", "needs_user", "declined", "wake_sent_reply_pending", "wake_sent"]);
 
 function normalizeRoles(value) {
   if (!value) return DEFAULT_ROLES;
@@ -54,6 +59,215 @@ function semanticAckInstruction(message) {
     "Answer the question if one was asked; otherwise name the blocker or next checkpoint.",
     `Use --kind reply --request-id ${requestId} --in-reply-to ${message.id}.`
   ].join(" ");
+}
+
+function livePushRequired(message, semantic) {
+  return Boolean(message && message.to === "claude" && semantic);
+}
+
+function livePushEnabled(options = {}) {
+  return options.live_push !== false && process.env.AGENT_TEAM_DAEMON_LIVE_PUSH !== "0";
+}
+
+function safeFileToken(value) {
+  return String(value || "message").replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 120);
+}
+
+function livePushPromptPath(cwd, message) {
+  return path.join(paths.rootDir(cwd), "comms", "claude-channel", `wake-${safeFileToken(message.id)}.md`);
+}
+
+function readMessageBody(cwd, message) {
+  if (message.body_path) {
+    const file = path.join(cwd, message.body_path);
+    return exists(file) ? fs.readFileSync(file, "utf8") : "";
+  }
+  return message.body_inline || "";
+}
+
+function mailboxReplyCommand(cwd, message) {
+  const cliPath = path.join(__dirname, "cli.js");
+  const requestId = message.request_id || message.id;
+  return [
+    shellQuote(process.execPath),
+    shellQuote(cliPath),
+    "--cwd",
+    shellQuote(cwd),
+    "mailbox",
+    "send",
+    "--from",
+    "claude",
+    "--to",
+    "codex",
+    "--kind",
+    "reply",
+    "--request-id",
+    shellQuote(requestId),
+    "--in-reply-to",
+    shellQuote(message.id),
+    "--subject",
+    shellQuote("ACK: received"),
+    "--body",
+    shellQuote("<ACK: received. I will do X next. Answer/blocker: ...>")
+  ].join(" ");
+}
+
+function livePushPrompt(cwd, message) {
+  return [
+    "A durable Agent Team mailbox request has just been queued for you by Codex.",
+    "This live channel message is a real-time wake-up copy only; the mailbox is the source of truth.",
+    "",
+    `Mailbox message id: ${message.id}`,
+    `Mailbox request id: ${message.request_id || message.id}`,
+    `Task: ${message.task_id || "none"}`,
+    `Goal: ${message.goal_id || "none"}`,
+    `Kind: ${message.request_kind || message.kind}`,
+    `Subject: ${message.subject || "(none)"}`,
+    "",
+    "Required action:",
+    "1. Send a mailbox reply/ACK immediately so Codex can see you are actually active.",
+    "2. Continue the requested work visibly in Claude Code.",
+    "3. Send check-ins through the mailbox during long work.",
+    "",
+    `Reply command shape: ${mailboxReplyCommand(cwd, message)}`,
+    "",
+    "Mailbox request body:",
+    readMessageBody(cwd, message)
+  ].join("\n");
+}
+
+function readChannelSession(cwd) {
+  const file = paths.channelSessionPath(cwd);
+  if (!exists(file)) return null;
+  try {
+    return readJson(file);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function isEndpointId(value) {
+  return /^ep_[A-Za-z0-9]+$/.test(String(value || ""));
+}
+
+function sessionEndpointId(session) {
+  if (!session) return null;
+  if (session.endpoint && isEndpointId(session.endpoint.endpoint_id)) return session.endpoint.endpoint_id;
+  if (session.endpoint && isEndpointId(session.endpoint.target)) return session.endpoint.target;
+  if (isEndpointId(session.target)) return session.target;
+  return null;
+}
+
+function livePushTarget(message, session) {
+  if (isEndpointId(message.target)) return message.target;
+  const endpointId = sessionEndpointId(session);
+  if (endpointId) return endpointId;
+  return message.target || (session && session.target) || (session && session.name) || null;
+}
+
+function livePushAlreadySent(cwd, message) {
+  return state
+    .listEvents(cwd, { type: "daemon.live_push_attempted" })
+    .some((event) => event.detail && event.detail.message_id === message.id && LIVE_PUSH_SENT_STATES.has(event.detail.result_state));
+}
+
+function classifyLivePushResult(result, parsed) {
+  if (parsed && parsed.status) return parsed.status;
+  if (result.status === 0) return "wake_sent";
+  if (isReplyTimeout(result.stderr, result.error ? result.error.message : undefined)) return "wake_sent_reply_pending";
+  return "failed";
+}
+
+function attemptClaudeLivePush(cwd, runId, message, semantic, options = {}) {
+  if (!livePushRequired(message, semantic)) return { required: false };
+  if (!livePushEnabled(options)) {
+    return {
+      required: true,
+      attempted: false,
+      skipped: true,
+      reason: "live push disabled"
+    };
+  }
+  if (livePushAlreadySent(cwd, message)) {
+    return {
+      required: true,
+      attempted: false,
+      skipped: true,
+      reason: "live push already sent for this mailbox message"
+    };
+  }
+  const session = readChannelSession(cwd);
+  if (!session) {
+    const detail = {
+      required: true,
+      attempted: false,
+      skipped: true,
+      reason: "no Claude channel session recorded",
+      message_id: message.id,
+      request_id: message.request_id,
+      task_id: message.task_id,
+      goal_id: message.goal_id
+    };
+    recordDaemonEvent(cwd, runId, "daemon.live_push_skipped", detail);
+    return detail;
+  }
+  const cli = findCli();
+  if (!cli.ok) {
+    const detail = {
+      required: true,
+      attempted: false,
+      skipped: true,
+      reason: cli.reason,
+      message_id: message.id,
+      request_id: message.request_id,
+      task_id: message.task_id,
+      goal_id: message.goal_id
+    };
+    recordDaemonEvent(cwd, runId, "daemon.live_push_skipped", detail);
+    return detail;
+  }
+  const promptPath = livePushPromptPath(cwd, message);
+  writeText(promptPath, livePushPrompt(cwd, message));
+  const target = livePushTarget(message, session);
+  const args = [
+    "ask-file",
+    promptPath,
+    "--output",
+    "json",
+    "--sender",
+    "agent-team-daemon",
+    "--no-progress",
+    "--timeout-ms",
+    String(options.live_push_timeout_ms || LIVE_PUSH_TIMEOUT_MS)
+  ];
+  if (target) args.push("--to", target);
+  const result = spawnSync(cli.command, args, {
+    cwd,
+    encoding: "utf8",
+    timeout: options.live_push_transport_timeout_ms || LIVE_PUSH_TRANSPORT_TIMEOUT_MS
+  });
+  const parsed = parseJsonOutput((result.stdout || "").trim());
+  const detail = {
+    required: true,
+    attempted: true,
+    message_id: message.id,
+    request_id: message.request_id,
+    task_id: message.task_id,
+    goal_id: message.goal_id,
+    target,
+    channel_path: cli.path,
+    prompt_path: path.relative(cwd, promptPath),
+    timeout_ms: options.live_push_timeout_ms || LIVE_PUSH_TIMEOUT_MS,
+    result_state: classifyLivePushResult(result, parsed),
+    channel_request_id: parsed && parsed.request_id,
+    status: parsed && parsed.status,
+    exit_code: result.status,
+    stdout: parsed ? undefined : (result.stdout || "").trim().slice(0, 800),
+    stderr: (result.stderr || "").trim().slice(0, 800),
+    error: result.error ? result.error.message : undefined
+  };
+  recordDaemonEvent(cwd, runId, "daemon.live_push_attempted", detail);
+  return detail;
 }
 
 function findReceiptAck(cwd, message) {
@@ -159,6 +373,7 @@ function handleMessages(cwd, runId, messages, options = {}) {
   for (const message of messages) {
     const semantic = semanticAckRequired(message);
     const receiptAck = ensureReceiptAck(cwd, runId, message, semantic);
+    const livePush = attemptClaudeLivePush(cwd, runId, message, semantic, options);
     const detail = {
       message_id: message.id,
       from: message.from,
@@ -173,6 +388,7 @@ function handleMessages(cwd, runId, messages, options = {}) {
       receipt_ack_created: receiptAck.created,
       semantic_ack_required: semantic,
       semantic_ack_instruction: semantic ? semanticAckInstruction(message) : undefined,
+      live_push: livePush.required ? livePush : undefined,
       task_id: message.task_id,
       goal_id: message.goal_id
     };
@@ -182,7 +398,8 @@ function handleMessages(cwd, runId, messages, options = {}) {
       ...compactMessage(message),
       receipt_ack: receiptAck,
       semantic_ack_required: semantic,
-      semantic_ack_instruction: detail.semantic_ack_instruction
+      semantic_ack_instruction: detail.semantic_ack_instruction,
+      live_push: livePush.required ? livePush : undefined
     });
   }
   if (options.onMessages && handled.length) options.onMessages(handled);
@@ -211,8 +428,9 @@ function daemonStatus(cwd) {
     active_runs,
     session_push: {
       native_model_ui_push: false,
-      reason: "Codex/Claude native chat panes do not expose a stable bidirectional push API to the harness.",
-      mailbox_push: "receiver daemon + mailbox watch/cockpit",
+      live_channel_wake: true,
+      reason: "Codex/Claude native chat panes do not expose a stable bidirectional push API; the receiver daemon wakes visible Claude through claude-channel when a Claude-bound mailbox request lands.",
+      mailbox_push: "durable mailbox is truth; receiver daemon immediately attempts live Claude wake for Claude-bound semantic requests",
       fallback_waiter: "await reply --request-id <id>"
     },
     log_path: paths.daemonLogPath(cwd),
@@ -432,5 +650,6 @@ module.exports = {
   findReceiptAck,
   semanticAckRequired,
   semanticAckInstruction,
-  processAlive
+  processAlive,
+  attemptClaudeLivePush
 };

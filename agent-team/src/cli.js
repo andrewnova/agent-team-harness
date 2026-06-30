@@ -181,7 +181,7 @@ Commands:
   channel status [--target <target>]
   channel ask --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>]
   channel dispatch --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>] [--goal <goal>]
-  channel steer --kind <kind> --task <task> (--prompt <text>|--file <path>) [--subject <text>] [--target <target>] [--timeout-ms <ms>] [--goal <goal>] [--no-live]
+  channel steer --kind <kind> --task <task> (--prompt <text>|--file <path>) [--subject <text>] [--target <target>] [--timeout-ms <ms>] [--goal <goal>] [--raw-live]
   watch [--once] [--json] [--target <target>] [--limit <n>] [--interval-ms <ms>] [--no-live-channel]
   cockpit [--json] [--target <target>] [--limit <n>] [--no-live-channel]
   board
@@ -1684,9 +1684,9 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     let live = {
       ok: false,
       skipped: true,
-      reason: "--no-live"
+      reason: "daemon-live-wake"
     };
-    if (!hasFlag(rest, "--no-live")) {
+    if (hasFlag(rest, "--raw-live")) {
       try {
         const liveAdapter = createBridge("claude-channel");
         live = compactLiveChannelResult(

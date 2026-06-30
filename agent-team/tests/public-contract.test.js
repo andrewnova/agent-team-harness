@@ -22,5 +22,6 @@ test("README explains daemon-backed mailbox delegation", () => {
 
   assert.match(readme, /The receiver daemon is the bridge/);
   assert.match(readme, /Do not delegate real Claude work through raw `ask_claude`/);
-  assert.match(readme, /raw live channel is for health checks, smoke tests, and low-level diagnostics only/);
+  assert.match(readme, /immediately wakes the visible Claude channel/);
+  assert.match(readme, /short wake-up copy; the mailbox reply remains the completion truth/);
 });

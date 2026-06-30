@@ -606,6 +606,101 @@ test("CLI smoke: daemon one-shot observes both inboxes, receipts advisory notes,
   assert.equal(receiptAcksAfterRepeat.length, 2);
 });
 
+test("CLI smoke: daemon wakes live Claude when a Claude-bound mailbox request lands", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const argsFile = path.join(cwd, "claude-channel-args.txt");
+  const promptCopy = path.join(cwd, "claude-channel-prompt.md");
+  const fakeCli = path.join(binDir, "claude-channel");
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "printf '%s\\n' \"$@\" > \"$FAKE_ARGS_FILE\"",
+    "if [ \"$1\" = \"ask-file\" ]; then",
+    "  cp \"$2\" \"$FAKE_PROMPT_COPY\"",
+    "  echo 'timed out waiting for Claude Code reply' >&2",
+    "  exit 1",
+    "fi",
+    "exit 1"
+  ]);
+  const env = {
+    ...process.env,
+    AGENT_TEAM_CHANNEL_CLI: fakeCli,
+    FAKE_ARGS_FILE: argsFile,
+    FAKE_PROMPT_COPY: promptCopy
+  };
+  run(cwd, ["init"], env);
+  const sessionFile = path.join(cwd, ".agent-team", "comms", "claude-channel", "session.json");
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  fs.writeFileSync(
+    sessionFile,
+    JSON.stringify(
+      {
+        ok: true,
+        target: "codex-thread",
+        name: "codex-thread",
+        endpoint: {
+          endpoint_id: "ep_exact",
+          display_name: "codex-thread"
+        },
+        delivery_ready: true
+      },
+      null,
+      2
+    )
+  );
+  const request = JSON.parse(
+    run(
+      cwd,
+      [
+        "mailbox",
+        "send",
+        "--from",
+        "codex",
+        "--to",
+        "claude",
+        "--kind",
+        "request",
+        "--task",
+        "T-000123",
+        "--subject",
+        "Visible wake proof",
+        "--body",
+        "Please ACK through mailbox and keep working visibly.",
+        "--reply-required"
+      ],
+      env
+    ).stdout
+  );
+
+  const daemon = JSON.parse(run(cwd, ["daemon", "run", "--once", "--roles", "claude"], env).stdout);
+  assert.equal(daemon.ok, true);
+  assert.equal(daemon.once, true);
+  assert.equal(daemon.messages.length, 1);
+  assert.equal(daemon.messages[0].id, request.message.id);
+  assert.equal(daemon.messages[0].live_push.required, true);
+  assert.equal(daemon.messages[0].live_push.attempted, true);
+  assert.equal(daemon.messages[0].live_push.target, "ep_exact");
+  assert.equal(daemon.messages[0].live_push.result_state, "wake_sent_reply_pending");
+
+  const args = fs.readFileSync(argsFile, "utf8").trim().split(/\r?\n/);
+  assert.equal(args[0], "ask-file");
+  assert.deepEqual(args.slice(args.indexOf("--timeout-ms"), args.indexOf("--timeout-ms") + 2), [
+    "--timeout-ms",
+    "1200"
+  ]);
+  assert.deepEqual(args.slice(args.indexOf("--to"), args.indexOf("--to") + 2), ["--to", "ep_exact"]);
+  const prompt = fs.readFileSync(promptCopy, "utf8");
+  assert.match(prompt, new RegExp(request.message.id));
+  assert.match(prompt, /real-time wake-up copy only/);
+  assert.match(prompt, /Reply command shape:/);
+  assert.match(prompt, /Please ACK through mailbox/);
+
+  const events = JSON.parse(run(cwd, ["events", "--type", "daemon.live_push_attempted"], env).stdout).events;
+  assert.equal(events.length, 1);
+  assert.equal(events[0].detail.message_id, request.message.id);
+  assert.equal(events[0].detail.result_state, "wake_sent_reply_pending");
+});
+
 test("CLI smoke: duplicate deterministic receipt ACK ids do not create cockpit noise", () => {
   const cwd = tempRoot();
   run(cwd, ["init"]);
@@ -1524,14 +1619,17 @@ test("CLI smoke: start can launch Claude from an explicit project directory", ()
     "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
     "  exit 0",
     "fi",
+    "printf '%s\\n' \"$@\" > \"$FAKE_ARGS_FILE\"",
     "touch \"$FAKE_READY\"",
     "echo 'backgrounded - fake123 - codex-thread'",
     "exit 0"
   ]);
+  const argsFile = path.join(projectDir, "claude-args.txt");
   const env = {
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
-    FAKE_READY: readyFile
+    FAKE_READY: readyFile,
+    FAKE_ARGS_FILE: argsFile
   };
   const start = JSON.parse(
     run(
@@ -1559,6 +1657,10 @@ test("CLI smoke: start can launch Claude from an explicit project directory", ()
   assert.equal(start.claude_channel_startup.harness_cwd, fs.realpathSync.native(cwd));
   assert.equal(start.claude_channel_startup.command.env.CLAUDE_CHANNEL_PROJECT_DIR, fs.realpathSync.native(projectDir));
   assert.equal(start.claude_channel.project_dir, fs.realpathSync.native(projectDir));
+  const launchArgs = fs.readFileSync(argsFile, "utf8");
+  assert.equal(launchArgs.includes(cli), true);
+  assert.equal(launchArgs.includes(fs.realpathSync.native(cwd)), true);
+  assert.equal(launchArgs.includes(path.join(projectDir, "agent-team", "src", "cli.js")), false);
   const cockpit = JSON.parse(run(cwd, ["cockpit", "--json"], env).stdout);
   assert.equal(cockpit.claude_channel.session.project_dir, fs.realpathSync.native(projectDir));
   assert.equal(cockpit.claude_channel.session.harness_cwd, fs.realpathSync.native(cwd));

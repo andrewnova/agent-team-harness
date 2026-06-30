@@ -85,9 +85,13 @@ function teammateQuickstartBlock(harnessRoot) {
   ].join("\n");
 }
 
+function defaultCliPath() {
+  return path.resolve(__dirname, "..", "..", "cli.js");
+}
+
 function startupPrompt(name, cwd, options = {}) {
   const harnessRoot = path.resolve(options.harness_cwd || options.harness_root || cwd);
-  const cliPath = path.join(harnessRoot, "agent-team", "src", "cli.js");
+  const cliPath = path.resolve(options.cli_path || defaultCliPath());
   const cliCommand = `${shellQuote(process.execPath)} ${shellQuote(cliPath)} --cwd ${shellQuote(harnessRoot)}`;
   const quickstart = teammateQuickstartBlock(harnessRoot);
   return [
@@ -338,6 +342,7 @@ function launchPty(claude, cwd, name, options) {
 
 module.exports = {
   DEFAULT_TEAMMATE_QUICKSTART,
+  defaultCliPath,
   defaultSessionName,
   startupPrompt,
   teammateQuickstartPath,
