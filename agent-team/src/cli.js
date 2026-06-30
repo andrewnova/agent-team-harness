@@ -393,6 +393,66 @@ function claudeStartupBlocksStart(startArgs, claudeStartup) {
   return claudeStartup.ok === false;
 }
 
+function quotedArgs(command) {
+  return command.map((part) => `'${String(part).replace(/'/g, "'\\''")}'`).join(" ");
+}
+
+function claudeStartupNextStep(claudeStartup, startArgs = []) {
+  if (!claudeStartup || claudeStartup.skipped || claudeStartup.ok !== false) return null;
+  const target = claudeStartup.name || claudeStartup.target || argValue(startArgs, "--name") || argValue(startArgs, "--target") || "codex-agent-team-harness";
+  const baseNode = [process.execPath, __filename];
+  if (claudeStartup.action === "claude_auth_required") {
+    return {
+      kind: "claude_auth_required",
+      blocking: true,
+      reason: claudeStartup.reason || "Claude Code auth is not logged in or cannot be verified",
+      command: claudeStartup.auth_help?.harness_command || quotedArgs([...baseNode, "channel", "auth", "login", "--claudeai"]),
+      after_success: quotedArgs([...baseNode, "start", "--name", target, "--daemon", "--smoke"]),
+      directive: "Run the auth helper before doing Claude-dependent planning, review, or UI work."
+    };
+  }
+  if (claudeStartup.action === "missing_channel_cli" || claudeStartup.action === "missing_claude_cli") {
+    return {
+      kind: claudeStartup.action,
+      blocking: true,
+      reason: claudeStartup.reason || "Claude bridge startup dependency is missing",
+      command: quotedArgs([...baseNode, "doctor", "--fix", "--target", target]),
+      after_success: quotedArgs([...baseNode, "start", "--name", target, "--daemon", "--smoke"]),
+      directive: "Repair the bridge before doing Claude-dependent planning, review, or UI work."
+    };
+  }
+  if (claudeStartup.action === "fresh_start_no_new_endpoint") {
+    return {
+      kind: "fresh_start_no_new_endpoint",
+      blocking: true,
+      reason: claudeStartup.reason || "A fresh visible Claude launch did not register a new same-project endpoint",
+      command: claudeStartup.launch_id
+        ? quotedArgs([...baseNode, "channel", "startup-packet", "--launch-id", claudeStartup.launch_id, "--text"])
+        : quotedArgs([...baseNode, "channel", "doctor", "--fix", "--target", target]),
+      after_success: quotedArgs([...baseNode, "start", "--name", target, "--daemon", "--smoke"]),
+      directive: "Recover the visible Claude startup before treating the task as delegated."
+    };
+  }
+  if (String(claudeStartup.action || "").includes("smoke_failed")) {
+    return {
+      kind: "claude_reply_not_ready",
+      blocking: true,
+      reason: "A Claude endpoint is reachable, but Claude did not complete the required semantic smoke reply.",
+      command: quotedArgs([...baseNode, "channel", "status", "--target", claudeStartup.target || target]),
+      after_success: "Use mailbox-backed plan/review/channel steer and await reply; do not treat endpoint reachability as Claude confirmation.",
+      directive: "Fix or verify the live reply path before claiming Claude confirmed the work."
+    };
+  }
+  return {
+    kind: claudeStartup.action || "claude_startup_failed",
+    blocking: true,
+    reason: claudeStartup.reason || "Claude startup failed",
+    command: quotedArgs([...baseNode, "channel", "doctor", "--fix", "--target", target]),
+    after_success: quotedArgs([...baseNode, "start", "--name", target, "--daemon", "--smoke"]),
+    directive: "Resolve the Claude startup blocker before doing Claude-dependent work."
+  };
+}
+
 function redactChannelDiagnostics(value) {
   if (Array.isArray(value)) return value.map(redactChannelDiagnostics);
   if (!value || typeof value !== "object") {
@@ -604,6 +664,7 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     const root = initResult.root;
     const config = initResult.config || state.loadConfig(cwd);
     const claudeStartup = startClaude(cwd, startArgs);
+    const claudeBlocker = claudeStartupBlocksStart(startArgs, claudeStartup) ? claudeStartupNextStep(claudeStartup, startArgs) : null;
     const shouldStartDaemon = !hasFlag(startArgs, "--no-daemon") && (hasFlag(startArgs, "--daemon") || process.env.AGENT_TEAM_START_DAEMON === "1");
     const receiver = shouldStartDaemon
       ? startDaemon(cwd, {
@@ -632,24 +693,27 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
         parallelism_policy: config.parallelism_policy
       },
       claude_channel_startup: claudeStartup,
+      blocked_next_step: claudeBlocker,
       claude_channel: channelSessionForStart(cwd, claudeStartup),
       receiver_daemon: receiver,
-      prompt_user: goals.length === 0 && tasks.length === 0,
-      question: "Do you want Planning Mode or Dev Mode?",
-      modes: [
-        {
-          id: "planning",
-          label: "Planning Mode",
-          use_when: "starting a new project, unclear scope, or needing Codex and Claude to shape the plan before tasks exist",
-          next_command: "goal new"
-        },
-        {
-          id: "dev",
-          label: "Dev Mode",
-          use_when: "tasks already exist or the user wants execution, review, proof, handoff, and done gates now",
-          next_command: "watch"
-        }
-      ],
+      prompt_user: goals.length === 0 && tasks.length === 0 && !claudeBlocker,
+      question: claudeBlocker ? null : "Do you want Planning Mode or Dev Mode?",
+      modes: claudeBlocker
+        ? []
+        : [
+            {
+              id: "planning",
+              label: "Planning Mode",
+              use_when: "starting a new project, unclear scope, or needing Codex and Claude to shape the plan before tasks exist",
+              next_command: "goal new"
+            },
+            {
+              id: "dev",
+              label: "Dev Mode",
+              use_when: "tasks already exist or the user wants execution, review, proof, handoff, and done gates now",
+              next_command: "watch"
+            }
+          ],
       state: {
         goals: goals.length,
         tasks: tasks.length,

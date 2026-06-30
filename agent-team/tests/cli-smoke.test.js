@@ -2660,6 +2660,13 @@ test("CLI smoke: start does not expose stale raw channel diagnostics after start
   const start = JSON.parse(result.stdout);
   assert.equal(start.claude_channel_startup.action, "claude_auth_required");
   assert.equal(start.claude_channel, null);
+  assert.equal(start.prompt_user, false);
+  assert.equal(start.question, null);
+  assert.deepEqual(start.modes, []);
+  assert.equal(start.blocked_next_step.kind, "claude_auth_required");
+  assert.equal(start.blocked_next_step.blocking, true);
+  assert.match(start.blocked_next_step.command, /'channel' 'auth' 'login'/);
+  assert.match(start.blocked_next_step.directive, /Run the auth helper/);
   assert.equal(JSON.stringify(start).includes(".claude-channel/token"), false);
   assert.equal(JSON.stringify(start).includes("secret-token"), false);
   assert.match(start.claude_channel_startup.auth_help.harness_command, /'channel' 'auth' 'login'/);
