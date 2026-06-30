@@ -19,10 +19,11 @@ function packageVersion() {
 
 function serverInstructions() {
   return [
-    "Agent Team Harness is mailbox-first.",
-    "The durable mailbox is the source of truth; Claude Channel notifications are live wake-up projections only.",
-    "Use agent_team_ack, agent_team_reply, and agent_team_checkin to write back to Codex.",
-    "Do not treat notification delivery or a tool call as a task-state transition. Codex remains proof and final-state authority."
+    "Agent Team Harness is mailbox-first. The mailbox is the source of truth. The sender is Codex, not this Claude transcript.",
+    "Anything Codex must see has to go through the reply, agent_team_reply, agent_team_ack, or agent_team_checkin tools; ordinary transcript text is not delivered to Codex.",
+    "Messages from Codex arrive as <channel source=\"agent-team\" sender=\"codex\" chat_id=\"agent-team\" message_id=\"...\" user=\"codex\" ts=\"...\" request_id=\"...\" task_id=\"...\" goal_id=\"...\" reply_required=\"true|false\">.",
+    "For reply_required=\"true\" messages, call the reply tool before finishing with text plus the message_id and request_id from the channel tag, or call agent_team_reply/agent_team_ack with the same ids.",
+    "Use agent_team_checkin for progress or blockers. Do not treat notification delivery or a tool call as a task-state transition. Codex remains proof and final-state authority."
   ].join(" ");
 }
 
@@ -32,6 +33,27 @@ function serverName(options = {}) {
 
 function toolDefinitions() {
   return [
+    {
+      name: "reply",
+      description:
+        "Reply to Codex for an inbound Agent Team channel message. Pass text plus message_id/request_id from the <channel> tag.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "Reply body Codex should receive." },
+          body: { type: "string", description: "Alias for text." },
+          message_id: { type: "string", description: "Mailbox message id from the inbound channel tag." },
+          in_reply_to: { type: "string", description: "Mailbox message id being answered." },
+          request_id: { type: "string", description: "Harness request id from the inbound channel tag." },
+          chat_id: { type: "string", description: "Channel chat id; pass through from the inbound tag when present." },
+          subject: { type: "string" },
+          task_id: { type: "string" },
+          goal_id: { type: "string" },
+          run_id: { type: "string" }
+        },
+        required: ["text"]
+      }
+    },
     {
       name: "agent_team_ack",
       description: "Acknowledge a mailbox message and optionally write the real reply Codex needs.",
@@ -130,24 +152,46 @@ function bodyForMessage(cwd, message) {
 function notificationText(cwd, message) {
   const body = bodyForMessage(cwd, message);
   return [
-    "A durable Agent Team mailbox message is ready for you.",
-    "Mailbox is the source of truth; this Claude Channel notification is only the visible wake-up copy.",
+    "Codex sent an Agent Team mailbox message.",
+    "This channel message is the visible wake-up copy; mailbox is the source of truth.",
     "",
+    `Reply required: ${message.reply_required ? "true" : "false"}`,
+    `Request id: ${message.request_id || "(none)"}`,
     `Mailbox message id: ${message.id}`,
-    `From: ${message.from}`,
-    `To: ${message.to}`,
-    `Kind: ${message.request_kind || message.kind}`,
     `Task: ${message.task_id || "(none)"}`,
     `Goal: ${message.goal_id || "(none)"}`,
-    `Request id: ${message.request_id || "(none)"}`,
-    `Reply required: ${message.reply_required ? "yes" : "no"}`,
     `Subject: ${message.subject || "(none)"}`,
     "",
-    "Use agent_team_ack, agent_team_reply, or agent_team_checkin to respond through the mailbox.",
+    message.reply_required
+      ? `Action: call reply with message_id="${message.id}", request_id="${message.request_id || ""}", and text="ACK: received. ...".`
+      : `Action: call agent_team_ack with message_id="${message.id}" if this needs a receipt, or agent_team_checkin for useful status.`,
     "",
     "Body:",
     body || "(empty)"
   ].join("\n");
+}
+
+function channelMetaForMessage(message, options = {}) {
+  return {
+    channel: String(options.channel || CHANNEL_ID),
+    chat_id: String(options.chat_id || CHANNEL_ID),
+    message_id: String(message.id || ""),
+    mailbox_message_id: String(message.id || ""),
+    request_id: String(message.request_id || ""),
+    task_id: String(message.task_id || ""),
+    goal_id: String(message.goal_id || ""),
+    run_id: String(message.run_id || ""),
+    kind: String(message.request_kind || message.kind || ""),
+    sender: String(message.from || "codex"),
+    user: String(message.from || "codex"),
+    to: String(message.to || "claude"),
+    subject: String(message.subject || ""),
+    reply_required: message.reply_required ? "true" : "false",
+    ts: new Date().toISOString(),
+    received_at: new Date().toISOString(),
+    source: "agent-team-daemon",
+    mailbox_truth: "true"
+  };
 }
 
 function channelNotification(cwd, message, options = {}) {
@@ -156,16 +200,7 @@ function channelNotification(cwd, message, options = {}) {
     method: "notifications/claude/channel",
     params: {
       content: notificationText(cwd, message),
-      meta: {
-        channel: String(options.channel || CHANNEL_ID),
-        source: "agent-team-daemon",
-        mailbox_message_id: String(message.id || ""),
-        request_id: String(message.request_id || ""),
-        task_id: String(message.task_id || ""),
-        goal_id: String(message.goal_id || ""),
-        kind: String(message.request_kind || message.kind || ""),
-        mailbox_truth: "true"
-      }
+      meta: channelMetaForMessage(message, options)
     }
   };
 }
@@ -191,8 +226,12 @@ function listDeliveredNotifications(cwd) {
   return readJsonlSafe(paths.claudeMcpDeliveriesPath(cwd));
 }
 
-function deliveredNotificationIds(cwd) {
-  return new Set(listDeliveredNotifications(cwd).map((row) => row.notification_id));
+function deliveredNotificationIds(cwd, consumerId = null) {
+  return new Set(
+    listDeliveredNotifications(cwd)
+      .filter((row) => !consumerId || row.consumer_id === consumerId)
+      .map((row) => row.notification_id)
+  );
 }
 
 function queueChannelNotification(cwd, message, options = {}) {
@@ -253,31 +292,34 @@ function queueChannelNotification(cwd, message, options = {}) {
   };
 }
 
-function markNotificationDelivered(cwd, row) {
+function markNotificationDelivered(cwd, row, options = {}) {
   appendJsonl(paths.claudeMcpDeliveriesPath(cwd), {
     notification_id: row.notification_id,
     message_id: row.message_id,
     task_id: row.task_id,
     goal_id: row.goal_id,
+    consumer_id: options.consumer_id || null,
+    emitter_pid: process.pid,
     delivered_at: new Date().toISOString(),
     result_state: "mcp_emitted"
   });
 }
 
-function deliverQueuedNotifications(cwd, onNotification) {
+function deliverQueuedNotifications(cwd, onNotification, options = {}) {
   state.init(cwd);
   ensureDir(paths.claudeMcpDir(cwd));
-  const delivered = deliveredNotificationIds(cwd);
+  const delivered = deliveredNotificationIds(cwd, options.consumer_id || null);
   const rows = listQueuedNotifications(cwd).filter((row) => !delivered.has(row.notification_id));
   const emitted = [];
   for (const row of rows) {
     onNotification(row.notification, row);
-    markNotificationDelivered(cwd, row);
+    markNotificationDelivered(cwd, row, options);
     emitted.push({
       notification_id: row.notification_id,
       message_id: row.message_id,
       task_id: row.task_id,
-      goal_id: row.goal_id
+      goal_id: row.goal_id,
+      consumer_id: options.consumer_id || null
     });
   }
   return {
@@ -291,12 +333,13 @@ function watchChannelOutbox(cwd, onNotification, options = {}) {
   state.init(cwd);
   ensureDir(paths.claudeMcpDir(cwd));
   const intervalMs = options.interval_ms || 1000;
+  const consumerId = options.consumer_id || null;
   let closed = false;
   let watcher = null;
   let timer = null;
 
   const pump = () => {
-    if (!closed) deliverQueuedNotifications(cwd, onNotification);
+    if (!closed) deliverQueuedNotifications(cwd, onNotification, { consumer_id: consumerId });
   };
 
   if (options.include_existing !== false) pump();
@@ -345,7 +388,48 @@ function compactMailboxResult(result) {
   };
 }
 
+function findMessageByRequestId(cwd, requestId) {
+  if (!requestId) return null;
+  return (
+    listMessages(cwd, {
+      to: "claude",
+      request_id: requestId
+    })[0] || null
+  );
+}
+
+function originalMessageForReply(cwd, args = {}) {
+  const messageId = args.message_id || args.in_reply_to;
+  if (messageId) {
+    const message = loadMessage(cwd, messageId, { include_body: false });
+    if (message) return message;
+  }
+  return findMessageByRequestId(cwd, args.request_id);
+}
+
+function appendClaudeReply(cwd, args = {}) {
+  const original = originalMessageForReply(cwd, args);
+  const body = required(args.body || args.text, "body");
+  return appendMessage(cwd, {
+    from: "claude",
+    to: "codex",
+    kind: "reply",
+    subject: args.subject || "Claude reply",
+    body,
+    in_reply_to: args.in_reply_to || args.message_id || original?.id,
+    request_id: args.request_id || original?.request_id,
+    task_id: args.task_id || original?.task_id,
+    goal_id: args.goal_id || original?.goal_id,
+    run_id: args.run_id || original?.run_id,
+    request_kind: original?.request_kind
+  });
+}
+
 function callTool(cwd, name, args = {}) {
+  if (name === "reply") {
+    return toolResponse(compactMailboxResult(appendClaudeReply(cwd, args)));
+  }
+
   if (name === "agent_team_ack") {
     const messageId = required(args.message_id, "message_id");
     const message = loadMessage(cwd, messageId, { include_body: true });
@@ -375,19 +459,7 @@ function callTool(cwd, name, args = {}) {
   }
 
   if (name === "agent_team_reply") {
-    const result = appendMessage(cwd, {
-      from: "claude",
-      to: "codex",
-      kind: "reply",
-      subject: args.subject || "Claude reply",
-      body: required(args.body, "body"),
-      in_reply_to: args.in_reply_to,
-      request_id: args.request_id,
-      task_id: args.task_id,
-      goal_id: args.goal_id,
-      run_id: args.run_id
-    });
-    return toolResponse(compactMailboxResult(result));
+    return toolResponse(compactMailboxResult(appendClaudeReply(cwd, args)));
   }
 
   if (name === "agent_team_checkin") {
@@ -436,6 +508,7 @@ module.exports = {
   toolDefinitions,
   initializeResult,
   notificationText,
+  channelMetaForMessage,
   channelNotification,
   queueChannelNotification,
   listQueuedNotifications,

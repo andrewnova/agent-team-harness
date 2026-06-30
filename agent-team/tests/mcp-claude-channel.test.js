@@ -29,12 +29,15 @@ test("Claude MCP channel declares the Agent Team channel and reply tools", () =>
   assert.equal(init.serverInfo.name, "agent-team-claude");
   assert.deepEqual(init.capabilities.experimental["claude/channel"], {});
   assert.match(init.instructions, /mailbox is the source of truth/i);
+  assert.match(init.instructions, /reply_required="true\|false"/);
+  assert.match(init.instructions, /call the reply tool before finishing/i);
 
   const tools = toolDefinitions();
   assert.deepEqual(
     tools.map((tool) => tool.name),
-    ["agent_team_ack", "agent_team_reply", "agent_team_checkin", "agent_team_status", "agent_team_open_task"]
+    ["reply", "agent_team_ack", "agent_team_reply", "agent_team_checkin", "agent_team_status", "agent_team_open_task"]
   );
+  assert.equal(tools.find((tool) => tool.name === "reply").inputSchema.required[0], "text");
   assert.equal(tools.find((tool) => tool.name === "agent_team_reply").inputSchema.required[0], "body");
 });
 
@@ -53,11 +56,17 @@ test("Claude MCP channel notification preserves mailbox identity and body", () =
   const notification = channelNotification(cwd, message);
   assert.equal(notification.method, "notifications/claude/channel");
   assert.equal(notification.params.meta.channel, CHANNEL_ID);
+  assert.equal(notification.params.meta.chat_id, CHANNEL_ID);
+  assert.equal(notification.params.meta.message_id, message.id);
+  assert.equal(notification.params.meta.sender, "codex");
+  assert.equal(notification.params.meta.user, "codex");
   assert.equal(notification.params.meta.mailbox_message_id, message.id);
+  assert.equal(notification.params.meta.reply_required, "false");
   assert.equal(notification.params.meta.mailbox_truth, "true");
+  assert.match(notification.params.meta.received_at, /^\d{4}-\d{2}-\d{2}T/);
   const text = notification.params.content;
   assert.match(text, new RegExp(message.id));
-  assert.match(text, /Mailbox is the source of truth/);
+  assert.match(text, /mailbox is the source of truth/i);
   assert.match(text, /test 123/);
 });
 
@@ -94,6 +103,32 @@ test("Claude MCP outbox queues and delivers channel notifications exactly once",
     throw new Error("should not emit already delivered notification");
   });
   assert.equal(second.count, 0);
+});
+
+test("Claude MCP outbox emits once per MCP consumer process", () => {
+  const cwd = tempRoot();
+  const message = appendMessage(cwd, {
+    from: "codex",
+    to: "claude",
+    kind: "notify",
+    subject: "Consumer race",
+    body: "every consumer should see this once"
+  }).message;
+  queueChannelNotification(cwd, message);
+
+  const first = deliverQueuedNotifications(cwd, () => {}, { consumer_id: "launch:pid-1" });
+  const sameConsumerAgain = deliverQueuedNotifications(cwd, () => {}, { consumer_id: "launch:pid-1" });
+  const secondConsumer = deliverQueuedNotifications(cwd, () => {}, { consumer_id: "launch:pid-2" });
+
+  assert.equal(first.count, 1);
+  assert.equal(sameConsumerAgain.count, 0);
+  assert.equal(secondConsumer.count, 1);
+  const deliveries = listDeliveredNotifications(cwd);
+  assert.equal(deliveries.length, 2);
+  assert.deepEqual(
+    deliveries.map((row) => row.consumer_id).sort(),
+    ["launch:pid-1", "launch:pid-2"]
+  );
 });
 
 test("Claude MCP tools write ACKs, replies, and check-ins through durable mailbox", () => {
@@ -152,6 +187,37 @@ test("Claude MCP tools write ACKs, replies, and check-ins through durable mailbo
   assert.equal(loadMessage(cwd, replies[1].id, { include_body: true }).body, "Approved.");
 });
 
+test("Claude MCP reply alias writes a mailbox reply keyed by channel metadata", () => {
+  const cwd = tempRoot();
+  const request = appendMessage(cwd, {
+    from: "codex",
+    to: "claude",
+    kind: "request",
+    subject: "Visible steering",
+    body: "ACK this.",
+    request_id: "req_visible",
+    reply_required: true,
+    task_id: "T-000123",
+    goal_id: "G-000123"
+  }).message;
+
+  const reply = parseToolResponse(
+    callTool(cwd, "reply", {
+      message_id: request.id,
+      request_id: "req_visible",
+      text: "ACK: received through first-party MCP.",
+      chat_id: CHANNEL_ID
+    })
+  );
+
+  assert.equal(reply.ok, true);
+  assert.equal(reply.message.kind, "reply");
+  assert.equal(reply.message.in_reply_to, request.id);
+  assert.equal(reply.message.request_id, "req_visible");
+  assert.equal(reply.message.task_id, "T-000123");
+  assert.equal(reply.message.goal_id, "G-000123");
+});
+
 test("Claude MCP stdio server initializes, lists tools, and writes mailbox messages", () => {
   const cwd = tempRoot();
   const server = path.join(__dirname, "..", "src", "mcp", "claudeServer.js");
@@ -179,7 +245,7 @@ test("Claude MCP stdio server initializes, lists tools, and writes mailbox messa
   const decoded = decodeFrames(result.stdout);
   assert.equal(decoded.messages.length, 3);
   assert.equal(decoded.messages[0].result.serverInfo.name, "agent-team-claude");
-  assert.equal(decoded.messages[1].result.tools.length, 5);
+  assert.equal(decoded.messages[1].result.tools.length, 6);
   assert.match(decoded.messages[2].result.content[0].text, /test 123/);
 
   const checkins = listMessages(cwd, { from: "claude", to: "codex", kind: "checkin" });
@@ -233,6 +299,8 @@ test("Claude MCP stdio server waits for initialized before emitting queued Agent
   assert.equal(initialize.result.protocolVersion, "2024-11-05");
   assert.equal(initialize.result.serverInfo.name, "agent-team-claude-launch-mcp-test");
   assert.equal(notification.params.meta.mailbox_message_id, message.id);
+  assert.equal(notification.params.meta.sender, "codex");
+  assert.equal(notification.params.meta.reply_required, "false");
   assert.match(notification.params.content, /hello visible Claude/);
   assert.equal(listDeliveredNotifications(cwd).length, 1);
   const starts = readJsonl(paths.channelMcpStartsPath(cwd)).filter((row) => row.launch_id === "launch_mcp_test");

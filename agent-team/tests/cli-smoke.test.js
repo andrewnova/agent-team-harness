@@ -662,6 +662,8 @@ test("CLI smoke: channel steer default blocks when visible Claude delivery is un
   assert.equal(steer.blocking_next_step.request_id, steer.durable_ack.request_id);
   assert.equal(steer.blocking_next_step.mailbox_message_id, steer.durable_ack.mailbox_message_id);
   assert.match(steer.blocking_next_step.await_reply_command, new RegExp(steer.durable_ack.request_id));
+  assert.match(steer.blocking_next_step.visible_recovery_command, /channel recover-visible/);
+  assert.match(steer.blocking_next_step.visible_recovery_command, new RegExp(steer.durable_ack.request_id));
   assert.match(steer.next.codex, /first-party Claude MCP wake is queued\/emitted/);
 
   const emitted = deliverQueuedNotifications(cwd, () => {});
@@ -669,6 +671,110 @@ test("CLI smoke: channel steer default blocks when visible Claude delivery is un
   const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"]).stdout);
   assert.equal(cockpit.daemon.claude_mcp.mcp_emitted, 1);
   assert.equal(cockpit.mailbox.pending_reply_required, 1);
+});
+
+test("CLI smoke: channel recover-visible launches a fresh visible recovery prompt for the exact mailbox request", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const readyFile = path.join(cwd, "ready");
+  const argsFile = path.join(cwd, "claude-args.txt");
+  writeExecutable(path.join(binDir, "claude-channel"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  if [ -f \"$FAKE_READY\" ]; then",
+    "    echo '{\"target\":\"recover-thread\",\"endpoint\":{\"endpoint_id\":\"ep_recover\",\"display_name\":\"recover-thread\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "    exit 0",
+    "  fi",
+    "  echo '{\"reachable\":false,\"health\":{\"ok\":false}}'",
+    "  exit 1",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    "  if [ -f \"$FAKE_READY\" ]; then",
+    "    echo '{\"targets\":[{\"target\":\"ep_recover\",\"endpoint_id\":\"ep_recover\",\"display_name\":\"recover-thread\",\"project_dir\":\"'$PWD'\"}]}'",
+    "  else",
+    "    echo '{\"targets\":[]}'",
+    "  fi",
+    "  exit 0",
+    "fi",
+    "exit 1"
+  ]);
+  writeExecutable(path.join(binDir, "claude"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
+    "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
+    "  exit 0",
+    "fi",
+    "printf '%s\\n' \"$*\" > \"$FAKE_ARGS\"",
+    "touch \"$FAKE_READY\"",
+    "echo 'backgrounded - fake123 - recover-thread'",
+    "exit 0"
+  ]);
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    FAKE_READY: readyFile,
+    FAKE_ARGS: argsFile
+  };
+  run(cwd, ["init"], env);
+  const request = JSON.parse(
+    run(
+      cwd,
+      [
+        "mailbox",
+        "send",
+        "--from",
+        "codex",
+        "--to",
+        "claude",
+        "--kind",
+        "request",
+        "--task",
+        "T-000007",
+        "--goal",
+        "G-000001",
+        "--request-id",
+        "req_visible_recover",
+        "--subject",
+        "Recover visible Claude",
+        "--body",
+        "Please ACK this recovered request and then continue the handoff.",
+        "--reply-required"
+      ],
+      env
+    ).stdout
+  );
+  const result = JSON.parse(
+    run(
+      cwd,
+      [
+        "channel",
+        "recover-visible",
+        "--request-id",
+        "req_visible_recover",
+        "--name",
+        "recover-thread",
+        "--launch-mode",
+        "background",
+        "--timeout-ms",
+        "1000",
+        "--poll-ms",
+        "10"
+      ],
+      env
+    ).stdout
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.recovery, "visible_direct_prompt");
+  assert.equal(result.request_id, "req_visible_recover");
+  assert.equal(result.mailbox_message_id, request.message.id);
+  assert.equal(result.start.action, "started");
+  assert.match(result.await_reply_command, /req_visible_recover/);
+  const args = fs.readFileSync(argsFile, "utf8");
+  assert.match(args, /Visible recovery for an Agent Team mailbox request/);
+  assert.match(args, /call the first-party Agent Team MCP reply tool/);
+  assert.match(args, /"request_id": "req_visible_recover"/);
+  assert.match(args, /Please ACK this recovered request/);
 });
 
 test("CLI smoke: channel steer reports wake packet path when legacy live wake fails", () => {
@@ -741,6 +847,7 @@ test("CLI smoke: channel steer reports wake packet path when legacy live wake fa
   assert.equal(steer.blocking_next_step.operator_hint.kind, "rerun_live_channel_with_local_permissions");
   assert.match(steer.blocking_next_step.operator_hint.directive, /local-permission/);
   assert.match(steer.blocking_next_step.await_reply_command, new RegExp(steer.durable_ack.request_id));
+  assert.match(steer.blocking_next_step.visible_recovery_command, new RegExp(steer.durable_ack.request_id));
   assert.match(steer.blocking_next_step.wake_packet_path, /wake-req_/);
   assert.equal(fs.existsSync(path.join(cwd, steer.blocking_next_step.wake_packet_path)), true);
   assert.match(steer.blocking_next_step.manual_recovery_command, /cat /);
@@ -812,6 +919,7 @@ test("CLI smoke: channel steer blocks when legacy wake is sent but semantic repl
   assert.equal(steer.blocking_next_step.semantic_reply_missing, true);
   assert.match(steer.blocking_next_step.reason, /First-party Claude MCP queued/);
   assert.match(steer.blocking_next_step.directive, /Do not claim Claude is working/);
+  assert.match(steer.blocking_next_step.visible_recovery_command, new RegExp(steer.durable_ack.request_id));
   assert.match(steer.blocking_next_step.wake_packet_path, /wake-req_/);
   assert.equal(steer.semantic_reply, null);
   assert.equal(steer.semantic_wait.state, "skipped");

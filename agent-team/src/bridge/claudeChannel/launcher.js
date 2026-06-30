@@ -165,7 +165,7 @@ function startupPrompt(name, cwd, options = {}) {
     ? `${cliCommand} channel boot-ack --launch-id ${shellQuote(options.launch_id)} --name ${shellQuote(name)} --project-dir ${shellQuote(cwd)}`
     : null;
   const quickstart = teammateQuickstartBlock(harnessRoot);
-  return [
+  const lines = [
     `You are the Claude Code teammate for the Codex Agent Team Harness session named "${name}".`,
     `Project directory: ${cwd}`,
     `Harness root: ${harnessRoot}`,
@@ -190,7 +190,16 @@ function startupPrompt(name, cwd, options = {}) {
     "If the mailbox CLI is unavailable, write a Markdown notice for Codex.",
     "Preferred notice paths: docs/planning/claude-notice-<topic>.md or .agent-team/comms/codex-inbox/claude-notice-<topic>.md.",
     "Start notices with '# NOTICE for Codex', include task/goal IDs when known, and make them actionable."
-  ].join("\n");
+  ];
+  if (options.startup_message) {
+    lines.push(
+      "",
+      "Immediate Agent Team request after boot ACK:",
+      "",
+      options.startup_message
+    );
+  }
+  return lines.join("\n");
 }
 
 function startupUserPrompt(name, cwd, options = {}) {
@@ -199,7 +208,7 @@ function startupUserPrompt(name, cwd, options = {}) {
   const cliPath = path.resolve(options.cli_path || defaultCliPath());
   const cliCommand = `${shellQuote(process.execPath)} ${shellQuote(cliPath)} --cwd ${shellQuote(harnessRoot)}`;
   const bootAckCommand = `${cliCommand} channel boot-ack --launch-id ${shellQuote(options.launch_id)} --name ${shellQuote(name)} --project-dir ${shellQuote(cwd)}`;
-  return [
+  const lines = [
     "Codex is starting this visible Claude teammate session now.",
     "",
     "First action: run this exact durable boot ACK command once using Bash:",
@@ -210,7 +219,16 @@ function startupUserPrompt(name, cwd, options = {}) {
     "",
     "Then visibly say: ACK Agent Team quickstart loaded; mailbox is truth.",
     "Stay in this visible session for Codex steering after the ACK."
-  ].join("\n");
+  ];
+  if (options.startup_message) {
+    lines.push(
+      "",
+      "After the boot ACK, handle this Agent Team request immediately in this visible Claude session:",
+      "",
+      options.startup_message
+    );
+  }
+  return lines.join("\n");
 }
 
 function parseBackgroundOutput(stdout) {

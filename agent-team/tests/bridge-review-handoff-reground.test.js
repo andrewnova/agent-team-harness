@@ -810,7 +810,8 @@ test("CH-3d channel ensure uses Codex Terminal launcher when explicitly requeste
       name: "codex-thread",
       timeout_ms: 1000,
       poll_ms: 10,
-      launch_mode: "codex-terminal"
+      launch_mode: "codex-terminal",
+      startup_message: "VISIBLE RECOVERY REQUEST: call reply before finishing."
     });
     assert.equal(result.ok, true);
     assert.equal(result.action, "started");
@@ -829,6 +830,8 @@ test("CH-3d channel ensure uses Codex Terminal launcher when explicitly requeste
     assert.match(launchedCommand, /\.agent-team\/teammate-quickstart\.md/);
     assert.match(launchedCommand, /# Claude Teammate Quickstart/);
     assert.match(launchedCommand, /ACK Agent Team quickstart loaded; mailbox is truth/);
+    assert.match(launchedCommand, /After the boot ACK, handle this Agent Team request immediately/);
+    assert.match(launchedCommand, /VISIBLE RECOVERY REQUEST: call reply before finishing/);
     assert.match(launchedCommand, /--cwd/);
     assert.match(launchedCommand, /mailbox send-batch --json <file>/);
     assert.match(launchedCommand, /Do not hand-roll shell loops/);

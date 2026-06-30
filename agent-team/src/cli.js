@@ -188,6 +188,7 @@ Commands:
   channel boot-ack --launch-id <id> [--name <name>] [--project-dir <path>] [--body <text>]
   channel startup-packet --launch-id <id> [--text]
   channel startup-import --launch-id <id> (--text <text>|--file <path>) [--boot-ack] [--kind checkin|reply] [--request-id <id>] [--in-reply-to <id>]
+  channel recover-visible (--request-id <id>|--message-id <id>) [--name <name>] [--project-dir <path>] [channel ensure options]
   channel ensure [--name <name>] [--target <target>] [--project-dir <path>] [--fresh-claude] [--reuse-claude|--no-fresh-claude] [--allow-cross-project-reuse] [--timeout-ms <ms>] [--poll-ms <ms>] [--launch-mode <codex-terminal|visible|pty|background>] [--codex-terminal-launcher <path>] [--visible-app <app>] [--plugin-dir <path>] [--effort <level>] [--permission-mode <mode>] [--handshake-timeout-ms <ms>] [--boot-ack-timeout-ms <ms>] [--smoke] [--smoke-timeout-ms <ms>] [--use-development-channel] [--no-chrome]
   channel auth [login] [--claudeai|--console] [--email <email>] [--sso] [--timeout-ms <ms>]
   channel doctor [--fix] [--target <target>] [--smoke] [--smoke-timeout-ms <ms>]
@@ -692,6 +693,73 @@ function commandToAwaitReply({ requestId }) {
   return `node agent-team/src/cli.js await reply --request-id ${requestId} --once`;
 }
 
+function recoverVisibleCommand({ requestId, mailboxMessageId }) {
+  const key = requestId ? `--request-id ${requestId}` : `--message-id ${mailboxMessageId}`;
+  return `node agent-team/src/cli.js channel recover-visible ${key}`;
+}
+
+function claudeMailboxRequest(cwd, input = {}) {
+  if (input.message_id) {
+    const message = loadMessage(cwd, input.message_id, { include_body: true });
+    if (!message) return null;
+    if (message.to !== "claude") return null;
+    return message;
+  }
+  const requestId = input.request_id;
+  if (!requestId) return null;
+  const message = listMessages(cwd, {
+    to: "claude",
+    request_id: requestId
+  })
+    .filter((row) => row.kind === "request" || row.reply_required)
+    .slice(-1)[0];
+  return message ? loadMessage(cwd, message.id, { include_body: true }) : null;
+}
+
+function visibleRecoveryName(cwd, message) {
+  const source = message.request_id || message.id || path.basename(cwd);
+  const suffix = source.replace(/[^a-zA-Z0-9_-]/g, "").slice(-10) || "recovery";
+  return `agent-team-recover-${suffix}`;
+}
+
+function visibleRecoveryPrompt(cwd, message) {
+  const requestId = message.request_id || message.id;
+  const body = message.body || message.body_inline || "";
+  const replyJson = JSON.stringify(
+    {
+      message_id: message.id,
+      request_id: requestId,
+      text: "ACK: received. I am handling this now. Answer/blocker: ..."
+    },
+    null,
+    2
+  );
+  return [
+    "Visible recovery for an Agent Team mailbox request.",
+    "Codex already queued this request and the first-party Claude MCP wake moved, but Codex has not received a semantic Claude reply yet.",
+    "",
+    "Do not answer only in the visible transcript. Codex cannot count transcript text as delivery.",
+    "Primary action: call the first-party Agent Team MCP reply tool with this payload:",
+    replyJson,
+    "",
+    "If the MCP reply tool is unavailable, run this mailbox command with Bash instead:",
+    semanticAckReplyCommand({
+      requestId,
+      mailboxMessageId: message.id
+    }),
+    "",
+    `Harness root: ${cwd}`,
+    `Mailbox message id: ${message.id}`,
+    `Request id: ${requestId}`,
+    `Task: ${message.task_id || "(none)"}`,
+    `Goal: ${message.goal_id || "(none)"}`,
+    `Subject: ${message.subject || "(none)"}`,
+    "",
+    "Original request body:",
+    body || "(empty)"
+  ].join("\n");
+}
+
 function visibleDeliveryBlocker(cwd, durable, live, reply) {
   if (reply || liveDeliverySucceeded(live)) return null;
   const legacy = live && live.legacy;
@@ -702,7 +770,7 @@ function visibleDeliveryBlocker(cwd, durable, live, reply) {
   const legacyReason = legacy && (legacy.stderr || legacy.error || legacy.reason || legacy.result_state);
   const reason =
     (firstPartyMcp?.emitted &&
-      "First-party Claude MCP emitted the mailbox notification, but Claude has not replied through agent_team_reply or agent_team_ack.") ||
+      "First-party Claude MCP emitted the mailbox notification, but Claude has not replied through the channel reply tool, agent_team_reply, or agent_team_ack.") ||
     (firstPartyMcp?.queued &&
       "First-party Claude MCP queued the mailbox notification, but no semantic Claude mailbox reply has landed yet.") ||
     (wakeState && `Compatibility live wake reached a non-semantic state (${wakeState}), but no real Claude mailbox reply has landed.`) ||
@@ -744,20 +812,24 @@ function visibleDeliveryBlocker(cwd, durable, live, reply) {
     target,
     wake_packet_path: promptPath,
     await_reply_command: commandToAwaitReply({ requestId: durable.request_id }),
+    visible_recovery_command: recoverVisibleCommand({
+      requestId: durable.request_id,
+      mailboxMessageId: durable.mailbox_message_id
+    }),
     manual_recovery_command: promptPath
       ? `cat ${path.resolve(cwd, promptPath)}`
       : `node agent-team/src/cli.js mailbox show ${durable.mailbox_message_id}`,
     diagnostic_command: "node agent-team/src/cli.js daemon status && node agent-team/src/cli.js cockpit --json --no-live-channel",
     operator_hint: permissionHint || undefined,
     directive:
-      "Do not claim Claude is working until Claude replies through the first-party mailbox tools (agent_team_reply or agent_team_ack) or an equivalent semantic mailbox reply lands."
+      "Do not claim Claude is working until Claude replies through the first-party mailbox tools (reply, agent_team_reply, or agent_team_ack) or an equivalent semantic mailbox reply lands."
   };
 }
 
 function codexNextForBlocker(blockingNextStep) {
   if (!blockingNextStep) return "continue working; watch mailbox/cockpit for Claude ACKs, replies, and check-ins";
   if (blockingNextStep.kind === "first_party_mcp_reply_missing") {
-    return "first-party Claude MCP wake is queued/emitted, but Claude's semantic mailbox reply is missing; await reply before claiming Claude is working";
+    return "first-party Claude MCP wake is queued/emitted, but Claude's semantic mailbox reply is missing; await the channel reply/mailbox reply before claiming Claude is working";
   }
   return "visible Claude delivery is unproven; follow blocking_next_step before claiming Claude is working";
 }
@@ -2004,6 +2076,49 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     });
     print(result);
     return 0;
+  }
+  if (command === "channel" && subcommand === "recover-visible") {
+    const requestId = argValue(rest, "--request-id");
+    const messageId = argValue(rest, "--message-id");
+    if (!requestId && !messageId) throw new Error("channel recover-visible requires --request-id or --message-id");
+    const message = claudeMailboxRequest(cwd, {
+      request_id: requestId,
+      message_id: messageId
+    });
+    if (!message) {
+      print({
+        ok: false,
+        error: "Claude mailbox request not found",
+        request_id: requestId,
+        mailbox_message_id: messageId
+      });
+      return 1;
+    }
+    const adapter = createBridge("claude-channel");
+    const ensureOptions = channelEnsureOptions(rest);
+    const recoveryName = ensureOptions.name || visibleRecoveryName(cwd, message);
+    const projectDir = ensureOptions.project_dir || cwd;
+    const result = adapter.ensure(cwd, {
+      ...ensureOptions,
+      name: recoveryName,
+      project_dir: projectDir,
+      fresh_claude: true,
+      reuse_claude: false,
+      startup_message: visibleRecoveryPrompt(cwd, message),
+      smoke: false
+    });
+    print({
+      ok: result.ok,
+      recovery: "visible_direct_prompt",
+      request_id: message.request_id || message.id,
+      mailbox_message_id: message.id,
+      name: recoveryName,
+      project_dir: projectDir,
+      startup_message_injected: true,
+      start: result,
+      await_reply_command: commandToAwaitReply({ requestId: message.request_id || message.id })
+    });
+    return result.ok ? 0 : 1;
   }
   if (command === "channel" && subcommand === "auth") {
     const adapter = createBridge("claude-channel");

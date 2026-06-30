@@ -85,6 +85,10 @@ function runServer(options = {}) {
   const input = options.input || process.stdin;
   const output = options.output || process.stdout;
   const watchOutbox = options.watch_outbox !== false && !args.includes("--no-watch-outbox");
+  const consumerId =
+    options.consumer_id ||
+    process.env.AGENT_TEAM_MCP_CONSUMER_ID ||
+    [process.env.AGENT_TEAM_LAUNCH_ID || "standalone", process.pid].join(":");
   let buffer = Buffer.alloc(0);
   let outboxWatcher = null;
 
@@ -99,7 +103,8 @@ function runServer(options = {}) {
       },
       {
         include_existing: true,
-        interval_ms: Number(argValue(args, "--outbox-interval-ms", "1000")) || 1000
+        interval_ms: Number(argValue(args, "--outbox-interval-ms", "1000")) || 1000,
+        consumer_id: consumerId
       }
     );
   };
