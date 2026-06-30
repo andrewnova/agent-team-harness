@@ -1548,6 +1548,58 @@ test("CLI smoke: start can launch Claude from an explicit project directory", ()
   assert.equal(cockpit.claude_channel.runtime.parsed.endpoint.project_dir, fs.realpathSync.native(projectDir));
 });
 
+test("CLI smoke: cockpit reports loaded Claude when local health fetch is blocked", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  writeExecutable(path.join(binDir, "claude-channel"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  printf '%s\\n' '{\"target\":\"codex-thread\",\"endpoint\":{\"endpoint_id\":\"ep_loaded\",\"display_name\":\"codex-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1},\"reachable\":false,\"health\":{\"ok\":false,\"error\":\"channel server is not reachable: fetch failed\"}}'",
+    "  exit 1",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    "  printf '%s\\n' '{\"targets\":[{\"target\":\"ep_loaded\",\"endpoint_id\":\"ep_loaded\",\"display_name\":\"codex-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1}]}'",
+    "  exit 0",
+    "fi",
+    "exit 1"
+  ]);
+  const sessionDir = path.join(cwd, ".agent-team", "comms", "claude-channel");
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(sessionDir, "session.json"),
+    JSON.stringify(
+      {
+        ok: true,
+        action: "started",
+        name: "codex-thread",
+        target: "codex-thread",
+        launch_mode: "visible",
+        reply_ready: "unchecked"
+      },
+      null,
+      2
+    )
+  );
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    FAKE_ENDPOINT_PID: String(process.pid)
+  };
+  const status = JSON.parse(run(cwd, ["channel", "status", "--target", "codex-thread"], env).stdout);
+  assert.equal(status.ok, false);
+  assert.equal(status.delivery_ready, false);
+  assert.equal(status.presence_ok, true);
+  assert.equal(status.status_kind, "loaded_fetch_failed");
+  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--target", "codex-thread"], env).stdout);
+  assert.equal(cockpit.claude_channel.runtime.ok, false);
+  assert.equal(cockpit.claude_channel.runtime.presence_ok, true);
+  assert.equal(cockpit.claude_channel.runtime.status_kind, "loaded_fetch_failed");
+  const text = run(cwd, ["cockpit", "--target", "codex-thread"], env).stdout;
+  assert.match(text, /Claude: loaded-channel-unverified/);
+  assert.doesNotMatch(text, /Claude: not-live/);
+  assert.match(text, /presence=loaded/);
+});
+
 test("CLI smoke: start does not expose stale raw channel diagnostics after startup failure", () => {
   const cwd = tempRoot();
   const sessionDir = path.join(cwd, ".agent-team", "comms", "claude-channel");

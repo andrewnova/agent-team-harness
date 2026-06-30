@@ -133,21 +133,33 @@ function ensure(cwd, options = {}) {
       }
     }
     const finalTarget = reusableProjectEndpoint.target;
-    const finalStatus = waitForReachable(cli.command, finalTarget, projectCwd, timeoutMs, pollMs);
+    const finalStatus =
+      reusableProjectEndpoint.status && reusableProjectEndpoint.status.presence_ok && !reusableProjectEndpoint.status.ok
+        ? reusableProjectEndpoint.status
+        : waitForReachable(cli.command, finalTarget, projectCwd, timeoutMs, pollMs);
     const smoke = options.smoke && finalStatus && finalStatus.ok ? runSmoke(cli.command, projectCwd, finalTarget, options.smoke_timeout_ms || 120000) : null;
+    const deliveryReady = Boolean(finalStatus && finalStatus.ok);
+    const channelLoaded = Boolean(finalStatus && finalStatus.presence_ok);
+    const acceptable = deliveryReady || (!options.smoke && channelLoaded);
     return persist({
-      ok: finalStatus && finalStatus.ok && (!smoke || smoke.ok),
+      ok: acceptable && (!smoke || smoke.ok),
       action:
         smoke && !smoke.ok
           ? rename
             ? "renamed_reused_smoke_failed"
             : "reused_project_endpoint_smoke_failed"
-          : finalStatus && finalStatus.ok
+          : deliveryReady
             ? rename
               ? "renamed_reused"
               : "reused_project_endpoint"
+            : channelLoaded
+              ? rename
+                ? "renamed_reused_channel_unverified"
+                : "reused_project_endpoint_channel_unverified"
             : "reused_unreachable",
       target: finalTarget,
+      delivery_ready: deliveryReady,
+      channel_loaded: channelLoaded,
       endpoint: reusableProjectEndpoint.endpoint,
       rename,
       initial_status: initialStatus,
@@ -247,7 +259,10 @@ function ensure(cwd, options = {}) {
         });
       }
     }
-    finalStatus = waitForReachable(cli.command, discovered.target, projectCwd, timeoutMs, pollMs);
+    finalStatus =
+      discovered.status && discovered.status.presence_ok && !discovered.status.ok
+        ? discovered.status
+        : waitForReachable(cli.command, discovered.target, projectCwd, timeoutMs, pollMs);
     finalTarget = discovered.target;
   } else {
     recoveredEndpoint = findReachableProjectEndpoint(cli.command, projectCwd, listTargets(cli.command, projectCwd));
@@ -261,23 +276,30 @@ function ensure(cwd, options = {}) {
     }
   }
   const finalMismatch = workspaceMismatch(endpoint, projectCwd);
+  const deliveryReady = Boolean(finalStatus && finalStatus.ok);
+  const visibleLoaded = Boolean(finalStatus && finalStatus.presence_ok && started.mode === "visible");
+  const channelAcceptable = deliveryReady || (!options.smoke && visibleLoaded);
   const smoke =
-    options.smoke && finalStatus && finalStatus.ok && (!finalMismatch || options.allow_cross_project_reuse)
+    options.smoke && deliveryReady && (!finalMismatch || options.allow_cross_project_reuse)
       ? runSmoke(cli.command, projectCwd, finalTarget, options.smoke_timeout_ms || 120000)
       : null;
   return persist({
-    ok: finalStatus && finalStatus.ok && (!finalMismatch || options.allow_cross_project_reuse) && (!smoke || smoke.ok),
+    ok: channelAcceptable && (!finalMismatch || options.allow_cross_project_reuse) && (!smoke || smoke.ok),
     action:
       finalMismatch && !options.allow_cross_project_reuse
         ? "workspace_mismatch"
         : smoke && !smoke.ok
           ? "started_smoke_failed"
-          : finalStatus && finalStatus.ok
+          : deliveryReady
             ? recoveredEndpoint && recoveredEndpoint.ok
               ? "started_recovered_endpoint"
               : "started"
+            : visibleLoaded
+              ? "started_visible_channel_unverified"
             : "started_unreachable",
     target: finalTarget,
+    delivery_ready: deliveryReady,
+    visible_loaded: visibleLoaded,
     launch_mode: started.mode,
     claude_path: claude.path,
     channel_path: cli.path,

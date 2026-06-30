@@ -12,8 +12,16 @@ function channelStatus(cliCommand, target, cwd) {
   const parsed = parseJsonOutput(result.stdout.trim());
   const reachable = parsed ? parsed.reachable !== false : false;
   const healthy = parsed ? !(parsed.health && parsed.health.ok === false) : false;
+  const deliveryReady = result.status === 0 && Boolean(parsed) && reachable && healthy;
+  const presence = endpointPresence(parsed && parsed.endpoint);
+  const healthErrorClass = healthErrorKind(parsed, result);
   return {
-    ok: result.status === 0 && Boolean(parsed) && reachable && healthy,
+    ok: deliveryReady,
+    delivery_ready: deliveryReady,
+    presence_ok: presence.loaded,
+    presence,
+    status_kind: statusKind(deliveryReady, parsed, presence, healthErrorClass),
+    health_error_class: healthErrorClass,
     command: cliCommand,
     exit_code: result.status,
     stdout: result.stdout.trim(),
@@ -21,6 +29,65 @@ function channelStatus(cliCommand, target, cwd) {
     parsed,
     error: result.error ? result.error.message : undefined
   };
+}
+
+function endpointSeenSeconds(endpoint) {
+  if (!endpoint || typeof endpoint !== "object") return null;
+  if (Number.isFinite(endpoint.last_seen_seconds)) return endpoint.last_seen_seconds;
+  if (!endpoint.last_seen_at) return null;
+  const seen = Date.parse(endpoint.last_seen_at);
+  if (!Number.isFinite(seen)) return null;
+  return Math.max(0, Math.round((Date.now() - seen) / 1000));
+}
+
+function endpointPidAlive(endpoint) {
+  if (!endpoint || typeof endpoint !== "object" || !Number.isInteger(endpoint.pid) || endpoint.pid <= 0) return null;
+  try {
+    process.kill(endpoint.pid, 0);
+    return true;
+  } catch (error) {
+    return error && error.code === "EPERM" ? true : false;
+  }
+}
+
+function endpointPresence(endpoint) {
+  const endpointPresent = Boolean(endpoint && typeof endpoint === "object");
+  const lastSeenSeconds = endpointSeenSeconds(endpoint);
+  const recent = lastSeenSeconds === null ? null : lastSeenSeconds <= 120;
+  const pidAlive = endpointPidAlive(endpoint);
+  const loaded = endpointPresent && pidAlive !== false && recent !== false;
+  return {
+    endpoint_present: endpointPresent,
+    pid_alive: pidAlive,
+    last_seen_seconds: lastSeenSeconds,
+    recent,
+    loaded
+  };
+}
+
+function healthErrorKind(parsed, result) {
+  const haystack = [
+    result.stderr,
+    result.stdout,
+    parsed && parsed.health && parsed.health.error,
+    parsed && parsed.error
+  ]
+    .filter(Boolean)
+    .join("\n");
+  if (/fetch failed/i.test(haystack)) return "fetch_failed";
+  if (/ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT/i.test(haystack)) return "network_unreachable";
+  if (parsed && parsed.health && parsed.health.ok === false) return "unhealthy";
+  if (result.status !== 0) return "command_failed";
+  return null;
+}
+
+function statusKind(deliveryReady, parsed, presence, healthErrorClass) {
+  if (deliveryReady) return "delivery_ready";
+  if (!parsed) return "invalid_or_empty_status";
+  if (presence.loaded && healthErrorClass === "fetch_failed") return "loaded_fetch_failed";
+  if (presence.loaded) return "loaded_channel_unverified";
+  if (presence.endpoint_present) return "endpoint_registered_not_live";
+  return "no_matching_endpoint";
 }
 
 function listTargets(cliCommand, cwd) {
@@ -114,7 +181,7 @@ function waitForStartedEndpoint(cliCommand, cwd, beforeList, timeoutMs, pollMs) 
       const target = endpointTarget(endpoint);
       if (!target) continue;
       latestStatus = channelStatus(cliCommand, target, cwd);
-      if (latestStatus.ok) {
+      if (latestStatus.ok || latestStatus.presence_ok) {
         return {
           ok: true,
           endpoint,
@@ -137,7 +204,7 @@ function findReachableProjectEndpoint(cliCommand, cwd, listResult) {
     const target = endpointTarget(endpoint);
     if (!target) continue;
     const status = channelStatus(cliCommand, target, cwd);
-    if (status.ok) return { ok: true, endpoint, target, status };
+    if (status.ok || status.presence_ok) return { ok: true, endpoint, target, status };
   }
   return { ok: false };
 }
@@ -199,6 +266,11 @@ function compactStatus(status) {
   if (!status) return null;
   return {
     ok: status.ok,
+    delivery_ready: status.delivery_ready,
+    presence_ok: status.presence_ok,
+    status_kind: status.status_kind,
+    health_error_class: status.health_error_class,
+    presence: status.presence,
     exit_code: status.exit_code,
     target: status.parsed ? status.parsed.target : undefined,
     endpoint: status.parsed ? compactTarget(status.parsed.endpoint) : null,

@@ -115,6 +115,9 @@ function channelSession(cwd) {
     project_dir: session.project_dir,
     harness_cwd: session.harness_cwd,
     launch_mode: session.launch_mode,
+    delivery_ready: session.delivery_ready,
+    visible_loaded: session.visible_loaded,
+    channel_loaded: session.channel_loaded,
     reply_ready: session.reply_ready,
     updated_at: session.updated_at,
     session_path: file,
@@ -646,10 +649,13 @@ function renderCockpit(snapshot) {
   const runtime = snapshot.claude_channel.runtime;
   const liveChecked = !(runtime && runtime.checked === false);
   const liveOk = Boolean(runtime && runtime.ok);
+  const presenceOk = Boolean(runtime && runtime.presence_ok);
   const channelState = channel
     ? liveChecked
       ? liveOk
         ? "ready"
+        : presenceOk
+          ? "loaded-channel-unverified"
         : "not-live"
       : channel.ok
         ? "last-known-ready"
@@ -658,7 +664,9 @@ function renderCockpit(snapshot) {
   const channelLine = channel
     ? `${channelState} action=${channel.action || "unknown"} target=${channel.target || channel.name || "unknown"} reply=${channel.reply_ready}`
     : "no session yet";
-  const runtimeLine = liveChecked ? `live-ok=${liveOk}` : `live-check=${runtime.reason}`;
+  const runtimeLine = liveChecked
+    ? `live-ok=${liveOk}${presenceOk ? " presence=loaded" : ""}${runtime && runtime.status_kind ? ` status=${runtime.status_kind}` : ""}`
+    : `live-check=${runtime.reason}`;
   const agents = snapshot.claude_channel.agents;
   const agentsLine =
     agents && agents.checked === false
