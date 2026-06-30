@@ -4,7 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const { tempRoot, backendTaskInput, frontendTaskInput, frontendContract, writeExecutable } = require("./helpers");
-const { processAlive } = require("../src/daemon");
+const { processAlive, clearDaemonPidRecord } = require("../src/daemon");
+const paths = require("../src/paths");
 
 const cli = path.join(__dirname, "..", "src", "cli.js");
 
@@ -53,6 +54,31 @@ test("CLI smoke: daemon liveness treats EPERM probes as alive", () => {
   } finally {
     process.kill = originalKill;
   }
+});
+
+test("CLI smoke: stale daemon cleanup does not erase a newer daemon pid record", () => {
+  const cwd = tempRoot();
+  const pidPath = paths.daemonPidPath(cwd);
+  fs.mkdirSync(path.dirname(pidPath), { recursive: true });
+  fs.writeFileSync(
+    pidPath,
+    JSON.stringify(
+      {
+        pid: 222,
+        run_id: "R-newer",
+        cwd
+      },
+      null,
+      2
+    )
+  );
+
+  assert.equal(clearDaemonPidRecord(cwd, { pid: 111, run_id: "R-older" }), false);
+  assert.equal(fs.existsSync(pidPath), true);
+  assert.equal(JSON.parse(fs.readFileSync(pidPath, "utf8")).run_id, "R-newer");
+
+  assert.equal(clearDaemonPidRecord(cwd, { pid: 222, run_id: "R-newer" }), true);
+  assert.equal(fs.existsSync(pidPath), false);
 });
 
 test("CLI smoke: init, goal, plan claude via mock, task create, board", () => {

@@ -528,6 +528,17 @@ function daemonPidRecord(cwd) {
   }
 }
 
+function clearDaemonPidRecord(cwd, expected = {}) {
+  const file = paths.daemonPidPath(cwd);
+  if (!exists(file)) return false;
+  const current = daemonPidRecord(cwd);
+  if (!current) return false;
+  if (expected.pid && current.pid !== expected.pid) return false;
+  if (expected.run_id && current.run_id !== expected.run_id) return false;
+  fs.rmSync(file, { force: true });
+  return true;
+}
+
 function daemonStatus(cwd) {
   state.init(cwd);
   const pid_record = daemonPidRecord(cwd);
@@ -622,7 +633,7 @@ function stopDaemon(cwd, options = {}) {
       // Status below reports the remaining process state.
     }
   }
-  if (exists(paths.daemonPidPath(cwd))) fs.rmSync(paths.daemonPidPath(cwd), { force: true });
+  clearDaemonPidRecord(cwd, status.pid_record || {});
   for (const run of state.listRuns(cwd, { kind: "daemon", status: "active" })) {
     state.completeRun(cwd, run.run_id, {
       status: "cancelled",
@@ -697,7 +708,7 @@ function runDaemon(cwd, options = {}) {
       summary: `Daemon one-shot processed ${handled.length} message(s).`,
       evidence: [`daemon:${run.run_id}`]
     });
-    if (exists(paths.daemonPidPath(cwd))) fs.rmSync(paths.daemonPidPath(cwd), { force: true });
+    clearDaemonPidRecord(cwd, { pid: process.pid, run_id: run.run_id });
     return {
       ok: true,
       run: completedRun,
@@ -729,7 +740,7 @@ function runDaemon(cwd, options = {}) {
 
   const close = (status = "cancelled", summary = "Daemon stopped") => {
     for (const watcher of watchers) watcher.close();
-    if (exists(paths.daemonPidPath(cwd))) fs.rmSync(paths.daemonPidPath(cwd), { force: true });
+    clearDaemonPidRecord(cwd, { pid: process.pid, run_id: run.run_id });
     try {
       state.completeRun(cwd, run.run_id, { status, summary });
     } catch (_error) {
@@ -766,6 +777,7 @@ module.exports = {
   semanticAckRequired,
   semanticAckInstruction,
   processAlive,
+  clearDaemonPidRecord,
   attemptClaudeLivePush,
   attemptCodexPush,
   codexPushRequired
