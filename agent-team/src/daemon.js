@@ -91,6 +91,35 @@ function codexPushEnabled(options = {}) {
   return options.codex_push !== false && process.env.AGENT_TEAM_DAEMON_CODEX_PUSH !== "0";
 }
 
+function manifestCodexWakeCommand(cwd) {
+  const file = paths.codexMcpManifestPath(cwd);
+  if (!exists(file)) return null;
+  try {
+    const manifest = readJson(file);
+    const command = manifest && manifest.wake_command;
+    if (command && exists(command)) {
+      return {
+        command,
+        source: "codex_mcp_manifest"
+      };
+    }
+  } catch (_error) {
+    return null;
+  }
+  return null;
+}
+
+function configuredCodexWakeCommand(cwd, options = {}) {
+  const explicit = options.codex_wake_command || process.env.AGENT_TEAM_CODEX_WAKE_COMMAND;
+  if (explicit) {
+    return {
+      command: explicit,
+      source: options.codex_wake_command ? "options" : "env"
+    };
+  }
+  return manifestCodexWakeCommand(cwd);
+}
+
 function claudeMcpPushEnabled(options = {}) {
   return options.claude_mcp_push !== false && process.env.AGENT_TEAM_DAEMON_CLAUDE_MCP_PUSH !== "0";
 }
@@ -407,7 +436,8 @@ function attemptCodexPush(cwd, runId, message, semantic, options = {}) {
     payload_path: path.relative(cwd, payloadPath)
   });
 
-  const command = options.codex_wake_command || process.env.AGENT_TEAM_CODEX_WAKE_COMMAND;
+  const configuredWake = configuredCodexWakeCommand(cwd, options);
+  const command = configuredWake && configuredWake.command;
   const baseDetail = {
     required: true,
     message_id: message.id,
@@ -449,6 +479,7 @@ function attemptCodexPush(cwd, runId, message, semantic, options = {}) {
     attempted: true,
     queued: true,
     command,
+    command_source: configuredWake.source,
     timeout_ms: options.codex_wake_timeout_ms || CODEX_WAKE_TIMEOUT_MS,
     result_state: result.status === 0 ? "delivered" : "failed",
     exit_code: result.status,
@@ -624,6 +655,7 @@ function daemonStatus(cwd) {
   const pid_record = daemonPidRecord(cwd);
   const running = Boolean(pid_record && processAlive(pid_record.pid));
   const active_runs = state.listRuns(cwd, { kind: "daemon", status: "active" });
+  const codexWake = configuredCodexWakeCommand(cwd);
   return {
     ok: true,
     running,
@@ -631,10 +663,11 @@ function daemonStatus(cwd) {
     stale_pid: Boolean(pid_record && !running),
     active_runs,
     session_push: {
-      native_model_ui_push: Boolean(process.env.AGENT_TEAM_CODEX_WAKE_COMMAND),
+      native_model_ui_push: Boolean(codexWake),
       live_channel_wake: true,
       claude_mcp_outbox: path.relative(cwd, paths.claudeMcpOutboxPath(cwd)),
-      codex_wake_adapter: process.env.AGENT_TEAM_CODEX_WAKE_COMMAND || null,
+      codex_wake_adapter: codexWake ? codexWake.command : null,
+      codex_wake_adapter_source: codexWake ? codexWake.source : null,
       codex_wake_stream: path.relative(cwd, codexWakeLogPath(cwd)),
       reason: "The receiver daemon queues first-party Claude MCP channel notifications, keeps legacy claude-channel wake as compatibility fallback, and queues Codex-bound wake payloads for a Codex-side MCP/app adapter.",
       mailbox_push: "durable mailbox is truth; receiver daemon immediately queues Claude-bound non-heartbeat traffic to the Claude MCP outbox and attempts compatibility live wake when available",
@@ -861,5 +894,6 @@ module.exports = {
   clearDaemonPidRecord,
   attemptClaudeLivePush,
   attemptCodexPush,
+  configuredCodexWakeCommand,
   codexPushRequired
 };

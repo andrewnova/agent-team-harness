@@ -9,7 +9,8 @@
   "bin": {
     "agent-team": "./src/cli.js",
     "agent-team-claude-mcp": "./src/mcp/claudeServer.js",
-    "agent-team-codex-mcp": "./src/mcp/codexServer.js"
+    "agent-team-codex-mcp": "./src/mcp/codexServer.js",
+    "agent-team-codex-wake": "./src/mcp/codexWakeCommand.js"
   },
   "scripts": {
     "test": "node --test"

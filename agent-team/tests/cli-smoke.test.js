@@ -1859,6 +1859,7 @@ test("CLI smoke: codex mcp install registers first-party Codex wake adapter loca
   assert.equal(installed.package, "agent-team-codex-mcp");
   assert.equal(installed.server_name, "agent-team-codex");
   assert.equal(fs.existsSync(path.join(binDir, "agent-team-codex-mcp")), true);
+  assert.equal(fs.existsSync(path.join(binDir, "agent-team-codex-wake")), true);
   const realCwd = fs.realpathSync(cwd);
   assert.equal(installed.adapter_manifest.path, path.join(realCwd, ".agent-team", "comms", "codex-mcp", "adapter.json"));
 
@@ -1867,6 +1868,7 @@ test("CLI smoke: codex mcp install registers first-party Codex wake adapter loca
   assert.equal(manifest.config.command, installed.wrapper.path);
   assert.deepEqual(manifest.config.args, []);
   assert.deepEqual(manifest.config.env, {});
+  assert.equal(manifest.wake_command, installed.wake_wrapper.path);
   assert.equal(manifest.wake_stream_path, path.join(".agent-team", "comms", "codex-wake", "wake.jsonl"));
   assert.equal(manifest.mailbox_path, path.join(".agent-team", "comms", "mailbox.jsonl"));
 
@@ -1874,17 +1876,62 @@ test("CLI smoke: codex mcp install registers first-party Codex wake adapter loca
   assert.equal(status.ok, true);
   assert.equal(status.configured, true);
   assert.equal(status.wrapper_exists, true);
+  assert.equal(status.wake_command_exists, true);
+  assert.equal(status.pending_wake_count, 0);
 
   const env = { ...process.env, AGENT_TEAM_BIN_DIR: binDir };
   const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"], env).stdout);
   assert.equal(cockpit.daemon.codex_mcp.configured, true);
   assert.equal(cockpit.daemon.codex_mcp.wrapper_exists, true);
   const cockpitText = run(cwd, ["cockpit", "--no-live-channel"], env).stdout;
-  assert.match(cockpitText, /Codex MCP: configured=yes wrapper=yes/);
+  assert.match(cockpitText, /Codex MCP: configured=yes wrapper=yes wake-command=yes/);
   assert.match(cockpitText, /## Codex MCP Adapter/);
 
   const second = JSON.parse(run(cwd, ["codex", "mcp", "install", "--bin-dir", binDir]).stdout);
   assert.equal(second.adapter_manifest.idempotent, true);
+});
+
+test("CLI smoke: installed Codex MCP wake command is used by the daemon without env wiring", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  run(cwd, ["init"]);
+  const installed = JSON.parse(run(cwd, ["codex", "mcp", "install", "--bin-dir", binDir]).stdout);
+  assert.equal(installed.ready, true);
+
+  const checkin = JSON.parse(
+    run(cwd, [
+      "mailbox",
+      "send",
+      "--from",
+      "claude",
+      "--to",
+      "codex",
+      "--kind",
+      "checkin",
+      "--subject",
+      "Installed wake path",
+      "--body",
+      "Claude wake should hit the installed Codex wake command."
+    ]).stdout
+  );
+  const daemon = JSON.parse(run(cwd, ["daemon", "run", "--once", "--roles", "codex"]).stdout);
+  assert.equal(daemon.messages[0].id, checkin.message.id);
+  assert.equal(daemon.messages[0].codex_push.result_state, "delivered");
+  assert.equal(daemon.messages[0].codex_push.command_source, "codex_mcp_manifest");
+
+  const deliveriesPath = path.join(cwd, ".agent-team", "comms", "codex-mcp", "wake-deliveries.jsonl");
+  const deliveries = fs
+    .readFileSync(deliveriesPath, "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line));
+  assert.equal(deliveries[0].message_id, checkin.message.id);
+  assert.equal(deliveries[0].result_state, "delivered_to_codex_wake_adapter");
+
+  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"], { ...process.env, AGENT_TEAM_BIN_DIR: binDir }).stdout);
+  assert.equal(cockpit.daemon.codex_wake.delivered, 1);
+  assert.equal(cockpit.daemon.codex_wake.queued_no_adapter, 0);
+  assert.equal(cockpit.daemon.codex_wake.adapter_source, "codex_mcp_manifest");
 });
 
 test("CLI smoke: cockpit renders a per-message transport and receipt timeline", () => {

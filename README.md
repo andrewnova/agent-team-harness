@@ -121,7 +121,7 @@ The mailbox is the durable communication truth. The managed Claude channel bridg
 
 The receiver daemon is the bridge that makes Codex and Claude feel connected without blocking either model. It watches mailbox traffic, records receipt ACKs, surfaces semantic ACK/reply requirements, queues first-party Claude MCP channel notifications for Claude-bound non-heartbeat traffic, keeps the legacy Claude channel wake as a compatibility fallback when a live endpoint exists, queues Codex wake payloads for Claude-to-Codex messages, shows check-ins in cockpit, and lets Codex import Claude's answer when it arrives.
 
-For Claude-to-Codex traffic, the daemon writes wake payloads under `.agent-team/comms/codex-wake/` and can invoke `AGENT_TEAM_CODEX_WAKE_COMMAND` with the payload path. The mailbox remains the source of truth; the wake stream is the local real-time delivery adapter for Codex surfaces that can consume it. The first-party `agent-team-codex-mcp` adapter reads that wake stream, loads mailbox messages, writes Codex ACKs, and sends Codex replies back through the same durable mailbox.
+For Claude-to-Codex traffic, the daemon writes wake payloads under `.agent-team/comms/codex-wake/` and invokes the first available Codex wake adapter: explicit `AGENT_TEAM_CODEX_WAKE_COMMAND` first, then the installed `agent-team-codex-wake` command recorded by `agent-team codex mcp install`. The mailbox remains the source of truth; the wake stream is the local real-time delivery adapter for Codex surfaces that can consume it. The first-party `agent-team-codex-mcp` adapter reads that wake stream, loads mailbox messages, writes Codex ACKs, and sends Codex replies back through the same durable mailbox.
 
 `agent-team cockpit` and `agent-team watch` show Claude MCP outbox totals, MCP-emitted counts, legacy fallback counts, Codex MCP adapter status, Codex wake totals, missing-adapter queues, the wake stream path, and a per-message timeline so operators can see whether teammate messages are moving in real time.
 
@@ -170,7 +170,7 @@ For same Codex thread resumes, Claude channel ensure now prefers the remembered 
 
 ## First-Party Codex MCP Adapter
 
-The repo also includes a first-party Codex-facing MCP server at `agent-team-codex-mcp`. It exposes mailbox-backed tools for Codex to watch Claude-to-Codex wake payloads, read full mailbox messages, acknowledge messages, reply to Claude, and open canonical task state. It does not replace the mailbox, and it does not claim to force a native Codex UI wake by itself; it is the clean local adapter that Codex surfaces or hooks can consume.
+The repo also includes a first-party Codex-facing MCP server at `agent-team-codex-mcp` plus a local wake command at `agent-team-codex-wake`. The MCP server exposes mailbox-backed tools for Codex to watch Claude-to-Codex wake payloads, read full mailbox messages, acknowledge messages, reply to Claude, and open canonical task state. The wake command is the daemon's local push target when no explicit `AGENT_TEAM_CODEX_WAKE_COMMAND` is set. Neither replaces the mailbox, and neither claims to force a native Codex UI wake by itself; together they provide the clean local adapter pair that Codex surfaces or hooks can consume.
 
 Install or inspect the Codex MCP adapter for a project:
 

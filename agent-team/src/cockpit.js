@@ -16,7 +16,7 @@ const { listCheckins } = require("./checkins");
 const { listRefactorOffers } = require("./refactorLoop");
 const { listSelfHealRecommendations } = require("./feedback");
 const { listMessages, listAcks, compactMessage, mailboxDiagnostics } = require("./mailbox");
-const { daemonStatus, receiptAckRequired, findReceiptAck, semanticAckRequired } = require("./daemon");
+const { daemonStatus, receiptAckRequired, findReceiptAck, semanticAckRequired, configuredCodexWakeCommand } = require("./daemon");
 const { listQueuedNotifications, listDeliveredNotifications } = require("./mcp/claudeChannel");
 const { statusCodexMcp } = require("./mcp/codexInstall");
 
@@ -315,26 +315,31 @@ function codexWakeState(cwd) {
   const rows = exists(wakeLogPath) ? readJsonl(wakeLogPath) : [];
   const events = state.listEvents(cwd, { type: "daemon.codex_push_attempted", limit: 100 });
   const queuedEvents = state.listEvents(cwd, { type: "daemon.codex_push_queued", limit: 100 });
+  const seenEvents = state.listEvents(cwd, { type: "daemon.codex_mcp_message_seen", limit: 100 });
   const latestByMessage = new Map();
-  for (const event of [...queuedEvents, ...events]) {
+  for (const event of [...queuedEvents, ...events, ...seenEvents]) {
     const messageId = event.detail && event.detail.message_id;
     if (messageId) latestByMessage.set(messageId, event);
   }
   const delivered = Array.from(latestByMessage.values()).filter((event) => event.detail && event.detail.result_state === "delivered").length;
   const failed = Array.from(latestByMessage.values()).filter((event) => event.detail && event.detail.result_state === "failed").length;
+  const seen = Array.from(latestByMessage.values()).filter((event) => event.type === "daemon.codex_mcp_message_seen").length;
   const queuedNoAdapter = Array.from(latestByMessage.values()).filter(
     (event) => event.detail && event.detail.result_state === "queued_no_adapter"
   ).length;
   const queuedPushDisabled = Array.from(latestByMessage.values()).filter(
     (event) => event.detail && event.detail.result_state === "queued_push_disabled"
   ).length;
+  const adapter = configuredCodexWakeCommand(cwd);
   return {
     stream_path: path.relative(cwd, wakeLogPath),
-    adapter_configured: Boolean(process.env.AGENT_TEAM_CODEX_WAKE_COMMAND),
-    adapter_command: process.env.AGENT_TEAM_CODEX_WAKE_COMMAND || null,
+    adapter_configured: Boolean(adapter),
+    adapter_command: adapter ? adapter.command : null,
+    adapter_source: adapter ? adapter.source : null,
     total: rows.length,
     delivered,
     failed,
+    seen,
     queued_no_adapter: queuedNoAdapter,
     queued_push_disabled: queuedPushDisabled,
     recent: rows.slice(-5).map((row) => ({
@@ -997,8 +1002,8 @@ function renderCockpit(snapshot) {
     `Receiver daemon: ${snapshot.daemon.running ? "running" : "not-running"} active-runs=${snapshot.daemon.active_runs.length}${snapshot.daemon.stale_pid ? " stale-pid=true" : ""}`,
     `Session push: ${snapshot.daemon.session_push && snapshot.daemon.session_push.native_model_ui_push ? "native" : "mailbox-daemon"} fallback=${snapshot.daemon.session_push ? snapshot.daemon.session_push.fallback_waiter : "await reply --request-id <id>"}`,
     `Claude MCP: queued=${snapshot.daemon.claude_mcp.queued_total} waiting=${snapshot.daemon.claude_mcp.waiting_for_mcp_server} mcp-emitted=${snapshot.daemon.claude_mcp.mcp_emitted} legacy-fallback=${snapshot.daemon.claude_mcp.legacy_fallback_attempts} legacy-blocked=${snapshot.daemon.claude_mcp.legacy_blocked} outbox=${snapshot.daemon.claude_mcp.outbox_path}`,
-    `Codex MCP: configured=${snapshot.daemon.codex_mcp.configured ? "yes" : "no"} wrapper=${snapshot.daemon.codex_mcp.wrapper_exists ? "yes" : "no"} pending-wake=${snapshot.daemon.codex_mcp.pending_wake_count} manifest=${path.relative(process.cwd(), snapshot.daemon.codex_mcp.manifest_path)}`,
-    `Codex wake: total=${snapshot.daemon.codex_wake.total} delivered=${snapshot.daemon.codex_wake.delivered} queued-no-adapter=${snapshot.daemon.codex_wake.queued_no_adapter} failed=${snapshot.daemon.codex_wake.failed} adapter=${snapshot.daemon.codex_wake.adapter_configured ? "configured" : "missing"} stream=${snapshot.daemon.codex_wake.stream_path}`,
+    `Codex MCP: configured=${snapshot.daemon.codex_mcp.configured ? "yes" : "no"} wrapper=${snapshot.daemon.codex_mcp.wrapper_exists ? "yes" : "no"} wake-command=${snapshot.daemon.codex_mcp.wake_command_exists ? "yes" : "no"} pending-wake=${snapshot.daemon.codex_mcp.pending_wake_count} manifest=${path.relative(process.cwd(), snapshot.daemon.codex_mcp.manifest_path)}`,
+    `Codex wake: total=${snapshot.daemon.codex_wake.total} delivered=${snapshot.daemon.codex_wake.delivered} seen=${snapshot.daemon.codex_wake.seen} queued-no-adapter=${snapshot.daemon.codex_wake.queued_no_adapter} failed=${snapshot.daemon.codex_wake.failed} adapter=${snapshot.daemon.codex_wake.adapter_configured ? snapshot.daemon.codex_wake.adapter_source || "configured" : "missing"} stream=${snapshot.daemon.codex_wake.stream_path}`,
     `Timeline: shown=${snapshot.message_timeline.shown} candidates=${snapshot.message_timeline.total_candidates}`,
     `Queues: requests=${snapshot.claude_channel.queues.requests} responses=${snapshot.claude_channel.queues.responses} pending=${snapshot.claude_channel.queues.pending.length}${snapshot.claude_channel.queues.stale_completed_pending ? ` completed-stale=${snapshot.claude_channel.queues.stale_completed_pending}` : ""}`,
     `Mailbox: total=${snapshot.mailbox.total} codex-unread=${snapshot.mailbox.codex_unread} claude-unread=${snapshot.mailbox.claude_unread} pending-receipts=${snapshot.mailbox.pending_receipt_ack} pending-replies=${snapshot.mailbox.pending_reply_required}${snapshot.mailbox.stale_completed_unread || snapshot.mailbox.stale_completed_receipt_ack || snapshot.mailbox.stale_completed_reply_required ? ` completed-stale=${snapshot.mailbox.stale_completed_unread + snapshot.mailbox.stale_completed_receipt_ack + snapshot.mailbox.stale_completed_reply_required}` : ""}${snapshot.mailbox.duplicate_receipt_acks_collapsed ? ` receipt-duplicates-collapsed=${snapshot.mailbox.duplicate_receipt_acks_collapsed}` : ""} malformed=${snapshot.mailbox.diagnostics.malformed_total}`,
@@ -1089,8 +1094,9 @@ function renderCockpit(snapshot) {
     "",
     "## Codex MCP Adapter",
     "",
-    `- configured=${snapshot.daemon.codex_mcp.configured} wrapper=${snapshot.daemon.codex_mcp.wrapper_exists} pending-wake=${snapshot.daemon.codex_mcp.pending_wake_count}`,
+    `- configured=${snapshot.daemon.codex_mcp.configured} wrapper=${snapshot.daemon.codex_mcp.wrapper_exists} wake-command=${snapshot.daemon.codex_mcp.wake_command_exists} pending-wake=${snapshot.daemon.codex_mcp.pending_wake_count}`,
     `- wrapper: ${snapshot.daemon.codex_mcp.wrapper_path}`,
+    `- wake command: ${snapshot.daemon.codex_mcp.wake_command_path}`,
     `- manifest: ${snapshot.daemon.codex_mcp.manifest_path}`,
     "",
     "## Claude MCP Outbox",

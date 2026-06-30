@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 10 visible-Claude startup failures now block by default, full architecture review still open
+Status: Active refactor charter; Phase 11 Codex MCP wake adapter installed/dogfooded, visible-Claude startup handshake still open
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -592,6 +592,7 @@ Files touched:
 - `agent-team/tests/public-contract.test.js`
 - `README.md`
 - `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md`
 - `docs/first-class-teammate-refactor-goal.md`
 
 Tests/proof run:
@@ -959,3 +960,60 @@ Next phase:
 
 - Install/check the Codex MCP adapter for this repo and dogfood Codex-side wake reading.
 - Then attack the visible-Claude launch handshake itself: either make the legacy endpoint registration reliable for visible launches or move visible startup proof to a first-party session handshake that Claude can ACK through MCP/mailbox immediately after opening.
+
+### 2026-06-30 - Phase 11 Installed Codex Wake Adapter And Pending-Wake Cleanup
+
+What changed:
+
+- Added first-class `agent-team-codex-wake` bin target next to `agent-team-codex-mcp`.
+- `agent-team codex mcp install` now installs both wrappers, verifies both `--help` commands, and writes `wake_command` plus `wake_deliveries_path` into `.agent-team/comms/codex-mcp/adapter.json`.
+- The receiver daemon now auto-discovers the installed wake command from the Codex MCP manifest when `AGENT_TEAM_CODEX_WAKE_COMMAND` is not set. Explicit env/option wake commands still win.
+- Added a local wake command implementation that records `.agent-team/comms/codex-mcp/wake-deliveries.jsonl` and returns a compact JSON delivery receipt.
+- Cockpit now reports Codex wake adapter source (`env`, `options`, or `codex_mcp_manifest`), Codex MCP wake-command presence, and `seen` wake count.
+- `codex mcp status` now reports total/seen/pending wake counts, where pending excludes wake payloads that Codex MCP has ACKed.
+- Cockpit wake state now treats `daemon.codex_mcp_message_seen` as clearing prior `queued_no_adapter` for the same message, removing stale no-adapter warnings after Codex reads/ACKs through MCP.
+- Reinstalled the live local Codex adapter in this checkout and restarted only the Agent Team Harness receiver daemon to load the new code.
+
+Why it changed:
+
+- Phase 10 proved that the Codex MCP reader worked, but the daemon still reported `queued_no_adapter` because no push adapter was configured.
+- Installing an MCP reader without a push command still left the user-visible "real-time" story half-built. The daemon needed a concrete local wake target it could invoke immediately.
+- The cockpit was also counting historical queued rows even after Codex MCP ACKed them, which recreated the stale-status problem the refactor is trying to eliminate.
+
+Files touched:
+
+- `agent-team/package.json`
+- `agent-team/src/daemon.js`
+- `agent-team/src/cockpit.js`
+- `agent-team/src/mcp/codexInstall.js`
+- `agent-team/src/mcp/codexWakeCommand.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+- `/Users/andrewguzman/.local/bin/agent-team-codex-mcp`
+- `/Users/andrewguzman/.local/bin/agent-team-codex-wake`
+- `.agent-team/comms/codex-mcp/adapter.json`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/cli-smoke.test.js --test-name-pattern "Codex wake|codex mcp install|installed Codex MCP wake"` from repo root: CLI smoke file ran and 58 tests passed.
+- `node --test agent-team/tests/mcp-codex-channel.test.js` from repo root: 3 tests passed.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+- `npm test` from `agent-team/`: 123 tests passed.
+- Live install proof: `node agent-team/src/cli.js codex mcp install` installed/verifed `agent-team-codex-mcp` and `agent-team-codex-wake`.
+- Live daemon dogfood: after daemon restart, Claude-to-Codex check-in `msg_mr0gonqi_a0d25300` produced Codex wake delivery through `/Users/andrewguzman/.local/bin/agent-team-codex-wake` with `adapter_source: codex_mcp_manifest`.
+- Live MCP ACK proof: `agent_team_codex_ack` acknowledged `msg_mr0gonqi_a0d25300` as `ack_mr0gpyqp_4823775f`; cockpit then showed `queued_no_adapter: 0`, `seen: 2`, `pending_wake_count: 0`.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+
+Remaining architectural discomfort:
+
+- The local Codex wake adapter now provides a daemon-invoked push target, but this still does not force a visual notification into the current Codex chat surface unless that surface consumes the MCP/wake stream.
+- A prior live message was processed by both the old daemon and the restarted daemon, leaving duplicate wake rows for the same message in history. The latest-state logic handles it, but future cleanup could dedupe duplicate wake rows in display.
+- Visible Claude startup remains the largest unresolved trust gap: `--fresh-claude` opens Terminal but still does not register a new same-project channel endpoint.
+- The legacy Claude endpoint registry remains in the visible startup proof path.
+
+Next phase:
+
+- Attack visible-Claude startup handshake directly. Prefer a first-party startup ACK path where the launched Claude session writes a mailbox/MCP boot ACK tied to the Codex thread and project root, so visible startup proof no longer depends solely on legacy endpoint-list inference.
