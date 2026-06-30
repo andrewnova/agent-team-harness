@@ -2018,13 +2018,17 @@ test("CLI smoke: start auto-ensures a named Claude side", () => {
     PATH: `${binDir}:${process.env.PATH}`,
     FAKE_READY: readyFile
   };
-  const start = JSON.parse(
-    run(
+  const result = spawnSync(
+    process.execPath,
+    [cli, "start", "--name", "codex-thread", "--timeout-ms", "1000", "--poll-ms", "10", "--launch-mode", "background"],
+    {
       cwd,
-      ["start", "--name", "codex-thread", "--timeout-ms", "1000", "--poll-ms", "10", "--launch-mode", "background"],
-      env
-    ).stdout
+      env,
+      encoding: "utf8"
+    }
   );
+  assert.equal(result.status, 0);
+  const start = JSON.parse(result.stdout);
   assert.equal(start.claude_channel_startup.ok, true);
   assert.equal(start.claude_channel_startup.action, "started");
   assert.equal(start.claude_channel.name, "codex-thread");
@@ -2077,7 +2081,6 @@ test("CLI smoke: fresh Claude start does not reuse or rename an old endpoint", (
       "--name",
       "fresh-thread",
       "--fresh-claude",
-      "--strict-claude",
       "--timeout-ms",
       "100",
       "--poll-ms",
@@ -2100,11 +2103,36 @@ test("CLI smoke: fresh Claude start does not reuse or rename an old endpoint", (
   assert.equal(start.claude_channel_startup.discovered.probe.new_project_count, 0);
   assert.equal(start.claude_channel_startup.discovered.probe.existing_project_count, 1);
   assert.match(start.claude_channel_startup.reason, /no new same-project Claude channel endpoint appeared/);
+  const degraded = spawnSync(
+    process.execPath,
+    [
+      cli,
+      "start",
+      "--name",
+      "fresh-thread",
+      "--fresh-claude",
+      "--allow-degraded-claude",
+      "--timeout-ms",
+      "100",
+      "--poll-ms",
+      "10",
+      "--launch-mode",
+      "background"
+    ],
+    {
+      cwd,
+      env,
+      encoding: "utf8"
+    }
+  );
+  assert.equal(degraded.status, 0);
+  assert.equal(JSON.parse(degraded.stdout).claude_channel_startup.action, "fresh_start_no_new_endpoint");
   const cockpit = JSON.parse(run(cwd, ["watch", "--once", "--json", "--no-live-channel"], env).stdout);
   assert.equal(cockpit.claude_channel.session.session_source, "history_latest");
   assert.equal(cockpit.claude_channel.session.action, "fresh_start_no_new_endpoint");
   assert.equal(cockpit.claude_channel.session.identity_confidence, "fresh_launch_unverified_no_new_endpoint");
   assert.equal(cockpit.claude_channel.session.fresh_launch_probe.new_project_count, 0);
+  assert.equal(cockpit.next_actions[0].startsWith("Fresh Claude launch did not register"), true);
   const cockpitText = run(cwd, ["watch", "--once", "--no-live-channel"], env).stdout;
   assert.match(cockpitText, /Claude startup: source=history_latest confidence=fresh_launch_unverified_no_new_endpoint/);
   assert.match(cockpitText, /probe=require-new:yes new=0 existing=1 checked=0 selected=none/);
@@ -2286,13 +2314,17 @@ test("CLI smoke: start does not expose stale raw channel diagnostics after start
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`
   };
-  const start = JSON.parse(
-    run(
+  const result = spawnSync(
+    process.execPath,
+    [cli, "start", "--name", "codex-thread", "--timeout-ms", "1000", "--poll-ms", "10", "--launch-mode", "background"],
+    {
       cwd,
-      ["start", "--name", "codex-thread", "--timeout-ms", "1000", "--poll-ms", "10", "--launch-mode", "background"],
-      env
-    ).stdout
+      env,
+      encoding: "utf8"
+    }
   );
+  assert.equal(result.status, 1);
+  const start = JSON.parse(result.stdout);
   assert.equal(start.claude_channel_startup.action, "claude_auth_required");
   assert.equal(start.claude_channel, null);
   assert.equal(JSON.stringify(start).includes(".claude-channel/token"), false);

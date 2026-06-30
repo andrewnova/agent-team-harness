@@ -654,7 +654,20 @@ function proofBlockers(cwd, tasks) {
 }
 
 function topNextActions(mode, goals, activeTasks, plans, claude, blockers = [], notices = [], checkins = [], selfHeal = [], refactorOffers = [], mailbox = null, daemon = null) {
+  const priorityActions = [];
   const actions = [];
+  if (claude.session && claude.session.action === "fresh_start_no_new_endpoint") {
+    const probe = claude.session.fresh_launch_probe || (claude.session.discovered && claude.session.discovered.probe);
+    const existing = probe ? probe.existing_project_count || 0 : 0;
+    const fresh = probe ? probe.new_project_count || 0 : 0;
+    priorityActions.push(`Fresh Claude launch did not register a new same-project endpoint; new=${fresh} existing=${existing}. Inspect claude_channel.session.fresh_launch_probe.`);
+  }
+  if (claude.session && claude.session.action === "claude_auth_required") {
+    priorityActions.push("Authenticate Claude Code with channel auth login before live teammate startup");
+  }
+  if (!goals.length && !activeTasks.length && claude.session && claude.session.ok === false) {
+    priorityActions.push("Fix Claude channel startup before live teammate requests");
+  }
   if (daemon && !daemon.running) {
     actions.push("Start the receiver daemon for fast mailbox routing: daemon start --roles codex,claude --include-existing");
   }
@@ -713,19 +726,7 @@ function topNextActions(mode, goals, activeTasks, plans, claude, blockers = [], 
   }
   for (const blocker of blockers.slice(0, 3)) actions.push(`${blocker.task_id}: ${blocker.blocker}`);
   for (const task of activeTasks.slice(0, 6)) actions.push(task.next_action);
-  if (!goals.length && !activeTasks.length && claude.session && claude.session.ok === false) {
-    actions.push("Fix Claude channel startup before live teammate requests");
-  }
-  if (claude.session && claude.session.action === "fresh_start_no_new_endpoint") {
-    const probe = claude.session.fresh_launch_probe || (claude.session.discovered && claude.session.discovered.probe);
-    const existing = probe ? probe.existing_project_count || 0 : 0;
-    const fresh = probe ? probe.new_project_count || 0 : 0;
-    actions.push(`Fresh Claude launch did not register a new same-project endpoint; new=${fresh} existing=${existing}. Inspect claude_channel.session.fresh_launch_probe.`);
-  }
-  if (claude.session && claude.session.action === "claude_auth_required") {
-    actions.push("Authenticate Claude Code with channel auth login before live teammate startup");
-  }
-  return [...new Set(actions)].slice(0, 8);
+  return [...new Set([...priorityActions, ...actions])].slice(0, 8);
 }
 
 function cockpitSnapshot(cwd, options = {}) {

@@ -75,7 +75,7 @@ function usage() {
   return `agent-team [--cwd <harness-root>] <command>
 
 Commands:
-  start [--name <name>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--daemon] [--no-daemon] [--no-ensure-claude] [--strict-claude] [channel ensure options]
+  start [--name <name>] [--project-dir <path>] [--fresh-claude] [--allow-cross-project-reuse] [--daemon] [--no-daemon] [--no-ensure-claude] [--allow-degraded-claude] [channel ensure options]
   init
   config
   doctor [--fix] [--target <target>] [--smoke] [--smoke-timeout-ms <ms>]
@@ -379,6 +379,12 @@ function startClaude(cwd, args) {
   return adapter.ensure(cwd, channelEnsureOptions(args));
 }
 
+function claudeStartupBlocksStart(startArgs, claudeStartup) {
+  if (!claudeStartup || claudeStartup.skipped) return false;
+  if (hasFlag(startArgs, "--allow-degraded-claude")) return false;
+  return claudeStartup.ok === false;
+}
+
 function redactChannelDiagnostics(value) {
   if (Array.isArray(value)) return value.map(redactChannelDiagnostics);
   if (!value || typeof value !== "object") {
@@ -642,7 +648,7 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
         task_statuses: statusCounts(tasks)
       }
     });
-    return hasFlag(startArgs, "--strict-claude") && claudeStartup && claudeStartup.ok === false ? 1 : 0;
+    return claudeStartupBlocksStart(startArgs, claudeStartup) ? 1 : 0;
   }
   if (command === "goal" && subcommand === "new") {
     print(

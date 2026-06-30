@@ -367,6 +367,74 @@ test("CH-2d channel ensure reuses prior same-thread endpoint id before display-n
   }
 });
 
+test("CH-2e channel ensure handles empty display-name status before remembered endpoint reuse", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const fakeCli = path.join(binDir, "claude-channel");
+  const threadId = "019f0fc3-3dd8-75c0-b15c-09fcb96bd921";
+  const expectedName = defaultSessionName(cwd, { CODEX_THREAD_ID: threadId });
+  writeJson(paths.channelSessionPath(cwd), {
+    ok: true,
+    action: "started",
+    name: expectedName,
+    target: "ep_remembered",
+    project_dir: fs.realpathSync.native(cwd),
+    session_identity: {
+      source: "CODEX_THREAD_ID",
+      thread_ref: "019f0fc3-3dd",
+      strict_project_reuse: true
+    },
+    endpoint: {
+      target: "ep_remembered",
+      display_name: expectedName,
+      project_dir: fs.realpathSync.native(cwd)
+    }
+  });
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"status\" ]; then",
+    "  if [ \"$3\" = \"$FAKE_EXPECTED_NAME\" ]; then",
+    "    echo '{\"reachable\":false,\"health\":{\"ok\":false}}'",
+    "    exit 1",
+    "  fi",
+    "  if [ \"$3\" = \"ep_remembered\" ]; then",
+    "    echo '{\"target\":\"ep_remembered\",\"endpoint\":{\"endpoint_id\":\"ep_remembered\",\"display_name\":\"'$FAKE_EXPECTED_NAME'\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
+    "    exit 0",
+    "  fi",
+    "  exit 1",
+    "fi",
+    "if [ \"$1\" = \"list\" ]; then",
+    "  echo '{\"targets\":[{\"target\":\"ep_remembered\",\"endpoint_id\":\"ep_remembered\",\"display_name\":\"'$FAKE_EXPECTED_NAME'\",\"project_dir\":\"'$PWD'\",\"started_at\":\"2026-06-28T00:00:01.000Z\"}]}'",
+    "  exit 0",
+    "fi",
+    "exit 1"
+  ]);
+  const previousPath = process.env.PATH;
+  const previousThread = process.env.CODEX_THREAD_ID;
+  const previousExpected = process.env.FAKE_EXPECTED_NAME;
+  const previousName = process.env.AGENT_TEAM_CLAUDE_NAME;
+  process.env.PATH = `${binDir}:${previousPath}`;
+  process.env.CODEX_THREAD_ID = threadId;
+  process.env.FAKE_EXPECTED_NAME = expectedName;
+  delete process.env.AGENT_TEAM_CLAUDE_NAME;
+  try {
+    const bridge = createBridge("claude-channel");
+    const result = bridge.ensure(cwd, { timeout_ms: 1000, poll_ms: 10 });
+    assert.equal(result.ok, true);
+    assert.equal(result.target, "ep_remembered");
+    assert.equal(result.reuse_source, "remembered_endpoint_id");
+    assert.equal(result.identity_confidence, "remembered_endpoint_id_reused");
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousThread === undefined) delete process.env.CODEX_THREAD_ID;
+    else process.env.CODEX_THREAD_ID = previousThread;
+    if (previousExpected === undefined) delete process.env.FAKE_EXPECTED_NAME;
+    else process.env.FAKE_EXPECTED_NAME = previousExpected;
+    if (previousName === undefined) delete process.env.AGENT_TEAM_CLAUDE_NAME;
+    else process.env.AGENT_TEAM_CLAUDE_NAME = previousName;
+  }
+});
+
 test("CH-3 channel ensure starts Claude background session and waits for endpoint", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();

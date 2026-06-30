@@ -1,7 +1,7 @@
 # First-Class Teammate Refactor Goal
 
 Created: 2026-06-30
-Status: Active refactor charter; Phase 9 cockpit startup identity/probe visibility verified locally, full architecture review still open
+Status: Active refactor charter; Phase 10 visible-Claude startup failures now block by default, full architecture review still open
 Scope: Agent Team Harness, Claude/Codex communication, visible teammate UX, MCP/channel transport, daemon, cockpit, docs, tests, and installed skill contract.
 
 ## Goal Prompt
@@ -505,6 +505,7 @@ Files touched:
 - `agent-team/tests/cli-smoke.test.js`
 - `README.md`
 - `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `/Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md`
 - `docs/first-class-teammate-refactor-goal.md`
 
 Tests/proof run:
@@ -906,3 +907,55 @@ Remaining architectural discomfort:
 Next phase:
 
 - Dogfood a real visible Claude startup path and capture evidence. If the endpoint registry still fails to produce a new endpoint even when Claude visibly opens, focus the next refactor on first-party MCP/session identity or a stricter local launch handshake that does not require endpoint-name or endpoint-list inference.
+
+### 2026-06-30 - Phase 10 Startup Failure Must Block Delegation
+
+What changed:
+
+- Dogfooded `agent-team start --fresh-claude --daemon --timeout-ms 20000 --poll-ms 1000` against the live local environment. The first run exposed a crash when a status response had no parsed body while a remembered endpoint existed.
+- Fixed the crash in `agent-team/src/bridge/claudeChannel.js` by guarding `initialStatus.parsed` before comparing a remembered target.
+- Added regression test `CH-2e channel ensure handles empty display-name status before remembered endpoint reuse`.
+- Retried the live visible launch. Terminal opened, but no new same-project Claude endpoint appeared. Startup recorded `fresh_start_no_new_endpoint` with `identity_confidence: fresh_launch_unverified_no_new_endpoint`, two existing same-project endpoints, zero new endpoints, and zero selected candidates.
+- Changed `agent-team start` so Claude startup failures block by default. `--strict-claude` was removed from the normal contract and replaced with explicit `--allow-degraded-claude` for diagnostics or intentionally Codex-only work.
+- Moved `fresh_start_no_new_endpoint` and `claude_auth_required` cockpit Next Actions into a priority lane so startup blockers cannot be hidden behind mailbox or planning noise.
+- Updated CLI usage, README, public skill contract, and public contract tests.
+
+Why it changed:
+
+- The old behavior let the default startup path print a failed Claude startup while still exiting 0 unless the operator remembered `--strict-claude`. That made a failed visible teammate launch look too much like successful delegation.
+- The product rule should match the user's expectation: if Claude-owned work requires visible Claude, failed visible startup is a blocker by default.
+- Dogfood proved the harness can now say exactly what happened, but also proved the underlying visible endpoint registration problem still exists.
+
+Files touched:
+
+- `agent-team/src/bridge/claudeChannel.js`
+- `agent-team/src/cli.js`
+- `agent-team/src/cockpit.js`
+- `agent-team/tests/bridge-review-handoff-reground.test.js`
+- `agent-team/tests/cli-smoke.test.js`
+- `agent-team/tests/public-contract.test.js`
+- `README.md`
+- `plugins/agent-team-harness/skills/agent-team-harness/SKILL.md`
+- `docs/first-class-teammate-refactor-goal.md`
+
+Tests/proof run:
+
+- `node --test agent-team/tests/bridge-review-handoff-reground.test.js` from repo root: 34 tests passed.
+- `node --test agent-team/tests/cli-smoke.test.js` from repo root: 57 tests passed.
+- `node --test agent-team/tests/public-contract.test.js` from repo root: 2 tests passed.
+- `npm test` from `agent-team/`: 122 tests passed.
+- Live dogfood with visible Terminal launch showed `fresh_start_no_new_endpoint` instead of silent success.
+- `node agent-team/src/cli.js watch --once --no-live-channel` showed `Claude startup: source=history_latest confidence=fresh_launch_unverified_no_new_endpoint ... probe=require-new:yes new=0 existing=2 checked=0 selected=none`.
+- Installed skill sync proof: `cmp -s plugins/agent-team-harness/skills/agent-team-harness/SKILL.md /Users/andrewguzman/.codex/skills/agent-team-harness/SKILL.md` returned `0`.
+
+Remaining architectural discomfort:
+
+- Visible Claude still opened without producing a new channel endpoint in the live dogfood run. The harness now blocks honestly, but the user still does not get the desired real-time visible teammate handoff.
+- `claude-channel-cli` is still the launch/endpoint proof source for visible Claude. First-party MCP exists, but visible startup identity still depends on legacy endpoint observation.
+- `--allow-degraded-claude` is necessary for diagnostics, but any degraded mode is still a possible user-experience escape hatch that must stay explicit and rare.
+- Codex MCP is implemented and tested, but the project-local adapter was not yet installed in this live checkout during Phase 10 dogfood.
+
+Next phase:
+
+- Install/check the Codex MCP adapter for this repo and dogfood Codex-side wake reading.
+- Then attack the visible-Claude launch handshake itself: either make the legacy endpoint registration reliable for visible launches or move visible startup proof to a first-party session handshake that Claude can ACK through MCP/mailbox immediately after opening.

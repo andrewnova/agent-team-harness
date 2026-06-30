@@ -79,10 +79,13 @@ agent-team start --name my-project --project-dir "$PWD" --daemon
 
 When no `--name` is provided, the harness derives a session name from the project and the Codex thread id when `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, or `AGENT_TEAM_SESSION_ID` is available. That lets an old Codex thread reattach to its matching Claude teammate while a new Codex thread gets a separate visible Claude session by default. Passing `--name` remains the explicit override.
 
+`agent-team start` treats a failed Claude startup as a blocking setup error by default. That includes auth failures and failed visible fresh launches, because a Claude-owned task must not look delegated when no reachable visible Claude teammate exists. Use `--allow-degraded-claude` only for offline diagnostics or Codex-only work where the failed startup is intentionally nonblocking.
+
 For offline or deterministic local testing:
 
 ```bash
 agent-team start --name my-project --project-dir "$PWD" --no-ensure-claude
+agent-team start --name my-project --project-dir "$PWD" --allow-degraded-claude
 agent-team cockpit --no-live-channel
 ```
 

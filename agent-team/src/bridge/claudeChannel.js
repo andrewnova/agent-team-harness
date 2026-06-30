@@ -135,7 +135,8 @@ function ensure(cwd, options = {}) {
   const initialMismatch = workspaceMismatch(endpointFromStatus(initialStatus), projectCwd);
   const initialEndpoint = endpointFromStatus(initialStatus);
   const initialEndpointTarget = endpointTarget(initialEndpoint);
-  const initialMatchesRemembered = !rememberedTarget || initialEndpointTarget === rememberedTarget || initialStatus.parsed.target === rememberedTarget;
+  const initialParsedTarget = initialStatus.parsed ? initialStatus.parsed.target : null;
+  const initialMatchesRemembered = !rememberedTarget || initialEndpointTarget === rememberedTarget || initialParsedTarget === rememberedTarget;
   if (initialStatus.ok && !options.fresh_claude && (!initialMismatch || options.allow_cross_project_reuse) && initialMatchesRemembered) {
     const smoke = options.smoke ? runSmoke(cli.command, projectCwd, target, options.smoke_timeout_ms || 120000) : null;
     return persist({
