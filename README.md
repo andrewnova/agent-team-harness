@@ -20,6 +20,7 @@ Landing page: [`site/index.html`](site/index.html), deployable through GitHub Pa
 - Stores goals, tasks, leases, reviews, proof, mailbox messages, and closeout records locally.
 - Routes frontend work to Claude and backend/proof work to Codex.
 - Uses a durable mailbox as the source of truth for teammate communication.
+- Makes `channel steer` visible by default and returns a blocking next step when Claude live delivery is not proven.
 - Supports nonblocking review requests, semantic acknowledgements, check-ins, and batch replies.
 - Requires proof before tasks can be marked done.
 - Generates closeout reports and optional self-heal/refactor recommendations.
@@ -134,6 +135,8 @@ For Claude-to-Codex traffic, the daemon writes wake payloads under `.agent-team/
 The cockpit timeline is derived from existing mailbox rows, ACK rows, MCP outbox/delivery rows, Codex wake payloads, Codex MCP receipts, and daemon events. The JSON keeps stable machine stage keys, while the text cockpit renders human labels such as "mailbox sent," "Claude wake queued," "Codex MCP saw it," and "mailbox replied" without creating a second state store.
 
 Do not delegate real Claude work through raw `ask_claude` or a direct live-channel wait. Planning, implementation, review, refactor, and debugging work should go through mailbox-backed harness commands such as `plan claude`, `review request`, `channel steer`, or `mailbox send --to claude --kind request --reply-required`. The raw live channel is for health checks, smoke tests, low-level diagnostics, and the daemon's short wake-up copy; the mailbox reply remains the completion truth.
+
+`agent-team channel steer` is visible-or-blocking by default. It first queues the durable reply-required mailbox request, immediately runs a bounded daemon wake pass for that exact mailbox message, and returns success only when visible delivery is proven or a semantic mailbox reply already exists. If the live wake fails, the JSON includes `blocking_next_step` with the request id, target when known, wake packet path when available, and `await reply` command. Use `--no-live` or `--mailbox-only` only when quiet mailbox-only delegation is intentional.
 
 Claude can check in at any time:
 

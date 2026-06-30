@@ -773,6 +773,7 @@ function stopDaemon(cwd, options = {}) {
 function runDaemon(cwd, options = {}) {
   state.init(cwd);
   const roles = normalizeRoles(options.roles);
+  const previousPidRecord = daemonPidRecord(cwd);
   const run = state.createRun(cwd, {
     kind: "daemon",
     title: options.title || `Mailbox receiver daemon (${roles.join(",")})`,
@@ -806,12 +807,13 @@ function runDaemon(cwd, options = {}) {
   };
 
   const scanExisting = () => {
-    const rows = roles.flatMap((role) =>
+    let rows = roles.flatMap((role) =>
       listMessages(cwd, {
         to: role,
         unacked: options.unacked !== false
       })
     );
+    if (options.message_id) rows = rows.filter((row) => row.id === options.message_id);
     return handleMessages(cwd, run.run_id, rows, options);
   };
 
@@ -823,6 +825,9 @@ function runDaemon(cwd, options = {}) {
       evidence: [`daemon:${run.run_id}`]
     });
     clearDaemonPidRecord(cwd, { pid: process.pid, run_id: run.run_id });
+    if (previousPidRecord && previousPidRecord.pid && processAlive(previousPidRecord.pid)) {
+      writeJson(paths.daemonPidPath(cwd), previousPidRecord);
+    }
     return {
       ok: true,
       run: completedRun,

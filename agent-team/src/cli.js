@@ -193,7 +193,7 @@ Commands:
   channel status [--target <target>]
   channel ask --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>]
   channel dispatch --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>] [--goal <goal>]
-  channel steer --kind <kind> --task <task> (--prompt <text>|--file <path>) [--subject <text>] [--target <target>] [--timeout-ms <ms>] [--goal <goal>] [--raw-live]
+  channel steer --kind <kind> --task <task> (--prompt <text>|--file <path>) [--subject <text>] [--target <target>] [--timeout-ms <ms>] [--goal <goal>] [--no-live|--mailbox-only|--raw-live]
   watch [--once] [--json] [--target <target>] [--limit <n>] [--interval-ms <ms>] [--no-live-channel]
   cockpit [--json] [--target <target>] [--limit <n>] [--no-live-channel]
   board
@@ -569,6 +569,69 @@ function liveSteerPrompt(prompt, durable) {
     "",
     prompt
   ].join("\n");
+}
+
+const LIVE_DELIVERY_STATES = new Set(["answered", "needs_user", "declined", "wake_sent_reply_pending", "wake_sent"]);
+
+function explicitMailboxOnly(args) {
+  return hasFlag(args, "--no-live") || hasFlag(args, "--mailbox-only");
+}
+
+function liveDeliverySucceeded(live) {
+  if (!live) return false;
+  if (live.ok) return true;
+  if (LIVE_DELIVERY_STATES.has(live.result_state)) return true;
+  if (live.legacy && LIVE_DELIVERY_STATES.has(live.legacy.result_state)) return true;
+  if (live.first_party && LIVE_DELIVERY_STATES.has(live.first_party.result_state)) return true;
+  return false;
+}
+
+function replyForRequest(cwd, requestId) {
+  if (!requestId) return null;
+  return (
+    listMessages(cwd, {
+      to: "codex",
+      kind: "reply",
+      request_id: requestId
+    })[0] || null
+  );
+}
+
+function daemonLivePushForMessage(result, messageId) {
+  if (!result || !Array.isArray(result.messages)) return null;
+  const handled = result.messages.find((message) => message.id === messageId);
+  return handled && handled.live_push ? handled.live_push : null;
+}
+
+function commandToAwaitReply({ requestId }) {
+  return `node agent-team/src/cli.js await reply --request-id ${requestId} --once`;
+}
+
+function visibleDeliveryBlocker(cwd, durable, live, reply) {
+  if (reply || liveDeliverySucceeded(live)) return null;
+  const legacy = live && live.legacy;
+  const promptPath = legacy && legacy.prompt_path ? legacy.prompt_path : null;
+  const target = (live && live.target) || (legacy && legacy.target) || null;
+  const reason =
+    (legacy && (legacy.stderr || legacy.error || legacy.reason || legacy.result_state)) ||
+    (live && (live.stderr || live.error || live.reason || live.result_state)) ||
+    "visible Claude wake was not proven";
+  return {
+    blocking: true,
+    kind: "visible_claude_delivery_unproven",
+    reason,
+    request_id: durable.request_id,
+    mailbox_message_id: durable.mailbox_message_id,
+    target,
+    wake_packet_path: promptPath,
+    await_reply_command: commandToAwaitReply({ requestId: durable.request_id }),
+    manual_recovery_command: promptPath
+      ? `cat ${path.resolve(cwd, promptPath)}`
+      : `node agent-team/src/cli.js mailbox show ${durable.mailbox_message_id}`,
+    diagnostic_command: "node agent-team/src/cli.js daemon status && node agent-team/src/cli.js cockpit --json --no-live-channel",
+    directive:
+      "Visible Claude did not prove it received this steering. Do not claim Claude is working; inspect the wake packet or await the mailbox reply."
+  };
 }
 
 function channelSessionForStart(cwd, claudeStartup) {
@@ -1882,12 +1945,17 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
       subject: argValue(rest, "--subject") || `Claude steering ${taskId}`,
       reply_required: true
     });
-    let live = {
-      ok: false,
-      skipped: true,
-      reason: "daemon-live-wake"
-    };
-    if (hasFlag(rest, "--raw-live")) {
+    const mailboxOnly = explicitMailboxOnly(rest);
+    let live = null;
+    let daemonPass = null;
+    let reply = null;
+    if (mailboxOnly) {
+      live = {
+        ok: false,
+        skipped: true,
+        reason: "explicit-mailbox-only"
+      };
+    } else if (hasFlag(rest, "--raw-live")) {
       try {
         const liveAdapter = createBridge("claude-channel");
         live = compactLiveChannelResult(
@@ -1907,9 +1975,23 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
           error: error.message
         };
       }
+    } else {
+      daemonPass = runDaemon(cwd, {
+        roles: ["claude"],
+        once: true,
+        unacked: true,
+        message_id: durable.mailbox_message_id
+      });
+      live = daemonLivePushForMessage(daemonPass, durable.mailbox_message_id) || {
+        ok: false,
+        skipped: true,
+        reason: "daemon did not process the new mailbox message"
+      };
     }
-    print({
-      ok: true,
+    reply = replyForRequest(cwd, durable.request_id);
+    const blockingNextStep = mailboxOnly ? null : visibleDeliveryBlocker(cwd, durable, live, reply);
+    const result = {
+      ok: !blockingNextStep,
       durable_ack: {
         request_id: durable.request_id,
         mailbox_message_id: durable.mailbox_message_id,
@@ -1917,12 +1999,30 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
         dispatch_state: durable.dispatch_state
       },
       live_channel: live,
+      daemon_pass: daemonPass
+        ? {
+            run_id: daemonPass.run && daemonPass.run.run_id,
+            messages_processed: Array.isArray(daemonPass.messages) ? daemonPass.messages.length : 0
+          }
+        : undefined,
+      semantic_reply: reply
+        ? {
+            message_id: reply.id,
+            request_id: reply.request_id,
+            subject: reply.subject
+          }
+        : null,
+      blocking_next_step: blockingNextStep || undefined,
+      blocked_next_step: blockingNextStep || undefined,
       next: {
-        codex: "continue working; watch mailbox/cockpit for Claude ACKs, replies, and check-ins",
+        codex: blockingNextStep
+          ? "visible Claude delivery is unproven; follow blocking_next_step before claiming Claude is working"
+          : "continue working; watch mailbox/cockpit for Claude ACKs, replies, and check-ins",
         claude: `reply with mailbox send --from claude --to codex --kind reply --request-id ${durable.request_id} --in-reply-to ${durable.mailbox_message_id} --body <answer>`
       }
-    });
-    return 0;
+    };
+    print(result);
+    return result.ok ? 0 : 1;
   }
   if (command === "board") {
     print(regenerate(cwd));

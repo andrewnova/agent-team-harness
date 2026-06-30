@@ -23,6 +23,14 @@ function run(cwd, args, env = process.env) {
   return result;
 }
 
+function runRaw(cwd, args, env = process.env) {
+  return spawnSync(process.execPath, [cli, ...args], {
+    cwd,
+    env,
+    encoding: "utf8"
+  });
+}
+
 function git(cwd, args) {
   const result = spawnSync("git", args, {
     cwd,
@@ -492,7 +500,7 @@ test("CLI smoke: realtime mailbox lets Claude check in anytime and answer nonblo
   assert.equal(imported.request_id, dispatched.request.request_id);
 });
 
-test("CLI smoke: channel steer creates a durable Claude ACK handle before live delivery", () => {
+test("CLI smoke: channel steer mailbox-only creates a durable Claude ACK handle without live delivery", () => {
   const cwd = tempRoot();
   run(cwd, ["init"]);
   const steer = JSON.parse(
@@ -517,6 +525,8 @@ test("CLI smoke: channel steer creates a durable Claude ACK handle before live d
   assert.equal(steer.durable_ack.reply_required, true);
   assert.equal(steer.durable_ack.dispatch_state, "queued");
   assert.equal(steer.live_channel.skipped, true);
+  assert.equal(steer.live_channel.reason, "explicit-mailbox-only");
+  assert.equal(steer.blocking_next_step, undefined);
   assert.match(steer.next.claude, new RegExp(steer.durable_ack.mailbox_message_id));
 
   const inbox = JSON.parse(run(cwd, ["mailbox", "inbox", "--to", "claude", "--unacked"]).stdout);
@@ -534,6 +544,113 @@ test("CLI smoke: channel steer creates a durable Claude ACK handle before live d
   const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"]).stdout);
   assert.equal(cockpit.mailbox.pending_reply_required, 1);
   assert.match(cockpit.next_actions.join("\n"), /Claude reply pending/);
+});
+
+test("CLI smoke: channel steer default blocks when visible Claude delivery is unproven", () => {
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  const result = runRaw(cwd, [
+    "channel",
+    "steer",
+    "--kind",
+    "ui_direction",
+    "--task",
+    "T-000007",
+    "--goal",
+    "G-000001",
+    "--subject",
+    "Read Codex UI direction visibly",
+    "--prompt",
+    "From Codex: this should reach visible Claude."
+  ]);
+  assert.equal(result.status, 1);
+  const steer = JSON.parse(result.stdout);
+  assert.equal(steer.ok, false);
+  assert.equal(steer.durable_ack.reply_required, true);
+  assert.equal(steer.live_channel.required, true);
+  assert.equal(steer.live_channel.first_party.result_state, "mcp_outbox_queued");
+  assert.equal(steer.live_channel.legacy.result_state, "legacy_no_session");
+  assert.equal(steer.blocking_next_step.blocking, true);
+  assert.equal(steer.blocking_next_step.kind, "visible_claude_delivery_unproven");
+  assert.equal(steer.blocking_next_step.request_id, steer.durable_ack.request_id);
+  assert.equal(steer.blocking_next_step.mailbox_message_id, steer.durable_ack.mailbox_message_id);
+  assert.match(steer.blocking_next_step.await_reply_command, new RegExp(steer.durable_ack.request_id));
+  assert.match(steer.next.codex, /visible Claude delivery is unproven/);
+
+  const emitted = deliverQueuedNotifications(cwd, () => {});
+  assert.equal(emitted.count, 1);
+  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"]).stdout);
+  assert.equal(cockpit.daemon.claude_mcp.mcp_emitted, 1);
+  assert.equal(cockpit.mailbox.pending_reply_required, 1);
+});
+
+test("CLI smoke: channel steer reports wake packet path when legacy live wake fails", () => {
+  const cwd = tempRoot();
+  const binDir = tempRoot();
+  const fakeCli = path.join(binDir, "claude-channel");
+  writeExecutable(fakeCli, [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"ask-file\" ]; then",
+    "  echo 'fetch failed' >&2",
+    "  exit 1",
+    "fi",
+    "exit 1"
+  ]);
+  const env = {
+    ...process.env,
+    AGENT_TEAM_CHANNEL_CLI: fakeCli
+  };
+  run(cwd, ["init"], env);
+  const sessionFile = path.join(cwd, ".agent-team", "comms", "claude-channel", "session.json");
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  fs.writeFileSync(
+    sessionFile,
+    JSON.stringify(
+      {
+        ok: true,
+        target: "codex-thread",
+        endpoint: {
+          endpoint_id: "ep_exact",
+          display_name: "codex-thread"
+        },
+        delivery_ready: true
+      },
+      null,
+      2
+    )
+  );
+
+  const result = runRaw(
+    cwd,
+    [
+      "channel",
+      "steer",
+      "--kind",
+      "ui_direction",
+      "--task",
+      "T-000008",
+      "--goal",
+      "G-000001",
+      "--subject",
+      "Read Codex UI direction visibly",
+      "--prompt",
+      "From Codex: fail the compatibility live wake."
+    ],
+    env
+  );
+  assert.equal(result.status, 1);
+  const steer = JSON.parse(result.stdout);
+  assert.equal(steer.ok, false);
+  assert.equal(steer.live_channel.result_state, "failed");
+  assert.equal(steer.live_channel.target, "ep_exact");
+  assert.equal(steer.live_channel.first_party.result_state, "mcp_outbox_queued");
+  assert.equal(steer.live_channel.legacy.stderr, "fetch failed");
+  assert.equal(steer.blocking_next_step.request_id, steer.durable_ack.request_id);
+  assert.equal(steer.blocking_next_step.target, "ep_exact");
+  assert.match(steer.blocking_next_step.await_reply_command, new RegExp(steer.durable_ack.request_id));
+  assert.match(steer.blocking_next_step.wake_packet_path, /wake-req_/);
+  assert.equal(fs.existsSync(path.join(cwd, steer.blocking_next_step.wake_packet_path)), true);
+  assert.match(steer.blocking_next_step.manual_recovery_command, /cat /);
 });
 
 test("CLI smoke: daemon one-shot observes both inboxes, receipts advisory notes, and requires semantic replies only when asked", () => {
