@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000" role="img" aria-labelledby="title desc">
   <title id="title">Agent Team Harness Architecture</title>
-  <desc id="desc">Codex owns orchestration and proof, a durable mailbox stores state, first-party Claude and Codex MCP adapters carry live wake and reply traffic, visible Claude handles teammate work, and the legacy channel bridge is compatibility diagnostics only.</desc>
+  <desc id="desc">Codex owns orchestration and proof, a durable mailbox stores state, first-party Claude and Codex MCP adapters carry live wake and reply traffic, visible Claude handles teammate work, and missing semantic replies become blocking handoffs.</desc>
   <defs>
     <style>
       .bg { fill: #f8fafc; }
@@ -81,9 +81,9 @@
   <text class="body" x="342" y="748">and records delivery proof.</text>
 
   <rect class="panel-muted" x="42" y="812" width="220" height="106" rx="14"/>
-  <text class="h2" x="68" y="854">Legacy Bridge</text>
-  <text class="body" x="68" y="882">Startup, smoke tests, and</text>
-  <text class="body" x="68" y="902">explicit compatibility only.</text>
+  <text class="h2" x="68" y="854">Blocking Handoff</text>
+  <text class="body" x="68" y="882">Missing visible Claude or</text>
+  <text class="body" x="68" y="902">semantic reply stops work.</text>
 
   <rect class="panel" x="738" y="812" width="220" height="106" rx="14"/>
   <text class="h2" x="764" y="854">Proof Gates</text>

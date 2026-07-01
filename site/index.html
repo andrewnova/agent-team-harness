@@ -83,12 +83,12 @@ $ agent-team verify final
           <p>
             The receiver daemon queues Claude-bound notifications into the first-party
             Claude MCP outbox and sends Claude-to-Codex wake payloads through the Codex MCP
-            adapter. The legacy bridge is left as an explicit compatibility lane for startup
-            and smoke diagnostics, not the normal work bus.
+            adapter. Claude-owned work stays visible-or-blocking until a semantic mailbox
+            reply lands.
           </p>
         </div>
         <figure class="architecture-figure">
-          <img src="assets/agent-team-flow.svg" alt="Agent Team Harness architecture showing Codex, the mailbox, first-party Claude MCP, first-party Codex MCP, visible Claude, proof gates, and the legacy compatibility bridge.">
+          <img src="assets/agent-team-flow.svg" alt="Agent Team Harness architecture showing Codex, the mailbox, first-party Claude MCP, first-party Codex MCP, visible Claude, blocking handoffs, and proof gates.">
         </figure>
       </section>
 
