@@ -12,7 +12,7 @@ Codex owns the harness, task state, merge gates, and proof. Claude Code is the v
 
 ![Agent Team Harness flow](assets/agent-team-flow.svg)
 
-Landing page: [`site/index.html`](site/index.html), deployable through GitHub Pages at <https://andrewnova.github.io/agent-team-harness/site/>.
+Landing page: [`site/index.html`](site/index.html), deployed through GitHub Pages at <https://andrewnova.github.io/agent-team-harness/>.
 
 ## What It Does
 
