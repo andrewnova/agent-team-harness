@@ -1,58 +1,110 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="980" height="520" viewBox="0 0 980 520" role="img" aria-labelledby="title desc">
-  <title id="title">Agent Team Harness Flow</title>
-  <desc id="desc">Codex routes work, Claude handles frontend tasks, Codex handles backend and proof, and a durable mailbox connects both agents.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Team Harness Architecture</title>
+  <desc id="desc">Codex owns orchestration and proof, a durable mailbox stores state, first-party Claude and Codex MCP adapters carry live wake and reply traffic, visible Claude handles teammate work, and the legacy channel bridge is compatibility diagnostics only.</desc>
   <defs>
     <style>
       .bg { fill: #f8fafc; }
-      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 14; }
-      .primary { fill: #0f172a; }
-      .muted { fill: #475569; }
-      .blue { fill: #2563eb; }
-      .green { fill: #059669; }
-      .orange { fill: #ea580c; }
-      .line { stroke: #64748b; stroke-width: 3; fill: none; marker-end: url(#arrow); }
-      .dash { stroke: #94a3b8; stroke-width: 3; stroke-dasharray: 7 7; fill: none; marker-end: url(#arrow); }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .panel-blue { fill: #eff6ff; stroke: #93c5fd; stroke-width: 2; }
+      .panel-green { fill: #ecfdf5; stroke: #6ee7b7; stroke-width: 2; }
+      .panel-amber { fill: #fffbeb; stroke: #fcd34d; stroke-width: 2; }
+      .panel-orange { fill: #fff7ed; stroke: #fdba74; stroke-width: 2; }
+      .panel-muted { fill: #f1f5f9; stroke: #cbd5e1; stroke-width: 2; }
+      .title { fill: #0f172a; font-size: 32px; font-weight: 780; }
+      .subtitle { fill: #475569; font-size: 15px; }
+      .h2 { fill: #0f172a; font-size: 18px; font-weight: 760; }
+      .body { fill: #475569; font-size: 13px; }
+      .small { fill: #64748b; font-size: 12px; }
+      .blue { fill: #1d4ed8; }
+      .green { fill: #047857; }
+      .amber { fill: #b45309; }
+      .orange { fill: #c2410c; }
+      .arrow { stroke: #334155; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .arrow-soft { stroke: #64748b; stroke-width: 2.5; fill: none; marker-end: url(#arrow-soft); }
+      .dash { stroke: #94a3b8; stroke-width: 2.5; stroke-dasharray: 8 7; fill: none; marker-end: url(#arrow-soft); }
       text { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .h1 { font-size: 30px; font-weight: 750; }
-      .h2 { font-size: 20px; font-weight: 700; }
-      .body { font-size: 15px; }
-      .small { font-size: 13px; }
     </style>
     <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-soft" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
       <path d="M2,2 L10,6 L2,10 Z" fill="#64748b"/>
     </marker>
   </defs>
 
-  <rect class="bg" width="980" height="520"/>
-  <text class="primary h1" x="50" y="60">Agent Team Harness</text>
-  <text class="muted body" x="50" y="88">Codex leads orchestration. Claude handles frontend work. The mailbox is the shared truth.</text>
+  <rect class="bg" width="1000" height="1000"/>
 
-  <rect class="panel" x="50" y="125" width="250" height="125"/>
-  <text class="blue h2" x="80" y="165">Codex Harness</text>
-  <text class="muted body" x="80" y="195">Plans, routes, merges,</text>
-  <text class="muted body" x="80" y="218">tests, and proves done.</text>
+  <text class="title" x="42" y="58">Agent Team Harness Architecture</text>
+  <text class="subtitle" x="42" y="86">Mailbox state is the record. First-party MCP is the live local wake and reply path.</text>
 
-  <rect class="panel" x="365" y="125" width="250" height="125"/>
-  <text class="orange h2" x="395" y="165">Claude Teammate</text>
-  <text class="muted body" x="395" y="195">Owns UI/UX/frontend</text>
-  <text class="muted body" x="395" y="218">tasks and critique.</text>
+  <rect class="panel-blue" x="42" y="140" width="220" height="140" rx="14"/>
+  <text class="h2 blue" x="68" y="178">Codex Leader</text>
+  <text class="body" x="68" y="208">Plans, claims tasks, merges,</text>
+  <text class="body" x="68" y="230">verifies, and owns final</text>
+  <text class="body" x="68" y="252">proof before closeout.</text>
 
-  <rect class="panel" x="680" y="125" width="250" height="125"/>
-  <text class="green h2" x="710" y="165">Proof Gates</text>
-  <text class="muted body" x="710" y="195">Reviews, browser proof,</text>
-  <text class="muted body" x="710" y="218">tests, and closeout.</text>
+  <rect class="panel" x="390" y="128" width="220" height="164" rx="14"/>
+  <text class="h2" x="416" y="166">Harness CLI</text>
+  <text class="body" x="416" y="196">Creates goals, tasks, leases,</text>
+  <text class="body" x="416" y="218">handoffs, reviews, reports,</text>
+  <text class="body" x="416" y="240">and startup proof records.</text>
+  <text class="small" x="416" y="268">Visible Claude is required.</text>
 
-  <rect class="panel" x="190" y="325" width="600" height="115"/>
-  <text class="primary h2" x="220" y="367">Durable Mailbox + Local State</text>
-  <text class="muted body" x="220" y="398">Goals, tasks, leases, replies, check-ins, reviews, proof, and reports.</text>
-  <text class="muted small" x="220" y="423">Codex and Claude can both send updates without blocking each other.</text>
+  <rect class="panel-orange" x="738" y="140" width="220" height="140" rx="14"/>
+  <text class="h2 orange" x="764" y="178">Visible Claude Code</text>
+  <text class="body" x="764" y="208">Handles frontend/UI work,</text>
+  <text class="body" x="764" y="230">long-context critique,</text>
+  <text class="body" x="764" y="252">reviews, and blockers.</text>
 
-  <path class="line" d="M300 188 H365"/>
-  <path class="line" d="M615 188 H680"/>
-  <path class="line" d="M805 250 V325"/>
-  <path class="line" d="M175 250 V382 H190"/>
-  <path class="dash" d="M490 250 V325"/>
-  <path class="dash" d="M490 325 V250"/>
-  <path class="dash" d="M490 440 V470 H805 V250"/>
-  <path class="dash" d="M490 440 V470 H175 V250"/>
+  <rect class="panel-green" x="278" y="382" width="444" height="178" rx="16"/>
+  <text class="h2 green" x="306" y="422">Durable Mailbox + Local State</text>
+  <text class="body" x="306" y="454">Goals, tasks, replies, ACKs, check-ins, receipts,</text>
+  <text class="body" x="306" y="476">reviews, proof artifacts, daemon events, and reports.</text>
+  <text class="small" x="306" y="510">Wake movement is not completion;</text>
+  <text class="small" x="306" y="530">a semantic mailbox reply is.</text>
+
+  <rect class="panel-blue" x="42" y="402" width="220" height="140" rx="14"/>
+  <text class="h2 blue" x="68" y="440">Codex MCP Adapter</text>
+  <text class="body" x="68" y="470">Reads Codex wake payloads,</text>
+  <text class="body" x="68" y="492">loads mailbox messages,</text>
+  <text class="body" x="68" y="514">ACKs and replies.</text>
+
+  <rect class="panel-orange" x="738" y="402" width="220" height="140" rx="14"/>
+  <text class="h2 orange" x="764" y="440">Claude MCP Channel</text>
+  <text class="body" x="764" y="470">Emits queued channel</text>
+  <text class="body" x="764" y="492">notifications and exposes</text>
+  <text class="body" x="764" y="514">reply, ACK, status tools.</text>
+
+  <rect class="panel-amber" x="314" y="658" width="372" height="96" rx="14"/>
+  <text class="h2 amber" x="342" y="700">Receiver Daemon</text>
+  <text class="body" x="342" y="728">Queues first-party MCP wakes</text>
+  <text class="body" x="342" y="748">and records delivery proof.</text>
+
+  <rect class="panel-muted" x="42" y="812" width="220" height="106" rx="14"/>
+  <text class="h2" x="68" y="854">Legacy Bridge</text>
+  <text class="body" x="68" y="882">Startup, smoke tests, and</text>
+  <text class="body" x="68" y="902">explicit compatibility only.</text>
+
+  <rect class="panel" x="738" y="812" width="220" height="106" rx="14"/>
+  <text class="h2" x="764" y="854">Proof Gates</text>
+  <text class="body" x="764" y="882">Review, tests, browser proof,</text>
+  <text class="body" x="764" y="902">merge, and closeout.</text>
+
+  <path class="arrow" d="M262 210 H390"/>
+  <path class="arrow" d="M610 210 H738"/>
+  <path class="arrow-soft" d="M500 292 V382"/>
+  <path class="arrow-soft" d="M278 472 H262"/>
+  <path class="arrow-soft" d="M262 472 H278"/>
+  <path class="arrow-soft" d="M722 472 H738"/>
+  <path class="arrow-soft" d="M738 472 H722"/>
+  <path class="arrow" d="M500 560 V658"/>
+  <path class="arrow-soft" d="M686 706 H738 V812"/>
+  <path class="dash" d="M390 256 C286 330, 222 600, 154 812"/>
+  <path class="dash" d="M262 866 H314"/>
+  <path class="dash" d="M262 866 C430 944, 658 944, 848 918"/>
+
+  <text class="small" x="314" y="350">startup and state changes</text>
+  <text class="small" x="76" y="366">Codex wake stream</text>
+  <text class="small" x="756" y="366">Claude MCP outbox</text>
+  <text class="small" x="700" y="780">completion requires proof</text>
 </svg>

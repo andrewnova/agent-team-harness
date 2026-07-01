@@ -38,8 +38,8 @@ body::before {
   background:
     linear-gradient(rgba(232, 238, 240, .045) 1px, transparent 1px),
     linear-gradient(90deg, rgba(232, 238, 240, .045) 1px, transparent 1px),
-    radial-gradient(circle at 80% 8%, rgba(87, 233, 255, .16), transparent 31rem),
-    radial-gradient(circle at 12% 22%, rgba(255, 138, 61, .12), transparent 28rem),
+    linear-gradient(135deg, rgba(87, 233, 255, .08), transparent 42%),
+    linear-gradient(225deg, rgba(255, 209, 102, .07), transparent 44%),
     #101214;
   background-size: 48px 48px, 48px 48px, auto, auto, auto;
 }
@@ -136,7 +136,7 @@ p {
 h1 {
   max-width: 760px;
   margin-bottom: 22px;
-  font-size: clamp(48px, 8vw, 92px);
+  font-size: 76px;
   line-height: .94;
   letter-spacing: 0;
 }
@@ -144,7 +144,7 @@ h1 {
 h2 {
   max-width: 780px;
   margin-bottom: 20px;
-  font-size: clamp(32px, 5vw, 58px);
+  font-size: 48px;
   line-height: 1;
   letter-spacing: 0;
 }
@@ -282,6 +282,33 @@ footer {
   padding-bottom: 84px;
 }
 
+.architecture {
+  display: grid;
+  grid-template-columns: minmax(0, .72fr) minmax(420px, 1fr);
+  gap: 42px;
+  align-items: center;
+  border-top: 1px solid var(--line);
+}
+
+.architecture-copy p {
+  max-width: 620px;
+}
+
+.architecture-figure {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .34);
+}
+
+.architecture-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 .split {
   display: grid;
   grid-template-columns: minmax(0, .85fr) minmax(0, 1fr);
@@ -364,6 +391,7 @@ footer {
   }
 
   .hero,
+  .architecture,
   .split,
   .install {
     grid-template-columns: 1fr;
@@ -378,11 +406,23 @@ footer {
   .proof-list {
     grid-template-columns: 1fr;
   }
+
+  h1 {
+    font-size: 58px;
+  }
+
+  h2 {
+    font-size: 38px;
+  }
 }
 
 @media (max-width: 560px) {
   h1 {
-    font-size: 44px;
+    font-size: 42px;
+  }
+
+  h2 {
+    font-size: 32px;
   }
 
   .flow-grid {

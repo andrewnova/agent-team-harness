@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Agent Team Harness</title>
-    <meta name="description" content="A local CLI for coordinating Codex and Claude Code as coding teammates with durable mailbox communication, task state, review gates, and proof.">
+    <meta name="description" content="A local CLI for coordinating Codex and Claude Code as visible coding teammates with durable mailbox state, first-party MCP wake adapters, review gates, and proof.">
     <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
     <link rel="stylesheet" href="styles.css">
   </head>
@@ -15,6 +15,7 @@
         <span>Agent Team Harness</span>
       </a>
       <nav aria-label="Primary">
+        <a href="#architecture">Architecture</a>
         <a href="#flow">Flow</a>
         <a href="#install">Install</a>
         <a href="#proof">Proof</a>
@@ -28,8 +29,8 @@
           <p class="eyebrow">Alpha 0.1.0-alpha</p>
           <h1 id="hero-title">Run Codex and Claude Code like a real agent team.</h1>
           <p class="lede">
-            A local harness that routes work by strength, keeps communication durable,
-            and requires review plus proof before anything is called done.
+            A local harness that keeps Claude visible, wakes both teammates through
+            first-party MCP adapters, and refuses to call work done without review plus proof.
           </p>
           <div class="hero-actions">
             <a class="button primary" href="#install">Install</a>
@@ -45,8 +46,9 @@
           </div>
           <pre><code>$ agent-team start --name my-project --daemon
 ✓ mailbox receiver active
-✓ managed Claude channel bridge ready
-✓ Claude teammate visible
+✓ first-party Claude MCP ready
+✓ first-party Codex MCP wake ready
+✓ visible Claude teammate ready
 ✓ Codex proof owner ready
 
 $ agent-team review request T-000001
@@ -61,17 +63,33 @@ $ agent-team verify final
 
       <section class="band intro" aria-label="Core promise">
         <div>
-          <span class="stat">Mailbox first</span>
-          <p>Live channels are useful. Durable state is the truth.</p>
+          <span class="stat">First-party MCP</span>
+          <p>Claude and Codex get local wake/read/reply adapters built into the harness.</p>
         </div>
         <div>
-          <span class="stat">Strength routed</span>
-          <p>Claude handles frontend polish. Codex owns backend, merge, and proof.</p>
+          <span class="stat">Visible Claude</span>
+          <p>Claude-owned work blocks when the visible teammate or semantic reply is missing.</p>
         </div>
         <div>
           <span class="stat">Proof gated</span>
           <p>Done means reviewed, merged, verified, and recorded.</p>
         </div>
+      </section>
+
+      <section class="section architecture" id="architecture">
+        <div class="architecture-copy">
+          <p class="eyebrow">Updated Architecture</p>
+          <h2>Mailbox state is the record. MCP is the live local transport.</h2>
+          <p>
+            The receiver daemon queues Claude-bound notifications into the first-party
+            Claude MCP outbox and sends Claude-to-Codex wake payloads through the Codex MCP
+            adapter. The legacy bridge is left as an explicit compatibility lane for startup
+            and smoke diagnostics, not the normal work bus.
+          </p>
+        </div>
+        <figure class="architecture-figure">
+          <img src="../assets/agent-team-flow.svg" alt="Agent Team Harness architecture showing Codex, the mailbox, first-party Claude MCP, first-party Codex MCP, visible Claude, proof gates, and the legacy compatibility bridge.">
+        </figure>
       </section>
 
       <section class="section split" id="flow">
@@ -81,7 +99,8 @@ $ agent-team verify final
           <p>
             Agent Team Harness keeps goals, tasks, leases, reviews, mailbox messages,
             browser proof, computer proof, and closeout records in local project state.
-            Models can collaborate without making chat history the system of record.
+            First-party MCP adapters make the collaboration feel live without making chat
+            history or raw channel replies the system of record.
           </p>
         </div>
         <div class="flow-grid" aria-label="Workflow stages">
@@ -92,8 +111,8 @@ $ agent-team verify final
           </article>
           <article>
             <span>02</span>
-            <h3>Route</h3>
-            <p>Frontend work goes to Claude; backend and proof stay with Codex.</p>
+            <h3>Wake</h3>
+            <p>The daemon wakes Claude through first-party MCP and Codex through the wake adapter.</p>
           </article>
           <article>
             <span>03</span>
@@ -110,11 +129,11 @@ $ agent-team verify final
 
       <section class="section proof" id="proof">
         <p class="eyebrow">Built For Real Work</p>
-        <h2>Designed to avoid the expensive failure mode: two smart models chatting forever.</h2>
+        <h2>Designed to avoid the expensive failure mode: invisible handoffs that look done.</h2>
         <div class="proof-list">
           <div>
-            <h3>Nonblocking Claude work</h3>
-            <p>Codex keeps working while Claude handles frontend implementation, critique, or long-context review.</p>
+            <h3>Visible-or-blocking Claude</h3>
+            <p>Claude-owned work requires a visible teammate and semantic mailbox reply, or the harness reports the blocker.</p>
           </div>
           <div>
             <h3>Semantic acknowledgements</h3>
