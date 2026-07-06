@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: agent-team
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+        working-directory: agent-team
+
+      # Hard gate: no-undef catches the class of bug that shipped as the daemon
+      # `spawnSync`/`isReplyTimeout` and bridge `endpointTarget` crashes.
+      - name: Lint (no-undef)
+        run: npm run lint
+        working-directory: agent-team
+
+      # Hard gate: the suite is green (134 passing). AGENT_TEAM_HEADLESS keeps the
+      # visible Terminal launch path from firing in CI (tests use hermetic launchers).
+      - name: Test
+        run: npm test
+        working-directory: agent-team
+        env:
+          AGENT_TEAM_HEADLESS: "1"

@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const state = require("./state");
 const harnessPaths = require("./paths");
-const { exists, readJson } = require("./fsutil");
+const { exists, readJson, readJsonlDetailed } = require("./fsutil");
 const { transitionTask } = require("./transitions");
 const { recordReview, requestReview, importReview } = require("./review");
 const { saveProof, runProof, markDone, waiver } = require("./proof");
@@ -179,8 +179,9 @@ Commands:
   db status
   db rebuild
   db query --sql <select>
+  state repair [--apply]
   bridge <manual|mock|claude-channel> --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>]
-  channel install [--version <version>] [--tools-dir <path>] [--bin-dir <path>] [--mcp-scope user|local] [--no-setup-mcp] [--require-setup-mcp] [--no-first-party-mcp]
+  channel install [--bin-dir <path>] [--mcp-scope user|local] [--project-dir <path>] [--no-setup-mcp] [--require-setup-mcp]
   channel mcp install [--bin-dir <path>] [--mcp-scope user|local] [--project-dir <path>] [--no-setup-mcp] [--require-setup-mcp]
   channel mcp status [--bin-dir <path>] [--mcp-scope user|local] [--project-dir <path>]
   channel list
@@ -195,7 +196,7 @@ Commands:
   channel status [--target <target>]
   channel ask --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>]
   channel dispatch --kind <kind> --task <task> --prompt <text> [--target <target>] [--timeout-ms <ms>] [--goal <goal>]
-  channel steer --kind <kind> --task <task> (--prompt <text>|--file <path>) [--subject <text>] [--target <target>] [--timeout-ms <ms>] [--semantic-wait-ms <ms>|--no-semantic-wait] [--recover-visible] [--recovery-wait-ms <ms>] [--goal <goal>] [--no-live|--mailbox-only|--raw-live|--legacy-live-push]
+  channel steer --kind <kind> --task <task> (--prompt <text>|--file <path>) [--subject <text>] [--target <target>] [--timeout-ms <ms>] [--semantic-wait-ms <ms>|--no-semantic-wait] [--recover-visible] [--recovery-wait-ms <ms>] [--goal <goal>] [--no-live|--mailbox-only|--raw-live]
   watch [--once] [--json] [--target <target>] [--limit <n>] [--interval-ms <ms>] [--no-live-channel]
   cockpit [--json] [--target <target>] [--limit <n>] [--no-live-channel]
   board
@@ -327,8 +328,6 @@ function channelAuthOptions(args) {
 
 function channelInstallOptions(args) {
   return {
-    version: argValue(args, "--version"),
-    tools_dir: argValue(args, "--tools-dir"),
     bin_dir: argValue(args, "--bin-dir"),
     mcp_scope: argValue(args, "--mcp-scope", "user"),
     setup_mcp: !hasFlag(args, "--no-setup-mcp"),
@@ -363,12 +362,10 @@ function channelDoctor(cwd, args) {
   let install = null;
   let firstPartyMcp = statusClaudeMcp(cwd, firstPartyMcpOptions(args));
   let result = adapter.diagnose(cwd, options);
-  if (hasFlag(args, "--fix") && result.claude_channel_cli && !result.claude_channel_cli.ok) {
-    install = adapter.install(cwd, channelInstallOptions(args));
+  if (hasFlag(args, "--fix") && !firstPartyMcp.ok) {
     firstPartyMcp = installClaudeMcp(cwd, firstPartyMcpOptions(args));
+    install = firstPartyMcp;
     result = adapter.diagnose(cwd, options);
-  } else if (hasFlag(args, "--fix") && !firstPartyMcp.ok) {
-    firstPartyMcp = installClaudeMcp(cwd, firstPartyMcpOptions(args));
   }
   return {
     ...result,
@@ -493,7 +490,10 @@ function compactLiveChannelResult(row) {
 function extractGlobalCwd(argv, cwd) {
   const args = [...argv];
   const index = args.indexOf("--cwd");
-  if (index === -1) return { argv: args, cwd };
+  if (index === -1) {
+    const envRoot = process.env.AGENT_TEAM_HARNESS_CWD;
+    return { argv: args, cwd: envRoot ? path.resolve(envRoot) : cwd };
+  }
   const value = args[index + 1];
   if (!value) throw new Error("--cwd requires <harness-root>");
   args.splice(index, 2);
@@ -544,7 +544,7 @@ function semanticAckReplyCommand({ requestId, mailboxMessageId }) {
 function mailboxFirstInstruction(prompt) {
   return [
     "Mailbox-first protocol:",
-    "- Reply through the mailbox, not only through complete_channel_request.",
+    "- Reply through the first-party Agent Team MCP reply tool or the durable mailbox.",
     "- The receiver daemon may generate a quick receipt_ack; that only proves the inbox received it.",
     "- Your reply must acknowledge receipt, state what you will do next, and answer the question or name the blocker.",
     "- Use the message request_id/id as the reply key.",
@@ -556,7 +556,7 @@ function mailboxFirstInstruction(prompt) {
 function liveSteerPrompt(prompt, durable) {
   return [
     "A durable mailbox request has already been queued for this instruction.",
-    "Do not rely only on complete_channel_request.",
+    "Do not rely on visible transcript text alone.",
     "A daemon-generated receipt_ack may arrive first; it only proves the inbox received the message.",
     "Send the real mailbox reply through this command shape:",
     semanticAckReplyCommand({
@@ -591,21 +591,23 @@ function liveDeliverySucceeded(live) {
   if (!live) return false;
   if (live.ok) return true;
   if (SEMANTIC_LIVE_DELIVERY_STATES.has(live.result_state)) return true;
-  if (live.legacy && SEMANTIC_LIVE_DELIVERY_STATES.has(live.legacy.result_state)) return true;
   if (live.first_party && SEMANTIC_LIVE_DELIVERY_STATES.has(live.first_party.result_state)) return true;
   return false;
 }
 
 function replyForRequest(cwd, requestId) {
   if (!requestId) return null;
-  return (
-    listMessages(cwd, {
-      to: "codex",
-      from: "claude",
-      kind: "reply",
-      request_id: requestId
-    })[0] || null
-  );
+  // Match on request_id OR in_reply_to (a reply may carry only one), exclude
+  // receipt_ack (kind:"reply" filter already does), and take the LAST/most
+  // recent match — consistent with waiter.matchingReplies. Keying on
+  // request_id only + first-match previously hid valid in_reply_to replies and
+  // returned stale/receipt rows, producing false "semantic reply missing".
+  const replies = listMessages(cwd, {
+    to: "codex",
+    from: "claude",
+    kind: "reply"
+  }).filter((message) => message.request_id === requestId || message.in_reply_to === requestId);
+  return replies.length ? replies[replies.length - 1] : null;
 }
 
 function semanticWaitMs(args) {
@@ -617,19 +619,17 @@ function semanticWaitMs(args) {
 
 function liveWakeWasAttempted(live) {
   if (!live) return false;
-  if (live.legacy && live.legacy.attempted) return true;
-  if (live.first_party && live.first_party.queued && live.legacy && live.legacy.attempted) return true;
+  if (live.first_party && (live.first_party.queued || live.first_party.duplicate || live.first_party.result_state)) return true;
   return Boolean(live.attempted);
 }
 
 function nonSemanticWakeState(live) {
   if (!live) return null;
-  if (!(live.legacy && live.legacy.attempted)) return null;
   const candidates = [
     live.result_state,
     live.status,
-    live.legacy && live.legacy.result_state,
-    live.legacy && live.legacy.status
+    live.first_party && live.first_party.result_state,
+    live.first_party && live.first_party.status
   ].filter(Boolean);
   return candidates.find((state) => NON_SEMANTIC_WAKE_STATES.has(String(state))) || null;
 }
@@ -842,29 +842,25 @@ async function attemptVisibleRecovery(cwd, durable, blockingNextStep, args = [])
 
 function visibleDeliveryBlocker(cwd, durable, live, reply) {
   if (reply || liveDeliverySucceeded(live)) return null;
-  const legacy = live && live.legacy;
   const firstPartyMcp = firstPartyMcpStateForMessage(cwd, durable.mailbox_message_id, live);
-  const promptPath = legacy && legacy.prompt_path ? legacy.prompt_path : null;
-  const target = (live && live.target) || (legacy && legacy.target) || null;
+  const target = live && live.target ? live.target : null;
   const wakeState = nonSemanticWakeState(live);
-  const legacyReason = legacy && (legacy.stderr || legacy.error || legacy.reason || legacy.result_state);
   const reason =
     (firstPartyMcp?.emitted &&
       "First-party Claude MCP emitted the mailbox notification, but Claude has not replied through the channel reply tool, agent_team_reply, or agent_team_ack.") ||
     (firstPartyMcp?.queued &&
       "First-party Claude MCP queued the mailbox notification, but no semantic Claude mailbox reply has landed yet.") ||
-    (wakeState && `Compatibility live wake reached a non-semantic state (${wakeState}), but no real Claude mailbox reply has landed.`) ||
-    legacyReason ||
+    (wakeState && `First-party MCP wake reached a non-semantic state (${wakeState}), but no real Claude mailbox reply has landed.`) ||
     (live && (live.stderr || live.error || live.reason || live.result_state)) ||
     "visible Claude wake was not proven";
-  const permissionHint = /fetch failed|claude_auth_required|auth/i.test(`${reason || ""}\n${legacyReason || ""}`)
+  const permissionHint = /fetch failed|claude_auth_required|auth/i.test(`${reason || ""}`)
     ? {
-        kind: "rerun_live_channel_with_local_permissions",
+        kind: "rerun_first_party_mcp_status_with_local_permissions",
         reason:
-          "Codex App sandboxing can hide Claude auth or block localhost channel fetches even when the visible Claude endpoint is healthy.",
+          "Codex App sandboxing can hide Claude auth or local MCP/session files even when the visible Claude teammate is healthy.",
         command: `node agent-team/src/cli.js channel status${target ? ` --target ${target}` : ""}`,
         directive:
-          "Run channel status/doctor/steer from a local-permission context before treating this as a real Claude endpoint failure."
+          "Run channel status/doctor/steer from a local-permission context before treating this as a real Claude startup failure."
       }
     : null;
   return {
@@ -873,32 +869,17 @@ function visibleDeliveryBlocker(cwd, durable, live, reply) {
     reason,
     primary_transport: firstPartyMcp ? "agent-team-claude-mcp" : undefined,
     first_party_mcp: firstPartyMcp || undefined,
-    compatibility_wake: legacy
-      ? {
-          transport: legacy.transport,
-          result_state: legacy.result_state,
-          status: legacy.status,
-          target: legacy.target,
-          prompt_path: legacy.prompt_path,
-          stderr: legacy.stderr,
-          error: legacy.error,
-          reason: legacy.reason
-        }
-      : undefined,
     semantic_reply_required: true,
     semantic_reply_missing: true,
     request_id: durable.request_id,
     mailbox_message_id: durable.mailbox_message_id,
     target,
-    wake_packet_path: promptPath,
     await_reply_command: commandToAwaitReply({ requestId: durable.request_id }),
     visible_recovery_command: recoverVisibleCommand({
       requestId: durable.request_id,
       mailboxMessageId: durable.mailbox_message_id
     }),
-    manual_recovery_command: promptPath
-      ? `cat ${path.resolve(cwd, promptPath)}`
-      : `node agent-team/src/cli.js mailbox show ${durable.mailbox_message_id}`,
+    manual_recovery_command: `node agent-team/src/cli.js mailbox show ${durable.mailbox_message_id}`,
     diagnostic_command: "node agent-team/src/cli.js daemon status && node agent-team/src/cli.js cockpit --json --no-live-channel",
     operator_hint: permissionHint || undefined,
     directive:
@@ -993,9 +974,13 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
       interval_ms: optionalNumberArg(rest, "--interval-ms"),
       include_existing: hasFlag(rest, "--include-existing"),
       once: hasFlag(rest, "--once"),
-      legacy_live_push: hasFlag(rest, "--legacy-live-push") ? true : undefined,
+      force: hasFlag(rest, "--force"),
       onOutput: (payload) => process.stdout.write(`${JSON.stringify(payload)}\n`)
     });
+    if (result && result.action === "daemon_already_running") {
+      print(result);
+      return 1;
+    }
     if (hasFlag(rest, "--once")) print(result);
     return result && typeof result.then === "function" ? result : 0;
   }
@@ -1254,8 +1239,15 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     state.recordAttempt(cwd, attempt);
     const task = state.loadTask(cwd, subcommand);
     if (task.status === "claimed") transitionTask(cwd, subcommand, "implementing");
-    if (state.loadTask(cwd, subcommand).status === "implementing") transitionTask(cwd, subcommand, "review");
-    print(attempt);
+    // Only a success-like attempt advances to review. A failed/blocked attempt stays in
+    // implementing so the owner can retry (and handoff can escalate) instead of asking
+    // Codex to approve a failed implementation.
+    const failed = /^(failed?|blocked|error|abort(ed)?)$/i.test(String(attempt.result || "").trim());
+    let advanced = false;
+    if (!failed && state.loadTask(cwd, subcommand).status === "implementing") {
+      advanced = transitionTask(cwd, subcommand, "review").ok;
+    }
+    print({ ...attempt, advanced_to_review: advanced });
     return 0;
   }
   if (command === "review" && subcommand === "request") {
@@ -2035,6 +2027,37 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     });
     return 0;
   }
+  if (command === "state" && subcommand === "repair") {
+    const targets = [
+      harnessPaths.eventsPath(cwd),
+      harnessPaths.mailboxPath(cwd),
+      harnessPaths.mailboxAcksPath(cwd)
+    ];
+    const apply = hasFlag(rest, "--apply");
+    const report = [];
+    for (const file of targets) {
+      if (!exists(file)) continue;
+      const { rows, malformed } = readJsonlDetailed(file);
+      if (!malformed.length) {
+        report.push({ file: harnessPaths.relative ? harnessPaths.relative(cwd, file) : file, malformed: 0 });
+        continue;
+      }
+      const entry = { file, malformed: malformed.length, lines: malformed.map((m) => m.line_number) };
+      if (apply) {
+        // Quarantine the bad lines to a .rejects sibling (no data loss), rewrite the clean file.
+        const rejectsPath = `${file}.rejects`;
+        for (const bad of malformed) fs.appendFileSync(rejectsPath, `${bad.content}\n`);
+        fs.writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""));
+        entry.repaired = true;
+        entry.rejects_path = rejectsPath;
+      }
+      report.push(entry);
+    }
+    const totalMalformed = report.reduce((sum, r) => sum + (r.malformed || 0), 0);
+    print({ ok: true, applied: apply, total_malformed: totalMalformed, files: report,
+      note: apply ? "malformed lines quarantined to <file>.rejects" : "dry run; pass --apply to quarantine malformed lines" });
+    return 0;
+  }
   if (command === "db" && subcommand === "status") {
     print(database.status(cwd));
     return 0;
@@ -2068,20 +2091,14 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
     return 0;
   }
   if (command === "channel" && subcommand === "install") {
-    const adapter = createBridge("claude-channel");
-    const result = adapter.install(cwd, channelInstallOptions(rest));
-    const firstParty = hasFlag(rest, "--no-first-party-mcp")
-      ? {
-          ok: true,
-          skipped: true,
-          reason: "--no-first-party-mcp"
-        }
-      : installClaudeMcp(cwd, firstPartyMcpOptions(rest));
+    const firstParty = installClaudeMcp(cwd, firstPartyMcpOptions(rest));
     print({
-      ...result,
-      first_party_mcp: firstParty
+      ...firstParty,
+      action: firstParty.action,
+      removed_external_channel_cli: true,
+      note: "channel install now installs only the first-party Agent Team Claude MCP server."
     });
-    return result.ok && firstParty.ok ? 0 : 1;
+    return firstParty.ok ? 0 : 1;
   }
   if (command === "channel" && subcommand === "mcp" && rest[0] === "install") {
     const mcpArgs = rest.slice(1);
@@ -2301,8 +2318,7 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
         roles: ["claude"],
         once: true,
         unacked: true,
-        message_id: durable.mailbox_message_id,
-        legacy_live_push: hasFlag(rest, "--legacy-live-push") ? true : undefined
+        message_id: durable.mailbox_message_id
       });
       live = daemonLivePushForMessage(daemonPass, durable.mailbox_message_id) || {
         ok: false,
@@ -2318,8 +2334,22 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
       reply = visibleRecovery.reply;
       blockingNextStep = null;
     }
+    // A first-party MCP wake that was durably queued/emitted but not yet replied to is a
+    // SUCCESSFUL async dispatch, not a delivery failure — the durable request is safely in
+    // the mailbox and Claude replies on its own turn. Unless the operator explicitly asked
+    // for a synchronous visible recovery (which then failed), downgrade this to
+    // queued_awaiting_reply so Codex awaits the reply instead of treating steer as failed.
+    // (This is the fix for the 750ms-wait-vs-1000ms-pump false blocker.)
+    let steerState = reply ? "answered" : blockingNextStep ? blockingNextStep.kind : "mailbox_queued";
+    if (!reply && blockingNextStep && blockingNextStep.kind === "first_party_mcp_reply_missing" && !visibleRecoveryRequested(rest)) {
+      steerState = "queued_awaiting_reply";
+      blockingNextStep = null;
+    }
     const result = {
       ok: !blockingNextStep,
+      steer_state: steerState,
+      await_reply_command:
+        steerState === "queued_awaiting_reply" ? commandToAwaitReply({ requestId: durable.request_id }) : undefined,
       durable_ack: {
         request_id: durable.request_id,
         mailbox_message_id: durable.mailbox_message_id,
@@ -2366,7 +2396,11 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
       blocking_next_step: blockingNextStep || undefined,
       blocked_next_step: blockingNextStep || undefined,
       next: {
-        codex: codexNextForBlocker(blockingNextStep),
+        codex: blockingNextStep
+          ? codexNextForBlocker(blockingNextStep)
+          : steerState === "queued_awaiting_reply"
+            ? `first-party MCP wake delivered; await Claude's reply: ${commandToAwaitReply({ requestId: durable.request_id })}`
+            : "continue working; watch mailbox/cockpit for Claude ACKs, replies, and check-ins",
         claude: `reply with mailbox send --from claude --to codex --kind reply --request-id ${durable.request_id} --in-reply-to ${durable.mailbox_message_id} --body <answer>`
       }
     };

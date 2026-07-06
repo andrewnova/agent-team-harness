@@ -24,6 +24,7 @@ Landing page: [`site/index.html`](site/index.html), deployed through GitHub Page
 - Supports nonblocking review requests, semantic acknowledgements, check-ins, and batch replies.
 - Requires proof before tasks can be marked done.
 - Generates closeout reports and optional self-heal/refactor recommendations.
+- Survives partial failure: adopt-first teammate reuse gated by a process-liveness probe, corruption-tolerant state with `agent-team state repair`, a single-daemon guard, and an in-session `agent_team_self_heal` MCP tool.
 
 ## Requirements
 
@@ -213,12 +214,25 @@ agent-team codex mcp status
 
 The install command writes a wrapper into `~/.local/bin` and stores a local adapter manifest at `.agent-team/comms/codex-mcp/adapter.json`. `agent-team cockpit` reports whether that wrapper and manifest are present, how many wake payloads are pending, and where the stream lives.
 
+## Reliability & Self-Healing
+
+The harness is built to survive partial failure and repair itself instead of stalling:
+
+- **Adopt-first teammate reuse.** For the same project and session name, `start`/`channel ensure` adopts an already-running visible Claude teammate only when a process-liveness probe confirms its MCP process is still alive, so a resume reattaches to the live window instead of spawning a duplicate or reusing a dead endpoint.
+- **Three-valued Claude auth.** Auth status is classified as `logged_in`, `logged_out`, or `unverifiable`. Startup only hard-blocks on `logged_out`; when the probe cannot read Claude's auth (for example inside a sandboxed Codex shell), the status is `unverifiable` and non-blocking, so hidden-but-valid auth does not look broken.
+- **Single daemon per project.** `agent-team daemon run` refuses to start a second receiver daemon while a live one owns the pid record (`daemon_already_running`); pass `--force` to take over, or stop the existing one first, so two daemons never fight over one mailbox.
+- **Corruption-tolerant state.** Mailbox and event readers skip malformed JSONL rows instead of crashing, and `agent-team state repair [--apply]` reports and rebuilds derived projections from canonical truth.
+- **In-session self-heal.** The first-party Claude MCP server exposes an `agent_team_self_heal` tool so Claude can propose a harness tool/skill change from inside a live session; the request is recorded for review rather than applied silently.
+
+Continuous integration enforces the same guarantees. The GitHub Actions workflow runs `npm run lint` — an ESLint `no-undef` hard gate that catches the class of missing-reference crash that previously shipped as the daemon `spawnSync` and bridge `endpointTarget` failures — and the full `npm test` suite on every push and pull request.
+
 ## Project Layout
 
 ```text
 agent-team/                         CLI source and tests
-plugins/agent-team-harness/         Codex plugin/skill wrapper
+plugins/agent-team-harness/         Codex orchestrator skill + Claude teammate skill
 scripts/install-codex.sh            local Codex installer
+.github/workflows/ci.yml            lint + test CI gate
 assets/agent-team-flow.svg          README diagram
 ```
 
@@ -228,10 +242,11 @@ Generated runtime state is written to `.agent-team/` in the project being operat
 
 ```bash
 cd agent-team
+npm run lint
 npm test
 ```
 
-The suite covers task lifecycle, review import, mailbox behavior, durable waiting, daemon receipts, browser/computer proof gates, worktrees, closeout reports, and plugin launch behavior.
+`npm run lint` is an ESLint `no-undef` hard gate; `npm test` runs the Node test suite. Both run in CI on every push and pull request. The suite covers task lifecycle, review import, mailbox behavior, durable waiting, daemon receipts, adopt-first session reuse and liveness, Claude auth classification, browser/computer proof gates, worktrees, closeout reports, and plugin launch behavior.
 
 ## Safety Notes
 

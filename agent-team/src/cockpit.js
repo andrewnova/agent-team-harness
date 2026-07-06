@@ -221,7 +221,9 @@ function claudeAgentSessions(cwd, sessionName) {
     timeout: 5000,
     maxBuffer: 1024 * 1024
   });
-  const parsed = parseJsonOutput(result.stdout.trim());
+  // stdout/stderr are undefined when the spawn itself fails (claude binary missing or
+  // blocked, e.g. a sandboxed Codex shell). Guard so the whole cockpit doesn't crash.
+  const parsed = parseJsonOutput((result.stdout || "").trim());
   const rows = Array.isArray(parsed) ? parsed : [];
   const relevant = rows.filter((row) => {
     const sameCwd = row.cwd && path.resolve(row.cwd) === path.resolve(cwd);
@@ -243,7 +245,7 @@ function claudeAgentSessions(cwd, sessionName) {
       state: row.state,
       started_at: row.startedAt
     })),
-    stderr: result.stderr.trim(),
+    stderr: (result.stderr || "").trim(),
     error: result.error ? result.error.message : undefined
   };
 }
@@ -464,13 +466,6 @@ function claudeMcpState(cwd) {
   const emittedIds = new Set(emitted.map((row) => row.notification_id));
   const waiting = queued.filter((row) => !emittedIds.has(row.notification_id));
   const firstPartyEvents = state.listEvents(cwd, { type: "daemon.claude_mcp_notification_queued", limit: 100 });
-  const legacyAttempts = state.listEvents(cwd, { type: "daemon.live_push_attempted", limit: 100 });
-  const legacySkips = state.listEvents(cwd, { type: "daemon.live_push_skipped", limit: 100 });
-  const legacyFallback = legacyAttempts.filter((event) => event.detail && event.detail.transport === "claude-channel-cli").length;
-  const legacyBlocked = legacySkips.filter((event) => {
-    const detail = event.detail || {};
-    return detail.transport === "claude-channel-cli" && ["legacy_no_session", "legacy_cli_unavailable", "legacy_live_push_disabled", "live_push_disabled"].includes(detail.result_state);
-  }).length;
   return {
     outbox_path: path.relative(cwd, paths.claudeMcpOutboxPath(cwd)),
     deliveries_path: path.relative(cwd, paths.claudeMcpDeliveriesPath(cwd)),
@@ -478,8 +473,6 @@ function claudeMcpState(cwd) {
     waiting_for_mcp_server: waiting.length,
     mcp_emitted: emitted.length,
     first_party_events: firstPartyEvents.length,
-    legacy_fallback_attempts: legacyFallback,
-    legacy_blocked: legacyBlocked,
     recent: queued.slice(-5).map((row) => ({
       notification_id: row.notification_id,
       message_id: row.message_id,
@@ -1116,7 +1109,7 @@ function renderCockpit(snapshot) {
     `Claude agents: ${agentsLine}`,
     `Receiver daemon: ${snapshot.daemon.running ? "running" : "not-running"} active-runs=${snapshot.daemon.active_runs.length}${snapshot.daemon.stale_pid ? " stale-pid=true" : ""}`,
     `Session push: ${snapshot.daemon.session_push && snapshot.daemon.session_push.native_model_ui_push ? "native" : "mailbox-daemon"} fallback=${snapshot.daemon.session_push ? snapshot.daemon.session_push.fallback_waiter : "await reply --request-id <id>"}`,
-    `Claude MCP: queued=${snapshot.daemon.claude_mcp.queued_total} waiting=${snapshot.daemon.claude_mcp.waiting_for_mcp_server} mcp-emitted=${snapshot.daemon.claude_mcp.mcp_emitted} legacy-fallback=${snapshot.daemon.claude_mcp.legacy_fallback_attempts} legacy-blocked=${snapshot.daemon.claude_mcp.legacy_blocked} outbox=${snapshot.daemon.claude_mcp.outbox_path}`,
+    `Claude MCP: queued=${snapshot.daemon.claude_mcp.queued_total} waiting=${snapshot.daemon.claude_mcp.waiting_for_mcp_server} mcp-emitted=${snapshot.daemon.claude_mcp.mcp_emitted} outbox=${snapshot.daemon.claude_mcp.outbox_path}`,
     `Codex MCP: configured=${snapshot.daemon.codex_mcp.configured ? "yes" : "no"} wrapper=${snapshot.daemon.codex_mcp.wrapper_exists ? "yes" : "no"} wake-command=${snapshot.daemon.codex_mcp.wake_command_exists ? "yes" : "no"} pending-wake=${snapshot.daemon.codex_mcp.pending_wake_count} manifest=${path.relative(process.cwd(), snapshot.daemon.codex_mcp.manifest_path)}`,
     `Codex wake: total=${snapshot.daemon.codex_wake.total} delivered=${snapshot.daemon.codex_wake.delivered} seen=${snapshot.daemon.codex_wake.seen} queued-no-adapter=${snapshot.daemon.codex_wake.queued_no_adapter} failed=${snapshot.daemon.codex_wake.failed} adapter=${snapshot.daemon.codex_wake.adapter_configured ? snapshot.daemon.codex_wake.adapter_source || "configured" : "missing"} stream=${snapshot.daemon.codex_wake.stream_path}`,
     `Timeline: shown=${snapshot.message_timeline.shown} candidates=${snapshot.message_timeline.total_candidates}`,

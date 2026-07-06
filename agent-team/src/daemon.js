@@ -5,18 +5,14 @@ const paths = require("./paths");
 const { ensureDir, exists, readJson, writeJson, writeText, appendJsonl } = require("./fsutil");
 const state = require("./state");
 const { appendMessage, listMessages, watchInbox, compactMessage } = require("./mailbox");
-const { findCli, parseJsonOutput, shellQuote } = require("./bridge/claudeChannel/utils");
-const { isReplyTimeout } = require("./bridge/claudeChannel/request");
+const { shellQuote } = require("./bridge/claudeChannel/utils");
 const { queueChannelNotification } = require("./mcp/claudeChannel");
 
 const DEFAULT_ROLES = ["codex", "claude"];
 const RECEIPT_ACK_KIND = "receipt_ack";
 const RESPONSE_KINDS = new Set(["reply", RECEIPT_ACK_KIND]);
 const ACK_EXEMPT_KINDS = new Set(["heartbeat", ...RESPONSE_KINDS]);
-const LIVE_PUSH_TIMEOUT_MS = 1200;
-const LIVE_PUSH_TRANSPORT_TIMEOUT_MS = 4000;
 const CODEX_WAKE_TIMEOUT_MS = 4000;
-const LIVE_PUSH_SENT_STATES = new Set(["answered", "needs_user", "declined", "wake_sent_reply_pending", "wake_sent"]);
 
 function normalizeRoles(value) {
   if (!value) return DEFAULT_ROLES;
@@ -124,18 +120,8 @@ function claudeMcpPushEnabled(options = {}) {
   return options.claude_mcp_push !== false && process.env.AGENT_TEAM_DAEMON_CLAUDE_MCP_PUSH !== "0";
 }
 
-function legacyLivePushEnabled(options = {}) {
-  if (options.legacy_live_push === true) return true;
-  if (options.legacy_live_push === false) return false;
-  return process.env.AGENT_TEAM_DAEMON_LEGACY_LIVE_PUSH === "1";
-}
-
 function safeFileToken(value) {
   return String(value || "message").replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 120);
-}
-
-function livePushPromptPath(cwd, message) {
-  return path.join(paths.rootDir(cwd), "comms", "claude-channel", `wake-${safeFileToken(message.id)}.md`);
 }
 
 function codexWakeDir(cwd) {
@@ -158,109 +144,6 @@ function readMessageBody(cwd, message) {
   return message.body_inline || "";
 }
 
-function mailboxReplyCommand(cwd, message) {
-  const cliPath = path.join(__dirname, "cli.js");
-  const requestId = message.request_id || message.id;
-  return [
-    shellQuote(process.execPath),
-    shellQuote(cliPath),
-    "--cwd",
-    shellQuote(cwd),
-    "mailbox",
-    "send",
-    "--from",
-    "claude",
-    "--to",
-    "codex",
-    "--kind",
-    "reply",
-    "--request-id",
-    shellQuote(requestId),
-    "--in-reply-to",
-    shellQuote(message.id),
-    "--subject",
-    shellQuote("ACK: received"),
-    "--body",
-    shellQuote("<ACK: received. I will do X next. Answer/blocker: ...>")
-  ].join(" ");
-}
-
-function livePushPrompt(cwd, message, semantic) {
-  const actionLines = semantic
-    ? [
-        "Required action:",
-        "1. Send a mailbox reply/ACK immediately so Codex can see you are actually active.",
-        "2. Continue the requested work visibly in Claude Code.",
-        "3. Send check-ins through the mailbox during long work."
-      ]
-    : [
-        "Visible action:",
-        "1. Read this mailbox message in the visible Claude Code session.",
-        "2. If it asks for acknowledgement, status, or action, answer through the mailbox.",
-        "3. Otherwise continue normally; this live wake is the visible copy of mailbox traffic."
-      ];
-  return [
-    "A durable Agent Team mailbox message has just been queued for you by Codex.",
-    "This live channel message is a real-time wake-up copy only; the mailbox is the source of truth.",
-    "",
-    `Mailbox message id: ${message.id}`,
-    `Mailbox request id: ${message.request_id || message.id}`,
-    `Task: ${message.task_id || "none"}`,
-    `Goal: ${message.goal_id || "none"}`,
-    `Kind: ${message.request_kind || message.kind}`,
-    `Subject: ${message.subject || "(none)"}`,
-    "",
-    ...actionLines,
-    "",
-    `Reply command shape: ${mailboxReplyCommand(cwd, message)}`,
-    "",
-    "Mailbox request body:",
-    readMessageBody(cwd, message)
-  ].join("\n");
-}
-
-function readChannelSession(cwd) {
-  const file = paths.channelSessionPath(cwd);
-  if (!exists(file)) return null;
-  try {
-    return readJson(file);
-  } catch (_error) {
-    return null;
-  }
-}
-
-function isEndpointId(value) {
-  return /^ep_[A-Za-z0-9]+$/.test(String(value || ""));
-}
-
-function sessionEndpointId(session) {
-  if (!session) return null;
-  if (session.endpoint && isEndpointId(session.endpoint.endpoint_id)) return session.endpoint.endpoint_id;
-  if (session.endpoint && isEndpointId(session.endpoint.target)) return session.endpoint.target;
-  if (isEndpointId(session.target)) return session.target;
-  return null;
-}
-
-function livePushTarget(message, session) {
-  if (isEndpointId(message.target)) return message.target;
-  const endpointId = sessionEndpointId(session);
-  if (endpointId) return endpointId;
-  return message.target || (session && session.target) || (session && session.name) || null;
-}
-
-function livePushAlreadySent(cwd, message) {
-  return state
-    .listEvents(cwd, { type: "daemon.live_push_attempted" })
-    .some((event) => event.detail && event.detail.message_id === message.id && LIVE_PUSH_SENT_STATES.has(event.detail.result_state));
-}
-
-function classifyLivePushResult(result, parsed) {
-  if (parsed && parsed.status) return parsed.status;
-  if (result.status === 0) return "wake_sent";
-  if (isReplyTimeout(result.stderr, result.error ? result.error.message : undefined)) return "wake_sent_reply_pending";
-  return "failed";
-}
-
 function attemptClaudeMcpPush(cwd, runId, message, options = {}) {
   if (!livePushRequired(message)) return { required: false };
   if (!claudeMcpPushEnabled(options)) {
@@ -276,135 +159,21 @@ function attemptClaudeMcpPush(cwd, runId, message, options = {}) {
   return queueChannelNotification(cwd, message, { daemon_run_id: runId });
 }
 
-function attemptLegacyClaudeLivePush(cwd, runId, message, semantic, options = {}) {
-  if (!livePushRequired(message)) return { required: false };
-  if (!livePushEnabled(options)) {
-    return {
-      required: true,
-      attempted: false,
-      skipped: true,
-      reason: "live push disabled",
-      result_state: "live_push_disabled",
-      transport: "claude-channel-cli"
-    };
-  }
-  if (!legacyLivePushEnabled(options)) {
-    return {
-      required: true,
-      attempted: false,
-      skipped: true,
-      reason: "legacy Claude live push disabled",
-      result_state: "legacy_live_push_disabled",
-      transport: "claude-channel-cli"
-    };
-  }
-  const session = readChannelSession(cwd);
-  if (!session) {
-    const detail = {
-      required: true,
-      attempted: false,
-      skipped: true,
-      reason: "no Claude channel session recorded",
-      result_state: "legacy_no_session",
-      transport: "claude-channel-cli",
-      message_id: message.id,
-      request_id: message.request_id,
-      task_id: message.task_id,
-      goal_id: message.goal_id
-    };
-    recordDaemonEvent(cwd, runId, "daemon.live_push_skipped", detail);
-    return detail;
-  }
-  const cli = findCli();
-  if (!cli.ok) {
-    const detail = {
-      required: true,
-      attempted: false,
-      skipped: true,
-      reason: cli.reason,
-      result_state: "legacy_cli_unavailable",
-      transport: "claude-channel-cli",
-      message_id: message.id,
-      request_id: message.request_id,
-      task_id: message.task_id,
-      goal_id: message.goal_id
-    };
-    recordDaemonEvent(cwd, runId, "daemon.live_push_skipped", detail);
-    return detail;
-  }
-  const promptPath = livePushPromptPath(cwd, message);
-  writeText(promptPath, livePushPrompt(cwd, message, semantic));
-  const target = livePushTarget(message, session);
-  const args = [
-    "ask-file",
-    promptPath,
-    "--output",
-    "json",
-    "--sender",
-    "agent-team-daemon",
-    "--no-progress",
-    "--timeout-ms",
-    String(options.live_push_timeout_ms || LIVE_PUSH_TIMEOUT_MS)
-  ];
-  if (target) args.push("--to", target);
-  const result = spawnSync(cli.command, args, {
-    cwd,
-    encoding: "utf8",
-    timeout: options.live_push_transport_timeout_ms || LIVE_PUSH_TRANSPORT_TIMEOUT_MS
-  });
-  const parsed = parseJsonOutput((result.stdout || "").trim());
-  const detail = {
-    required: true,
-    attempted: true,
-    message_id: message.id,
-    request_id: message.request_id,
-    task_id: message.task_id,
-    goal_id: message.goal_id,
-    target,
-    transport: "claude-channel-cli",
-    channel_path: cli.path,
-    prompt_path: path.relative(cwd, promptPath),
-    timeout_ms: options.live_push_timeout_ms || LIVE_PUSH_TIMEOUT_MS,
-    result_state: classifyLivePushResult(result, parsed),
-    channel_request_id: parsed && parsed.request_id,
-    status: parsed && parsed.status,
-    exit_code: result.status,
-    stdout: parsed ? undefined : (result.stdout || "").trim().slice(0, 800),
-    stderr: (result.stderr || "").trim().slice(0, 800),
-    error: result.error ? result.error.message : undefined
-  };
-  recordDaemonEvent(cwd, runId, "daemon.live_push_attempted", detail);
-  return detail;
-}
-
 function attemptClaudeLivePush(cwd, runId, message, semantic, options = {}) {
   if (!livePushRequired(message)) return { required: false };
-  if (livePushAlreadySent(cwd, message)) {
-    return {
-      required: true,
-      attempted: false,
-      skipped: true,
-      reason: "live push already sent for this mailbox message"
-    };
-  }
   const firstParty = attemptClaudeMcpPush(cwd, runId, message, options);
-  const legacy = attemptLegacyClaudeLivePush(cwd, runId, message, semantic, options);
-  const selected = legacy && legacy.attempted ? legacy : firstParty;
   return {
     required: true,
-    attempted: Boolean(firstParty.attempted || firstParty.queued || legacy.attempted),
+    attempted: Boolean(firstParty.attempted || firstParty.queued),
     primary_transport: "claude-mcp-outbox",
-    compatibility_transport: "claude-channel-cli",
     first_party: firstParty,
-    legacy,
-    target: selected.target,
-    result_state: selected.result_state,
-    status: selected.status,
-    channel_request_id: selected.channel_request_id,
-    exit_code: selected.exit_code,
-    stdout: selected.stdout,
-    stderr: selected.stderr,
-    error: selected.error
+    result_state: firstParty.result_state,
+    status: firstParty.status,
+    channel_request_id: firstParty.channel_request_id,
+    exit_code: firstParty.exit_code,
+    stdout: firstParty.stdout,
+    stderr: firstParty.stderr,
+    error: firstParty.error
   };
 }
 
@@ -594,6 +363,7 @@ function recordDaemonEvent(cwd, runId, type, detail = {}) {
 function handleMessages(cwd, runId, messages, options = {}) {
   const handled = [];
   for (const message of messages) {
+   try {
     const semantic = semanticAckRequired(message);
     const receiptAck = ensureReceiptAck(cwd, runId, message, semantic);
     const livePush = attemptClaudeLivePush(cwd, runId, message, semantic, options);
@@ -627,6 +397,13 @@ function handleMessages(cwd, runId, messages, options = {}) {
       live_push: livePush.required ? livePush : undefined,
       codex_push: codexPush.required ? codexPush : undefined
     });
+   } catch (error) {
+    recordDaemonEvent(cwd, runId, "daemon.handler_error", {
+      message_id: message && message.id,
+      kind: message && message.kind,
+      error: error && error.message ? error.message : String(error)
+    });
+   }
   }
   if (options.onMessages && handled.length) options.onMessages(handled);
   return handled;
@@ -668,13 +445,12 @@ function daemonStatus(cwd) {
       native_model_ui_push: Boolean(codexWake),
       live_channel_wake: true,
       primary_claude_wake: "first_party_mcp_outbox",
-      legacy_live_channel_wake: process.env.AGENT_TEAM_DAEMON_LEGACY_LIVE_PUSH === "1",
       claude_mcp_outbox: path.relative(cwd, paths.claudeMcpOutboxPath(cwd)),
       codex_wake_adapter: codexWake ? codexWake.command : null,
       codex_wake_adapter_source: codexWake ? codexWake.source : null,
       codex_wake_stream: path.relative(cwd, codexWakeLogPath(cwd)),
-      reason: "The receiver daemon queues first-party Claude MCP channel notifications, keeps legacy claude-channel wake as explicit opt-in compatibility, and queues Codex-bound wake payloads for a Codex-side MCP/app adapter.",
-      mailbox_push: "durable mailbox is truth; receiver daemon immediately queues Claude-bound non-heartbeat traffic to the Claude MCP outbox and only attempts legacy compatibility live wake when explicitly enabled",
+      reason: "The receiver daemon queues first-party Claude MCP channel notifications and queues Codex-bound wake payloads for a Codex-side MCP/app adapter.",
+      mailbox_push: "durable mailbox is truth; receiver daemon immediately queues Claude-bound non-heartbeat traffic to the Claude MCP outbox",
       fallback_waiter: "await reply --request-id <id>"
     },
     log_path: paths.daemonLogPath(cwd),
@@ -778,6 +554,26 @@ function runDaemon(cwd, options = {}) {
   state.init(cwd);
   const roles = normalizeRoles(options.roles);
   const previousPidRecord = daemonPidRecord(cwd);
+  // Singleton guard for persistent daemons: if a live daemon already owns the pid
+  // record, refuse rather than overwriting it and having two daemons fight over one
+  // mailbox (divergent receipt_acks/wakes). --force takes over by killing the old one.
+  // One-shot (--once) passes are exempt: they restore the prior record when they finish.
+  if (!options.once && previousPidRecord && previousPidRecord.pid && previousPidRecord.pid !== process.pid && processAlive(previousPidRecord.pid)) {
+    if (!options.force) {
+      return {
+        ok: false,
+        action: "daemon_already_running",
+        reason: `A receiver daemon is already running (pid ${previousPidRecord.pid}). Use --force to take over, or stop it first.`,
+        pid: previousPidRecord.pid,
+        run_id: previousPidRecord.run_id
+      };
+    }
+    try {
+      process.kill(previousPidRecord.pid, "SIGTERM");
+    } catch (_error) {
+      // already gone; proceed to take over the record
+    }
+  }
   const run = state.createRun(cwd, {
     kind: "daemon",
     title: options.title || `Mailbox receiver daemon (${roles.join(",")})`,

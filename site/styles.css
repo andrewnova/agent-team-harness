@@ -332,6 +332,22 @@ footer {
   background: rgba(23, 27, 31, .78);
 }
 
+.proof-list code,
+.reliability-note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .92em;
+  color: var(--cyan);
+  background: rgba(87, 233, 255, .08);
+  padding: .1em .4em;
+  border-radius: 5px;
+}
+
+.reliability-note {
+  margin: 22px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
 .flow-grid article {
   padding: 22px;
 }

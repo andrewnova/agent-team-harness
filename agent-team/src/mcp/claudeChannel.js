@@ -4,6 +4,7 @@ const { appendMessage, ackMessage, listMessages, loadMessage, compactMessage } =
 const paths = require("../paths");
 const { appendJsonl, ensureDir } = require("../fsutil");
 const state = require("../state");
+const { requestToolChange } = require("../feedback");
 const { MCP_SERVER_NAME } = require("./claudeInstall");
 
 const CHANNEL_ID = "agent-team";
@@ -22,7 +23,7 @@ function serverInstructions() {
     "Agent Team Harness is mailbox-first. The mailbox is the source of truth. The sender is Codex, not this Claude transcript.",
     "Anything Codex must see has to go through the reply, agent_team_reply, agent_team_ack, or agent_team_checkin tools; ordinary transcript text is not delivered to Codex.",
     "Messages from Codex arrive as <channel source=\"agent-team\" sender=\"codex\" chat_id=\"agent-team\" message_id=\"...\" user=\"codex\" ts=\"...\" request_id=\"...\" task_id=\"...\" goal_id=\"...\" reply_required=\"true|false\">.",
-    "For reply_required=\"true\" messages, call the reply tool before finishing with text plus the message_id and request_id from the channel tag, or call agent_team_reply/agent_team_ack with the same ids.",
+    "For reply_required=\"true\" messages, answer by calling the reply tool (or agent_team_reply) with the message_id and request_id from the channel tag. agent_team_ack only records a receipt of the message and does NOT count as your semantic answer.",
     "Use agent_team_checkin for progress or blockers. Do not treat notification delivery or a tool call as a task-state transition. Codex remains proof and final-state authority."
   ].join(" ");
 }
@@ -98,6 +99,26 @@ function toolDefinitions() {
           run_id: { type: "string" }
         },
         required: ["body"]
+      }
+    },
+    {
+      name: "agent_team_self_heal",
+      description:
+        "File a harness improvement request from Claude (the CLI, skill, plugin, mailbox, docs, tests, or coordination flow misbehaved or could be better). Records a self-heal change request directly, without needing the agent-team CLI.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          request: { type: "string", description: "What should improve." },
+          surface: {
+            type: "string",
+            description: "cli | skill | plugin | mailbox | docs | harness | tests | architecture"
+          },
+          title: { type: "string" },
+          reason: { type: "string" },
+          task_id: { type: "string" },
+          goal_id: { type: "string" }
+        },
+        required: ["request"]
       }
     },
     {
@@ -305,11 +326,28 @@ function markNotificationDelivered(cwd, row, options = {}) {
   });
 }
 
+function notificationAnswered(cwd, row) {
+  // A queued request that already has a semantic Claude reply should not be re-delivered
+  // (a fresh/restarted consumer has a new consumer_id and would otherwise replay the
+  // entire history, re-asking Claude to answer requests Codex already got answers to).
+  const requestId = row.request_id;
+  const messageId = row.message_id;
+  if (!requestId && !messageId) return false;
+  const replies = listMessages(cwd, { from: "claude", to: "codex", kind: "reply" });
+  return replies.some(
+    (reply) =>
+      (requestId && (reply.request_id === requestId || reply.in_reply_to === requestId)) ||
+      (messageId && reply.in_reply_to === messageId)
+  );
+}
+
 function deliverQueuedNotifications(cwd, onNotification, options = {}) {
   state.init(cwd);
   ensureDir(paths.claudeMcpDir(cwd));
   const delivered = deliveredNotificationIds(cwd, options.consumer_id || null);
-  const rows = listQueuedNotifications(cwd).filter((row) => !delivered.has(row.notification_id));
+  const rows = listQueuedNotifications(cwd).filter(
+    (row) => !delivered.has(row.notification_id) && !notificationAnswered(cwd, row)
+  );
   const emitted = [];
   for (const row of rows) {
     onNotification(row.notification, row);
@@ -435,12 +473,12 @@ function callTool(cwd, name, args = {}) {
     const message = loadMessage(cwd, messageId, { include_body: true });
     if (!message) throw new Error(`Mailbox message not found: ${messageId}`);
     const ack = ackMessage(cwd, messageId, { by: "claude", note: args.note || "Seen in Claude Code." });
-    let reply = null;
+    let receipt = null;
     if (message.reply_required || args.body || args.request_id || message.request_id) {
-      reply = appendMessage(cwd, {
+      receipt = appendMessage(cwd, {
         from: "claude",
         to: "codex",
-        kind: "reply",
+        kind: "receipt_ack",
         subject: "ACK: received",
         body: args.body || "ACK: received. I will respond through the Agent Team mailbox.",
         in_reply_to: message.id,
@@ -454,7 +492,7 @@ function callTool(cwd, name, args = {}) {
     return toolResponse({
       ok: true,
       ack: ack.ack,
-      reply: reply ? compactMailboxResult(reply).message : null
+      receipt: receipt ? compactMailboxResult(receipt).message : null
     });
   }
 
@@ -474,6 +512,21 @@ function callTool(cwd, name, args = {}) {
       run_id: args.run_id
     });
     return toolResponse(compactMailboxResult(result));
+  }
+
+  if (name === "agent_team_self_heal") {
+    // The MCP server is launched with --cwd <harness-root>, so this records into the
+    // real harness state without the shadow-.agent-team trap that a bare CLI call hits.
+    const record = requestToolChange(cwd, {
+      source: "claude",
+      request: required(args.request, "request"),
+      target_surface: args.surface || "harness",
+      title: args.title,
+      reason: args.reason,
+      task_id: args.task_id,
+      goal_id: args.goal_id
+    });
+    return toolResponse({ ok: true, recommendation: record });
   }
 
   if (name === "agent_team_status") {

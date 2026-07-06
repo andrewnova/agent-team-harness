@@ -3,7 +3,6 @@ const path = require("node:path");
 const {
   findClaudeCli,
   parseJsonOutput,
-  pluginRootFromCli,
   redactSensitiveDiagnostics,
   shellQuote
 } = require("./utils");
@@ -47,31 +46,44 @@ function claudeVersion(claude, cwd) {
   };
 }
 
+function classifyAuthStatus(result, parsed) {
+  // "unverifiable": the probe could not run or its output could not be read —
+  // spawn failure (sandboxed shell / ENOENT), timeout or signal (status null), or
+  // stdout that was not the expected JSON shape. This is NOT the same as logged out.
+  if (result.error || result.status === null) return "unverifiable";
+  if (parsed && typeof parsed.loggedIn === "boolean") {
+    return parsed.loggedIn ? "logged_in" : "logged_out";
+  }
+  return "unverifiable";
+}
+
 function claudeAuthStatus(claude, cwd) {
   const result = spawnSync(claude.command, ["auth", "status"], {
     cwd,
     encoding: "utf8",
     timeout: 10000
   });
-  const parsed = parseJsonOutput(result.stdout.trim());
+  const parsed = parseJsonOutput((result.stdout || "").trim());
+  const status = classifyAuthStatus(result, parsed);
   return {
-    ok: result.status === 0 && Boolean(parsed && parsed.loggedIn),
+    ok: status === "logged_in",
+    status,
     exit_code: result.status,
-    logged_in: Boolean(parsed && parsed.loggedIn),
+    logged_in: status === "logged_in",
     auth_method: parsed ? parsed.authMethod : undefined,
     api_provider: parsed ? parsed.apiProvider : undefined,
     subscription_type: parsed ? parsed.subscriptionType : undefined,
-    stderr: result.stderr.trim(),
+    stderr: (result.stderr || "").trim(),
     error: result.error ? result.error.message : undefined
   };
 }
 
-function channelsFlagCheck(claude, cli, cwd) {
-  const pluginRoot = cli.ok ? pluginRootFromCli(cli) : null;
+function channelsFlagCheck(claude, cwd, options = {}) {
+  const pluginRoot = options.plugin_dir || null;
   const baseArgs = [];
   if (pluginRoot) baseArgs.push("--plugin-dir", pluginRoot);
-  const devChannelArgs = ["--dangerously-load-development-channels", `server:${MCP_SERVER_NAME}`, "--dangerously-load-development-channels", "server:claude-channel-cli"];
-  const approvedChannelArgs = ["--channels", `server:${MCP_SERVER_NAME}`, "--channels", "server:claude-channel-cli"];
+  const devChannelArgs = ["--dangerously-load-development-channels", `server:${MCP_SERVER_NAME}`];
+  const approvedChannelArgs = ["--channels", `server:${MCP_SERVER_NAME}`];
   const checks = [
     {
       mode: "development",

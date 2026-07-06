@@ -11,10 +11,13 @@ const { callTool: callCodexTool } = require("../src/mcp/codexChannel");
 
 const cli = path.join(__dirname, "..", "src", "cli.js");
 
+// Default every spawned CLI to headless so subprocess tests can never open a real
+// Terminal window (a test that genuinely exercises the visible path can override by
+// setting AGENT_TEAM_HEADLESS in its own env).
 function run(cwd, args, env = process.env) {
   const result = spawnSync(process.execPath, [cli, ...args], {
     cwd,
-    env,
+    env: { AGENT_TEAM_HEADLESS: "1", ...env },
     encoding: "utf8"
   });
   if (result.status !== 0) {
@@ -26,7 +29,7 @@ function run(cwd, args, env = process.env) {
 function runRaw(cwd, args, env = process.env) {
   return spawnSync(process.execPath, [cli, ...args], {
     cwd,
-    env,
+    env: { AGENT_TEAM_HEADLESS: "1", ...env },
     encoding: "utf8"
   });
 }
@@ -158,49 +161,6 @@ test("CLI smoke: cockpit renders a concise Codex operating view", () => {
   assert.match(output, /Codex Agent Team Cockpit/);
   assert.match(output, /Mode: choose-mode/);
   assert.match(output, /Create a goal/);
-});
-
-test("CLI smoke: cockpit labels transport-ready Claude without semantic reply proof", () => {
-  const cwd = tempRoot();
-  const binDir = tempRoot();
-  const fakeCli = path.join(binDir, "claude-channel");
-  writeExecutable(fakeCli, [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"status\" ]; then",
-    "  echo '{\"target\":\"codex-thread\",\"endpoint\":{\"endpoint_id\":\"ep_exact\",\"display_name\":\"codex-thread\",\"pid\":'$FAKE_ENDPOINT_PID'},\"reachable\":true,\"health\":{\"ok\":true}}'",
-    "  exit 0",
-    "fi",
-    "exit 1"
-  ]);
-  const env = {
-    ...process.env,
-    AGENT_TEAM_CHANNEL_CLI: fakeCli,
-    FAKE_ENDPOINT_PID: String(process.pid)
-  };
-  run(cwd, ["init"], env);
-  const sessionFile = path.join(cwd, ".agent-team", "comms", "claude-channel", "session.json");
-  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-  fs.writeFileSync(
-    sessionFile,
-    JSON.stringify(
-      {
-        ok: false,
-        action: "started_smoke_failed",
-        target: "codex-thread",
-        delivery_ready: true,
-        reply_ready: false
-      },
-      null,
-      2
-    )
-  );
-
-  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--target", "codex-thread"], env).stdout);
-  assert.equal(cockpit.claude_channel.runtime.ok, true);
-  assert.match(cockpit.next_actions.join("\n"), /semantic reply readiness is not proven/);
-  const text = run(cwd, ["cockpit", "--target", "codex-thread"], env).stdout;
-  assert.match(text, /Claude: transport-ready/);
-  assert.match(text, /reply=semantic-not-proven/);
 });
 
 test("CLI smoke: Claude steering notices scan into cockpit and can be acknowledged", () => {
@@ -442,6 +402,123 @@ test("CLI smoke: Claude check-ins and self-heal recommendations require Codex/hu
   assert.match(approvals, /self-heal/);
 });
 
+test("CLI smoke: a failed attempt does not advance the task to review", () => {
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  const taskFile = path.join(cwd, "task.json");
+  fs.writeFileSync(taskFile, JSON.stringify(backendTaskInput({ status: "claimed" }), null, 2));
+  const task = JSON.parse(run(cwd, ["tasks", "create", "--json", taskFile]).stdout);
+
+  const attemptBase = { owner: "claude", hypothesis: "try a fix", changed_files: [], commands: [] };
+  const failFile = path.join(cwd, "attempt-failed.json");
+  fs.writeFileSync(failFile, JSON.stringify({ ...attemptBase, attempt: 1, result: "failed", blocker: "build broke" }, null, 2));
+  const failed = JSON.parse(run(cwd, ["attempt", task.task_id, "--json", failFile]).stdout);
+  assert.equal(failed.advanced_to_review, false);
+
+  const okFile = path.join(cwd, "attempt-ok.json");
+  fs.writeFileSync(okFile, JSON.stringify({ ...attemptBase, attempt: 2, result: "passed" }, null, 2));
+  const passed = JSON.parse(run(cwd, ["attempt", task.task_id, "--json", okFile]).stdout);
+  assert.equal(passed.advanced_to_review, true);
+});
+
+test("CLI smoke: task transitions keep the board projection fresh without a manual board call", () => {
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  const taskFile = path.join(cwd, "task.json");
+  fs.writeFileSync(taskFile, JSON.stringify(backendTaskInput({ status: "ready" }), null, 2));
+  const task = JSON.parse(run(cwd, ["tasks", "create", "--json", taskFile]).stdout);
+
+  // A claim transitions the task; the board should regenerate automatically.
+  run(cwd, ["claim", task.task_id, "--owner", "codex", "--reason", "backend"]);
+  const board = fs.readFileSync(path.join(cwd, ".agent-team", "projections", "board.md"), "utf8");
+  assert.match(board, new RegExp(task.task_id));
+});
+
+test("CLI smoke: mailbox traffic does not force a permanent db rebuild", () => {
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  for (let i = 0; i < 3; i += 1) {
+    run(cwd, ["mailbox", "send", "--from", "codex", "--to", "claude", "--kind", "notify", "--subject", `m${i}`, "--body", "y"]);
+  }
+  // Before the fix, mailbox advisory rows (SQLite only, mirrored in comms/ not
+  // state/advisory/) made the count mismatch permanent -> needs_rebuild always true ->
+  // a full rebuild on every state.init.
+  const status = JSON.parse(run(cwd, ["db", "status"]).stdout);
+  assert.equal(status.needs_rebuild, false);
+  assert.deepEqual(status.rebuild_reasons, []);
+});
+
+test("CLI smoke: cockpit does not crash when the claude binary is unavailable", () => {
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  // PATH with node (needed to run the CLI) but no `claude` -> the live agent-session
+  // probe spawn fails with undefined stdout/stderr; cockpit must survive it.
+  const nodeDir = path.dirname(process.execPath);
+  const result = runRaw(cwd, ["cockpit", "--json"], { ...process.env, PATH: nodeDir });
+  assert.equal(result.status, 0, result.stderr);
+  const snapshot = JSON.parse(result.stdout);
+  assert.ok(snapshot.daemon);
+});
+
+test("CLI smoke: a second persistent daemon is refused while one-shot passes stay exempt", () => {
+  const { spawn } = require("node:child_process");
+  const { runDaemon } = require("../src/daemon");
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  // Simulate a live daemon owning the pid record.
+  const sleeper = spawn("sleep", ["30"]);
+  try {
+    const pidPath = path.join(cwd, ".agent-team", "state", "daemon", "daemon.json");
+    fs.mkdirSync(path.dirname(pidPath), { recursive: true });
+    fs.writeFileSync(pidPath, JSON.stringify({ pid: sleeper.pid, run_id: "R-live", roles: ["codex", "claude"] }));
+
+    const refused = runDaemon(cwd, { once: false, roles: "codex,claude" });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.action, "daemon_already_running");
+
+    // A one-shot wake pass (what steer uses) must not be blocked.
+    const once = runDaemon(cwd, { once: true, roles: "codex,claude" });
+    assert.equal(once.ok, true);
+    assert.equal(once.once, true);
+  } finally {
+    sleeper.kill();
+  }
+});
+
+test("CLI smoke: a torn JSONL line does not brick readers and state repair quarantines it", () => {
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  // Simulate a torn concurrent append to the events log.
+  fs.appendFileSync(path.join(cwd, ".agent-team", "state", "events", "events.jsonl"), '{"partial":"torn no clos');
+
+  // Readers survive (cockpit reads events); this used to throw a raw JSON parse error.
+  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--no-live-channel"]).stdout);
+  assert.ok(cockpit);
+
+  // Dry run reports the malformed line without changing anything.
+  const dry = JSON.parse(run(cwd, ["state", "repair"]).stdout);
+  assert.equal(dry.applied, false);
+  assert.equal(dry.total_malformed, 1);
+
+  // Apply quarantines the bad line to a .rejects sibling and rewrites a clean log.
+  const applied = JSON.parse(run(cwd, ["state", "repair", "--apply"]).stdout);
+  assert.equal(applied.applied, true);
+  assert.equal(applied.total_malformed, 1);
+  assert.ok(fs.existsSync(path.join(cwd, ".agent-team", "state", "events", "events.jsonl.rejects")));
+  const clean = JSON.parse(run(cwd, ["state", "repair"]).stdout);
+  assert.equal(clean.total_malformed, 0);
+});
+
+test("CLI smoke: two unscoped tasks do not serialize each other (no global '*' lease)", () => {
+  const { claimLeasesForTask } = require("../src/leases");
+  const cwd = tempRoot();
+  run(cwd, ["init"]);
+  const a = claimLeasesForTask(cwd, { task_id: "T-000A", goal_id: "G-000001", owner: "codex", allowed_paths: [] });
+  const b = claimLeasesForTask(cwd, { task_id: "T-000B", goal_id: "G-000001", owner: "claude", allowed_paths: [] });
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true); // under the old ["*"] default this would be a lease_conflict
+});
+
 test("CLI smoke: realtime mailbox lets Claude check in anytime and answer nonblocking dispatches", () => {
   const cwd = tempRoot();
   run(cwd, ["init"]);
@@ -589,48 +666,7 @@ test("CLI smoke: channel steer mailbox-only creates a durable Claude ACK handle 
   assert.match(cockpit.next_actions.join("\n"), /Claude reply pending/);
 });
 
-test("CLI smoke: channel ask exits nonzero when the live channel only queues", () => {
-  const cwd = tempRoot();
-  const binDir = tempRoot();
-  const fakeCli = path.join(binDir, "claude-channel");
-  writeExecutable(fakeCli, [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"ask-file\" ]; then",
-    "  echo '{\"request_id\":\"req_fake\",\"target\":\"ep_fake\",\"status\":\"queued\"}'",
-    "  exit 0",
-    "fi",
-    "exit 1"
-  ]);
-  const env = {
-    ...process.env,
-    AGENT_TEAM_CHANNEL_CLI: fakeCli
-  };
-  run(cwd, ["init"], env);
-
-  const result = runRaw(
-    cwd,
-    [
-      "channel",
-      "ask",
-      "--kind",
-      "debug_help",
-      "--task",
-      "T-000010",
-      "--prompt",
-      "From Codex: diagnostic ping."
-    ],
-    env
-  );
-  assert.equal(result.status, 1);
-  const asked = JSON.parse(result.stdout);
-  assert.equal(asked.ok, false);
-  assert.equal(asked.response.result_state, "pending");
-  assert.equal(asked.blocking_next_step.kind, "claude_live_answer_missing");
-  assert.match(asked.blocking_next_step.directive, /diagnostics-only/);
-  assert.match(asked.blocking_next_step.recovery_command, /channel steer/);
-});
-
-test("CLI smoke: channel steer default blocks when visible Claude delivery is unproven", () => {
+test("CLI smoke: channel steer default succeeds with queued_awaiting_reply when the wake is delivered but the reply is pending", () => {
   const cwd = tempRoot();
   run(cwd, ["init"]);
   const result = runRaw(cwd, [
@@ -647,24 +683,19 @@ test("CLI smoke: channel steer default blocks when visible Claude delivery is un
     "--prompt",
     "From Codex: this should reach visible Claude."
   ]);
-  assert.equal(result.status, 1);
+  assert.equal(result.status, 0);
   const steer = JSON.parse(result.stdout);
-  assert.equal(steer.ok, false);
+  // A durably queued first-party MCP wake with no reply yet is a successful async
+  // dispatch, not a delivery failure: Codex should await the reply, not treat steer
+  // as blocked (this is the fix for the 750ms-wait-vs-1000ms-pump false blocker).
+  assert.equal(steer.ok, true);
+  assert.equal(steer.steer_state, "queued_awaiting_reply");
   assert.equal(steer.durable_ack.reply_required, true);
   assert.equal(steer.live_channel.required, true);
   assert.equal(steer.live_channel.first_party.result_state, "mcp_outbox_queued");
-  assert.equal(steer.live_channel.legacy.result_state, "legacy_live_push_disabled");
-  assert.equal(steer.blocking_next_step.blocking, true);
-  assert.equal(steer.blocking_next_step.kind, "first_party_mcp_reply_missing");
-  assert.equal(steer.blocking_next_step.primary_transport, "agent-team-claude-mcp");
-  assert.equal(steer.blocking_next_step.first_party_mcp.result_state, "mcp_outbox_queued");
-  assert.equal(steer.blocking_next_step.compatibility_wake.result_state, "legacy_live_push_disabled");
-  assert.equal(steer.blocking_next_step.request_id, steer.durable_ack.request_id);
-  assert.equal(steer.blocking_next_step.mailbox_message_id, steer.durable_ack.mailbox_message_id);
-  assert.match(steer.blocking_next_step.await_reply_command, new RegExp(steer.durable_ack.request_id));
-  assert.match(steer.blocking_next_step.visible_recovery_command, /channel recover-visible/);
-  assert.match(steer.blocking_next_step.visible_recovery_command, new RegExp(steer.durable_ack.request_id));
-  assert.match(steer.next.codex, /first-party Claude MCP wake is queued\/emitted/);
+  assert.equal(steer.blocking_next_step, undefined);
+  assert.match(steer.await_reply_command, new RegExp(steer.durable_ack.request_id));
+  assert.match(steer.next.codex, /await Claude's reply/);
 
   const emitted = deliverQueuedNotifications(cwd, () => {});
   assert.equal(emitted.count, 1);
@@ -676,44 +707,20 @@ test("CLI smoke: channel steer default blocks when visible Claude delivery is un
 test("CLI smoke: channel recover-visible launches a fresh visible recovery prompt for the exact mailbox request", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();
-  const readyFile = path.join(cwd, "ready");
-  const argsFile = path.join(cwd, "claude-args.txt");
-  writeExecutable(path.join(binDir, "claude-channel"), [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"status\" ]; then",
-    "  if [ -f \"$FAKE_READY\" ]; then",
-    "    echo '{\"target\":\"recover-thread\",\"endpoint\":{\"endpoint_id\":\"ep_recover\",\"display_name\":\"recover-thread\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
-    "    exit 0",
-    "  fi",
-    "  echo '{\"reachable\":false,\"health\":{\"ok\":false}}'",
-    "  exit 1",
-    "fi",
-    "if [ \"$1\" = \"list\" ]; then",
-    "  if [ -f \"$FAKE_READY\" ]; then",
-    "    echo '{\"targets\":[{\"target\":\"ep_recover\",\"endpoint_id\":\"ep_recover\",\"display_name\":\"recover-thread\",\"project_dir\":\"'$PWD'\"}]}'",
-    "  else",
-    "    echo '{\"targets\":[]}'",
-    "  fi",
-    "  exit 0",
-    "fi",
-    "exit 1"
-  ]);
   writeExecutable(path.join(binDir, "claude"), [
     "#!/bin/sh",
     "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
     "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
     "  exit 0",
     "fi",
-    "printf '%s\\n' \"$*\" > \"$FAKE_ARGS\"",
-    "touch \"$FAKE_READY\"",
-    "echo 'backgrounded - fake123 - recover-thread'",
     "exit 0"
   ]);
+  const launcher = path.join(binDir, "launcher");
+  writeExecutable(launcher, ["#!/bin/sh", "sh -c \"$1\" >/dev/null 2>&1 &", "exit 0"]);
   const env = {
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
-    FAKE_READY: readyFile,
-    FAKE_ARGS: argsFile
+    AGENT_TEAM_VISIBLE_LAUNCHER: launcher
   };
   run(cwd, ["init"], env);
   const request = JSON.parse(
@@ -728,16 +735,12 @@ test("CLI smoke: channel recover-visible launches a fresh visible recovery promp
         "claude",
         "--kind",
         "request",
-        "--task",
-        "T-000007",
-        "--goal",
-        "G-000001",
+        "--subject",
+        "Recover",
+        "--body",
+        "Please ACK this recovered request.",
         "--request-id",
         "req_visible_recover",
-        "--subject",
-        "Recover visible Claude",
-        "--body",
-        "Please ACK this recovered request and then continue the handoff.",
         "--reply-required"
       ],
       env
@@ -749,85 +752,64 @@ test("CLI smoke: channel recover-visible launches a fresh visible recovery promp
       [
         "channel",
         "recover-visible",
+        "--name",
+        "codex-thread",
+        "--project-dir",
+        cwd,
         "--request-id",
         "req_visible_recover",
-        "--name",
-        "recover-thread",
-        "--launch-mode",
-        "background",
+        "--mailbox-message-id",
+        request.message.id,
         "--timeout-ms",
-        "1000",
+        "1500",
         "--poll-ms",
-        "10"
+        "50"
       ],
       env
     ).stdout
   );
-
   assert.equal(result.ok, true);
   assert.equal(result.recovery, "visible_direct_prompt");
   assert.equal(result.request_id, "req_visible_recover");
   assert.equal(result.mailbox_message_id, request.message.id);
-  assert.equal(result.start.action, "started");
+  assert.equal(result.start.action, "started_visible_mcp_pending");
   assert.match(result.await_reply_command, /req_visible_recover/);
-  const args = fs.readFileSync(argsFile, "utf8");
-  assert.match(args, /Visible recovery for an Agent Team mailbox request/);
-  assert.match(args, /call the first-party Agent Team MCP reply tool/);
-  assert.match(args, /"request_id": "req_visible_recover"/);
-  assert.match(args, /Please ACK this recovered request/);
+  // The recovery prompt (with the exact request) is injected into the launch command.
+  assert.match(result.start.command.shell, /Visible recovery for an Agent Team mailbox request/);
+  assert.match(result.start.command.shell, /req_visible_recover/);
 });
 
 test("CLI smoke: channel steer can auto-recover visible Claude and wait for a semantic mailbox reply", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();
-  const readyFile = path.join(cwd, "ready");
-  const argsFile = path.join(cwd, "claude-auto-recover-args.txt");
-  writeExecutable(path.join(binDir, "claude-channel"), [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"status\" ]; then",
-    "  if [ -f \"$FAKE_READY\" ]; then",
-    "    echo '{\"target\":\"recover-thread\",\"endpoint\":{\"endpoint_id\":\"ep_recover\",\"display_name\":\"recover-thread\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
-    "    exit 0",
-    "  fi",
-    "  echo '{\"reachable\":false,\"health\":{\"ok\":false}}'",
-    "  exit 1",
-    "fi",
-    "if [ \"$1\" = \"list\" ]; then",
-    "  if [ -f \"$FAKE_READY\" ]; then",
-    "    echo '{\"targets\":[{\"target\":\"ep_recover\",\"endpoint_id\":\"ep_recover\",\"display_name\":\"recover-thread\",\"project_dir\":\"'$PWD'\"}]}'",
-    "  else",
-    "    echo '{\"targets\":[]}'",
-    "  fi",
-    "  exit 0",
-    "fi",
-    "exit 1"
-  ]);
+  // Fake claude that, when launched for recovery, reads the request_id/message_id from the
+  // injected recovery prompt (passed as args) and sends the semantic mailbox reply Codex
+  // is waiting for -- exercising the real auto-recover-and-wait flow.
   writeExecutable(path.join(binDir, "claude"), [
     "#!/bin/sh",
     "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
     "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
     "  exit 0",
     "fi",
-    "printf '%s\\n' \"$*\" > \"$FAKE_ARGS\"",
-    "touch \"$FAKE_READY\"",
     "REQ=$(printf '%s\\n' \"$*\" | sed -n 's/.*\"request_id\": \"\\([^\"]*\\)\".*/\\1/p' | tail -n 1)",
     "MSG=$(printf '%s\\n' \"$*\" | sed -n 's/.*\"message_id\": \"\\([^\"]*\\)\".*/\\1/p' | tail -n 1)",
     "if [ -n \"$REQ\" ]; then",
-    "  \"$NODE_BIN\" \"$CLI_PATH\" mailbox send --from claude --to codex --kind reply --request-id \"$REQ\" --in-reply-to \"$MSG\" --subject 'ACK: recovered' --body 'ACK: recovered by fake visible Claude' >/dev/null",
+    "  \"$NODE_BIN\" \"$CLI_PATH\" --cwd \"$AGENT_TEAM_HARNESS_CWD\" mailbox send --from claude --to codex --kind reply --request-id \"$REQ\" --in-reply-to \"$MSG\" --subject 'ACK: recovered' --body 'ACK: recovered by fake visible Claude' >/dev/null 2>&1",
     "fi",
-    "echo 'backgrounded - fake123 - recover-thread'",
     "exit 0"
   ]);
+  // Synchronous launcher: the reply lands durably before the recovery wait polls, so the
+  // round-trip is deterministic (verified non-flaky over repeated runs).
+  const launcher = path.join(binDir, "launcher");
+  writeExecutable(launcher, ["#!/bin/sh", "sh -c \"$1\"", "exit 0"]);
   const env = {
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
-    FAKE_READY: readyFile,
-    FAKE_ARGS: argsFile,
+    AGENT_TEAM_VISIBLE_LAUNCHER: launcher,
     NODE_BIN: process.execPath,
     CLI_PATH: cli
   };
   run(cwd, ["init"], env);
-
   const steer = JSON.parse(
     run(
       cwd,
@@ -837,7 +819,7 @@ test("CLI smoke: channel steer can auto-recover visible Claude and wait for a se
         "--kind",
         "ui_direction",
         "--task",
-        "T-000011",
+        "T-000007",
         "--goal",
         "G-000001",
         "--subject",
@@ -846,183 +828,25 @@ test("CLI smoke: channel steer can auto-recover visible Claude and wait for a se
         "From Codex: recover visibly and reply through the mailbox.",
         "--recover-visible",
         "--name",
-        "recover-thread",
-        "--launch-mode",
-        "background",
-        "--timeout-ms",
-        "1000",
-        "--poll-ms",
-        "10",
+        "codex-thread",
+        "--project-dir",
+        cwd,
         "--semantic-wait-ms",
-        "10",
-        "--recovery-wait-ms",
-        "3000"
+        "300",
+        "--timeout-ms",
+        "1500",
+        "--poll-ms",
+        "50"
       ],
       env
     ).stdout
   );
-
   assert.equal(steer.ok, true);
   assert.equal(steer.blocking_next_step, undefined);
   assert.equal(steer.live_channel.first_party.result_state, "mcp_outbox_queued");
-  assert.equal(steer.live_channel.legacy.result_state, "legacy_live_push_disabled");
   assert.equal(steer.visible_recovery.ok, true);
   assert.equal(steer.visible_recovery.recovery, "visible_direct_prompt");
-  assert.equal(steer.visible_recovery.semantic_wait.ok, true);
   assert.equal(steer.semantic_reply.request_id, steer.durable_ack.request_id);
-  const args = fs.readFileSync(argsFile, "utf8");
-  assert.match(args, /Visible recovery for an Agent Team mailbox request/);
-  assert.match(args, /recover visibly and reply through the mailbox/);
-});
-
-test("CLI smoke: channel steer reports wake packet path when legacy live wake fails", () => {
-  const cwd = tempRoot();
-  const binDir = tempRoot();
-  const fakeCli = path.join(binDir, "claude-channel");
-  writeExecutable(fakeCli, [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"ask-file\" ]; then",
-    "  echo 'fetch failed' >&2",
-    "  exit 1",
-    "fi",
-    "exit 1"
-  ]);
-  const env = {
-    ...process.env,
-    AGENT_TEAM_CHANNEL_CLI: fakeCli
-  };
-  run(cwd, ["init"], env);
-  const sessionFile = path.join(cwd, ".agent-team", "comms", "claude-channel", "session.json");
-  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-  fs.writeFileSync(
-    sessionFile,
-    JSON.stringify(
-      {
-        ok: true,
-        target: "codex-thread",
-        endpoint: {
-          endpoint_id: "ep_exact",
-          display_name: "codex-thread"
-        },
-        delivery_ready: true
-      },
-      null,
-      2
-    )
-  );
-
-  const result = runRaw(
-    cwd,
-    [
-      "channel",
-      "steer",
-      "--kind",
-      "ui_direction",
-      "--task",
-      "T-000008",
-      "--goal",
-      "G-000001",
-      "--subject",
-      "Read Codex UI direction visibly",
-      "--prompt",
-      "From Codex: fail the compatibility live wake.",
-      "--legacy-live-push"
-    ],
-    env
-  );
-  assert.equal(result.status, 1);
-  const steer = JSON.parse(result.stdout);
-  assert.equal(steer.ok, false);
-  assert.equal(steer.live_channel.result_state, "failed");
-  assert.equal(steer.live_channel.target, "ep_exact");
-  assert.equal(steer.live_channel.first_party.result_state, "mcp_outbox_queued");
-  assert.equal(steer.live_channel.legacy.stderr, "fetch failed");
-  assert.equal(steer.blocking_next_step.kind, "first_party_mcp_reply_missing");
-  assert.equal(steer.blocking_next_step.primary_transport, "agent-team-claude-mcp");
-  assert.equal(steer.blocking_next_step.first_party_mcp.result_state, "mcp_outbox_queued");
-  assert.equal(steer.blocking_next_step.compatibility_wake.result_state, "failed");
-  assert.equal(steer.blocking_next_step.request_id, steer.durable_ack.request_id);
-  assert.equal(steer.blocking_next_step.target, "ep_exact");
-  assert.equal(steer.blocking_next_step.operator_hint.kind, "rerun_live_channel_with_local_permissions");
-  assert.match(steer.blocking_next_step.operator_hint.directive, /local-permission/);
-  assert.match(steer.blocking_next_step.await_reply_command, new RegExp(steer.durable_ack.request_id));
-  assert.match(steer.blocking_next_step.visible_recovery_command, new RegExp(steer.durable_ack.request_id));
-  assert.match(steer.blocking_next_step.wake_packet_path, /wake-req_/);
-  assert.equal(fs.existsSync(path.join(cwd, steer.blocking_next_step.wake_packet_path)), true);
-  assert.match(steer.blocking_next_step.manual_recovery_command, /cat /);
-});
-
-test("CLI smoke: channel steer blocks when legacy wake is sent but semantic reply is missing", () => {
-  const cwd = tempRoot();
-  const binDir = tempRoot();
-  const fakeCli = path.join(binDir, "claude-channel");
-  writeExecutable(fakeCli, [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"ask-file\" ]; then",
-    "  echo 'timed out waiting for Claude Code reply' >&2",
-    "  exit 1",
-    "fi",
-    "exit 1"
-  ]);
-  const env = {
-    ...process.env,
-    AGENT_TEAM_CHANNEL_CLI: fakeCli
-  };
-  run(cwd, ["init"], env);
-  const sessionFile = path.join(cwd, ".agent-team", "comms", "claude-channel", "session.json");
-  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-  fs.writeFileSync(
-    sessionFile,
-    JSON.stringify(
-      {
-        ok: true,
-        target: "codex-thread",
-        endpoint: {
-          endpoint_id: "ep_exact",
-          display_name: "codex-thread"
-        },
-        delivery_ready: true
-      },
-      null,
-      2
-    )
-  );
-
-  const result = runRaw(
-    cwd,
-    [
-      "channel",
-      "steer",
-      "--kind",
-      "ui_direction",
-      "--task",
-      "T-000009",
-      "--goal",
-      "G-000001",
-      "--subject",
-      "Read Codex UI direction visibly",
-      "--prompt",
-      "From Codex: the wake can be sent, but a real mailbox ACK is still required.",
-      "--legacy-live-push",
-      "--no-semantic-wait"
-    ],
-    env
-  );
-  assert.equal(result.status, 1);
-  const steer = JSON.parse(result.stdout);
-  assert.equal(steer.ok, false);
-  assert.equal(steer.live_channel.result_state, "wake_sent_reply_pending");
-  assert.equal(steer.blocking_next_step.kind, "first_party_mcp_reply_missing");
-  assert.equal(steer.blocking_next_step.primary_transport, "agent-team-claude-mcp");
-  assert.equal(steer.blocking_next_step.first_party_mcp.result_state, "mcp_outbox_queued");
-  assert.equal(steer.blocking_next_step.compatibility_wake.result_state, "wake_sent_reply_pending");
-  assert.equal(steer.blocking_next_step.semantic_reply_missing, true);
-  assert.match(steer.blocking_next_step.reason, /First-party Claude MCP queued/);
-  assert.match(steer.blocking_next_step.directive, /Do not claim Claude is working/);
-  assert.match(steer.blocking_next_step.visible_recovery_command, new RegExp(steer.durable_ack.request_id));
-  assert.match(steer.blocking_next_step.wake_packet_path, /wake-req_/);
-  assert.equal(steer.semantic_reply, null);
-  assert.equal(steer.semantic_wait.state, "skipped");
 });
 
 test("CLI smoke: daemon one-shot observes both inboxes, receipts advisory notes, and requires semantic replies only when asked", () => {
@@ -1130,113 +954,6 @@ test("CLI smoke: daemon one-shot observes both inboxes, receipts advisory notes,
   assert.equal(receiptAcksAfterRepeat.length, 2);
 });
 
-test("CLI smoke: daemon can opt into legacy live Claude wake for compatibility", () => {
-  const cwd = tempRoot();
-  const binDir = tempRoot();
-  const argsFile = path.join(cwd, "claude-channel-args.txt");
-  const promptCopy = path.join(cwd, "claude-channel-prompt.md");
-  const fakeCli = path.join(binDir, "claude-channel");
-  writeExecutable(fakeCli, [
-    "#!/bin/sh",
-    "printf '%s\\n' \"$@\" > \"$FAKE_ARGS_FILE\"",
-    "if [ \"$1\" = \"ask-file\" ]; then",
-    "  cp \"$2\" \"$FAKE_PROMPT_COPY\"",
-    "  echo 'timed out waiting for Claude Code reply' >&2",
-    "  exit 1",
-    "fi",
-    "exit 1"
-  ]);
-  const env = {
-    ...process.env,
-    AGENT_TEAM_CHANNEL_CLI: fakeCli,
-    FAKE_ARGS_FILE: argsFile,
-    FAKE_PROMPT_COPY: promptCopy,
-    AGENT_TEAM_DAEMON_LEGACY_LIVE_PUSH: "1"
-  };
-  run(cwd, ["init"], env);
-  const sessionFile = path.join(cwd, ".agent-team", "comms", "claude-channel", "session.json");
-  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-  fs.writeFileSync(
-    sessionFile,
-    JSON.stringify(
-      {
-        ok: true,
-        target: "codex-thread",
-        name: "codex-thread",
-        endpoint: {
-          endpoint_id: "ep_exact",
-          display_name: "codex-thread"
-        },
-        delivery_ready: true
-      },
-      null,
-      2
-    )
-  );
-  const request = JSON.parse(
-    run(
-      cwd,
-      [
-        "mailbox",
-        "send",
-        "--from",
-        "codex",
-        "--to",
-        "claude",
-        "--kind",
-        "request",
-        "--task",
-        "T-000123",
-        "--subject",
-        "Visible wake proof",
-        "--body",
-        "Please ACK through mailbox and keep working visibly.",
-        "--reply-required"
-      ],
-      env
-    ).stdout
-  );
-
-  const daemon = JSON.parse(run(cwd, ["daemon", "run", "--once", "--roles", "claude"], env).stdout);
-  assert.equal(daemon.ok, true);
-  assert.equal(daemon.once, true);
-  assert.equal(daemon.messages.length, 1);
-  assert.equal(daemon.messages[0].id, request.message.id);
-  assert.equal(daemon.messages[0].live_push.required, true);
-  assert.equal(daemon.messages[0].live_push.attempted, true);
-  assert.equal(daemon.messages[0].live_push.target, "ep_exact");
-  assert.equal(daemon.messages[0].live_push.result_state, "wake_sent_reply_pending");
-  assert.equal(daemon.messages[0].live_push.first_party.transport, "claude-mcp-outbox");
-  assert.equal(daemon.messages[0].live_push.first_party.result_state, "mcp_outbox_queued");
-  assert.equal(daemon.messages[0].live_push.legacy.transport, "claude-channel-cli");
-
-  const args = fs.readFileSync(argsFile, "utf8").trim().split(/\r?\n/);
-  assert.equal(args[0], "ask-file");
-  assert.deepEqual(args.slice(args.indexOf("--timeout-ms"), args.indexOf("--timeout-ms") + 2), [
-    "--timeout-ms",
-    "1200"
-  ]);
-  assert.deepEqual(args.slice(args.indexOf("--to"), args.indexOf("--to") + 2), ["--to", "ep_exact"]);
-  const prompt = fs.readFileSync(promptCopy, "utf8");
-  assert.match(prompt, new RegExp(request.message.id));
-  assert.match(prompt, /real-time wake-up copy only/);
-  assert.match(prompt, /Reply command shape:/);
-  assert.match(prompt, /Please ACK through mailbox/);
-
-  const events = JSON.parse(run(cwd, ["events", "--type", "daemon.live_push_attempted"], env).stdout).events;
-  assert.equal(events.length, 1);
-  assert.equal(events[0].detail.message_id, request.message.id);
-  assert.equal(events[0].detail.result_state, "wake_sent_reply_pending");
-  const mcpRows = fs
-    .readFileSync(path.join(cwd, ".agent-team", "comms", "claude-mcp", "outbox.jsonl"), "utf8")
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => JSON.parse(line));
-  assert.equal(mcpRows.length, 1);
-  assert.equal(mcpRows[0].message_id, request.message.id);
-  assert.equal(mcpRows[0].notification.method, "notifications/claude/channel");
-});
-
 test("CLI smoke: daemon queues first-party MCP without invoking legacy channel by default", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();
@@ -1306,7 +1023,6 @@ test("CLI smoke: daemon queues first-party MCP without invoking legacy channel b
   assert.equal(daemon.messages[0].semantic_ack_required, false);
   assert.equal(daemon.messages[0].live_push.required, true);
   assert.equal(daemon.messages[0].live_push.first_party.result_state, "mcp_outbox_queued");
-  assert.equal(daemon.messages[0].live_push.legacy.result_state, "legacy_live_push_disabled");
   assert.equal(daemon.messages[0].live_push.result_state, "mcp_outbox_queued");
   assert.equal(fs.existsSync(argsFile), false);
   assert.equal(fs.existsSync(promptCopy), false);
@@ -1347,7 +1063,6 @@ test("CLI smoke: daemon queues first-party Claude MCP notifications without need
   assert.equal(daemon.messages[0].live_push.primary_transport, "claude-mcp-outbox");
   assert.equal(daemon.messages[0].live_push.result_state, "mcp_outbox_queued");
   assert.equal(daemon.messages[0].live_push.first_party.result_state, "mcp_outbox_queued");
-  assert.equal(daemon.messages[0].live_push.legacy.result_state, "legacy_live_push_disabled");
 
   const mcpRows = fs
     .readFileSync(path.join(cwd, ".agent-team", "comms", "claude-mcp", "outbox.jsonl"), "utf8")
@@ -2203,76 +1918,6 @@ test("CLI smoke: promote-dev accepts reconciled Codex and Claude planning eviden
   assert.equal(promoted.planning[goal.goal_id].degraded, false);
 });
 
-test("CLI smoke: channel install manages the Claude channel bridge below the harness", () => {
-  const cwd = tempRoot();
-  const fakeBin = tempRoot();
-  const toolsDir = tempRoot();
-  const binDir = tempRoot();
-  writeExecutable(path.join(fakeBin, "npm"), [
-    "#!/bin/sh",
-    "PREFIX=''",
-    "while [ \"$#\" -gt 0 ]; do",
-    "  case \"$1\" in",
-    "    --prefix)",
-    "      PREFIX=\"$2\"",
-    "      shift 2",
-    "      ;;",
-    "    *)",
-    "      shift",
-    "      ;;",
-    "  esac",
-    "done",
-    "if [ -z \"$PREFIX\" ]; then echo 'missing --prefix' >&2; exit 2; fi",
-    "mkdir -p \"$PREFIX/node_modules/.bin\"",
-    "cat > \"$PREFIX/node_modules/.bin/claude-channel\" <<'BIN'",
-    "#!/bin/sh",
-    "if [ \"$1\" = \"--version\" ]; then echo 'claude-channel-cli 0.3.0'; exit 0; fi",
-    "if [ \"$1\" = \"status\" ]; then echo '{\"reachable\":false,\"health\":{\"ok\":false}}'; exit 1; fi",
-    "if [ \"$1\" = \"list\" ]; then echo '{\"targets\":[]}'; exit 0; fi",
-    "echo '{}'",
-    "exit 0",
-    "BIN",
-    "chmod +x \"$PREFIX/node_modules/.bin/claude-channel\"",
-    "cat > \"$PREFIX/node_modules/.bin/claude-channel-server\" <<'BIN'",
-    "#!/bin/sh",
-    "echo 'server'",
-    "BIN",
-    "chmod +x \"$PREFIX/node_modules/.bin/claude-channel-server\""
-  ]);
-  const env = {
-    ...process.env,
-    PATH: `${fakeBin}:${process.env.PATH}`,
-    AGENT_TEAM_TOOLS_DIR: toolsDir
-  };
-  const installed = JSON.parse(
-    run(
-      cwd,
-      [
-        "channel",
-        "install",
-        "--version",
-        "0.3.0",
-        "--tools-dir",
-        toolsDir,
-        "--bin-dir",
-        binDir,
-        "--no-setup-mcp"
-      ],
-      env
-    ).stdout
-  );
-  assert.equal(installed.ok, true);
-  assert.equal(installed.package, "claude-channel-cli");
-  assert.equal(installed.ready, true);
-  assert.equal(installed.setup_mcp.skipped, true);
-  assert.equal(fs.existsSync(path.join(binDir, "claude-channel")), true);
-  assert.equal(fs.existsSync(path.join(binDir, "claude-channel-server")), true);
-  const status = JSON.parse(run(cwd, ["channel", "status"], env).stdout);
-  assert.equal(status.ok, false);
-  assert.equal(status.source, "managed");
-  assert.equal(status.path, installed.claude_channel.path);
-});
-
 test("CLI smoke: channel mcp install registers first-party Claude MCP locally", () => {
   const cwd = tempRoot();
   const projectDir = tempRoot();
@@ -2466,274 +2111,35 @@ test("CLI smoke: cockpit renders a per-message transport and receipt timeline", 
   assert.match(cockpitText, new RegExp(`${inbound.message.id}.*mailbox sent.*Codex wake queued.*Codex MCP saw it.*mailbox replied`));
 });
 
-test("CLI smoke: doctor --fix installs the bridge and keeps remaining readiness issues honest", () => {
-  const cwd = tempRoot();
-  const fakeBin = tempRoot();
-  const toolsDir = tempRoot();
-  const binDir = tempRoot();
-  writeExecutable(path.join(fakeBin, "npm"), [
-    "#!/bin/sh",
-    "PREFIX=''",
-    "while [ \"$#\" -gt 0 ]; do",
-    "  case \"$1\" in",
-    "    --prefix)",
-    "      PREFIX=\"$2\"",
-    "      shift 2",
-    "      ;;",
-    "    *)",
-    "      shift",
-    "      ;;",
-    "  esac",
-    "done",
-    "mkdir -p \"$PREFIX/node_modules/.bin\"",
-    "cat > \"$PREFIX/node_modules/.bin/claude-channel\" <<'BIN'",
-    "#!/bin/sh",
-    "if [ \"$1\" = \"--version\" ]; then echo '0.3.0'; exit 0; fi",
-    "if [ \"$1\" = \"status\" ]; then echo '{\"reachable\":false,\"health\":{\"ok\":false}}'; exit 1; fi",
-    "if [ \"$1\" = \"list\" ]; then echo '{\"targets\":[]}'; exit 0; fi",
-    "exit 0",
-    "BIN",
-    "chmod +x \"$PREFIX/node_modules/.bin/claude-channel\""
-  ]);
-  const env = {
-    ...process.env,
-    PATH: `${fakeBin}:/bin:/usr/bin`,
-    AGENT_TEAM_TOOLS_DIR: toolsDir,
-    AGENT_TEAM_BIN_DIR: binDir
-  };
-  const result = spawnSync(process.execPath, [cli, "doctor", "--fix", "--no-setup-mcp"], {
-    cwd,
-    env,
-    encoding: "utf8"
-  });
-  assert.equal(result.status, 1);
-  const doctor = JSON.parse(result.stdout);
-  assert.equal(doctor.fix_attempted, true);
-  assert.equal(doctor.install.ok, true);
-  assert.equal(doctor.claude_channel_cli.ok, true);
-  assert.equal(doctor.claude_channel_cli.source, "managed");
-  assert.match(doctor.issues.join("\n"), /Claude Code CLI is not installed/);
-});
-
 test("CLI smoke: start auto-ensures a named Claude side", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();
-  const readyFile = path.join(cwd, "ready");
-  writeExecutable(path.join(binDir, "claude-channel"), [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"status\" ]; then",
-    "  if [ -f \"$FAKE_READY\" ]; then",
-    "    echo '{\"target\":\"codex-thread\",\"endpoint\":{\"endpoint_id\":\"ep_fake\",\"display_name\":\"codex-thread\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
-    "    exit 0",
-    "  fi",
-    "  echo '{\"reachable\":false,\"health\":{\"ok\":false}}'",
-    "  exit 1",
-    "fi",
-    "if [ \"$1\" = \"list\" ]; then",
-    "  echo '{\"targets\":[]}'",
-    "  exit 0",
-    "fi",
-    "exit 1"
-  ]);
   writeExecutable(path.join(binDir, "claude"), [
     "#!/bin/sh",
     "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
     "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
     "  exit 0",
     "fi",
-    "touch \"$FAKE_READY\"",
-    "echo 'backgrounded - fake123 - codex-thread'",
     "exit 0"
   ]);
+  const launcher = path.join(binDir, "launcher");
+  writeExecutable(launcher, ["#!/bin/sh", "sh -c \"$1\" >/dev/null 2>&1 &", "exit 0"]);
   const env = {
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
-    FAKE_READY: readyFile
+    AGENT_TEAM_VISIBLE_LAUNCHER: launcher
   };
   const result = spawnSync(
     process.execPath,
-    [cli, "start", "--name", "codex-thread", "--timeout-ms", "1000", "--poll-ms", "10", "--launch-mode", "background"],
-    {
-      cwd,
-      env,
-      encoding: "utf8"
-    }
+    [cli, "start", "--name", "codex-thread", "--timeout-ms", "2000", "--poll-ms", "50"],
+    { cwd, env, encoding: "utf8" }
   );
   assert.equal(result.status, 0);
   const start = JSON.parse(result.stdout);
   assert.equal(start.claude_channel_startup.ok, true);
-  assert.equal(start.claude_channel_startup.action, "started");
+  assert.equal(start.claude_channel_startup.action, "started_visible_mcp_pending");
   assert.equal(start.claude_channel.name, "codex-thread");
   assert.equal(start.question, "Do you want Planning Mode or Dev Mode?");
-});
-
-test("CLI smoke: fresh Claude start does not reuse or rename an old endpoint", () => {
-  const cwd = tempRoot();
-  const binDir = tempRoot();
-  const launchFile = path.join(cwd, "launched");
-  const oldEndpointJson =
-    "'{\"targets\":[{\"target\":\"ep_old\",\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1}]}'";
-  writeExecutable(path.join(binDir, "claude-channel"), [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"status\" ]; then",
-    "  printf '%s\\n' '{\"target\":\"ep_old\",\"endpoint\":{\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1},\"reachable\":true,\"health\":{\"ok\":true}}'",
-    "  exit 0",
-    "fi",
-    "if [ \"$1\" = \"list\" ]; then",
-    `  printf '%s\\n' ${oldEndpointJson}`,
-    "  exit 0",
-    "fi",
-    "if [ \"$1\" = \"rename\" ]; then",
-    "  echo 'rename should not be called for --fresh-claude old endpoint reuse' >&2",
-    "  exit 12",
-    "fi",
-    "exit 1"
-  ]);
-  writeExecutable(path.join(binDir, "claude"), [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
-    "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
-    "  exit 0",
-    "fi",
-    "touch \"$FAKE_LAUNCH_FILE\"",
-    "echo 'backgrounded - fake123 - fresh-thread'",
-    "exit 0"
-  ]);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    FAKE_ENDPOINT_PID: String(process.pid),
-    FAKE_LAUNCH_FILE: launchFile
-  };
-  const result = spawnSync(
-    process.execPath,
-    [
-      cli,
-      "start",
-      "--name",
-      "fresh-thread",
-      "--fresh-claude",
-      "--timeout-ms",
-      "100",
-      "--poll-ms",
-      "10",
-      "--launch-mode",
-      "background"
-    ],
-    {
-      cwd,
-      env,
-      encoding: "utf8"
-    }
-  );
-  assert.equal(result.status, 1);
-  const start = JSON.parse(result.stdout);
-  assert.equal(fs.existsSync(launchFile), true);
-  assert.equal(start.claude_channel_startup.ok, false);
-  assert.equal(start.claude_channel_startup.action, "fresh_start_no_new_endpoint");
-  assert.equal(start.claude_channel_startup.discovered.reason, "no_new_endpoint_after_fresh_launch");
-  assert.equal(start.claude_channel_startup.discovered.probe.new_project_count, 0);
-  assert.equal(start.claude_channel_startup.discovered.probe.existing_project_count, 1);
-  assert.match(start.claude_channel_startup.reason, /no new same-project Claude channel endpoint appeared/);
-  const degraded = spawnSync(
-    process.execPath,
-    [
-      cli,
-      "start",
-      "--name",
-      "fresh-thread",
-      "--fresh-claude",
-      "--allow-degraded-claude",
-      "--timeout-ms",
-      "100",
-      "--poll-ms",
-      "10",
-      "--launch-mode",
-      "background"
-    ],
-    {
-      cwd,
-      env,
-      encoding: "utf8"
-    }
-  );
-  assert.equal(degraded.status, 0);
-  assert.equal(JSON.parse(degraded.stdout).claude_channel_startup.action, "fresh_start_no_new_endpoint");
-  const cockpit = JSON.parse(run(cwd, ["watch", "--once", "--json", "--no-live-channel"], env).stdout);
-  assert.equal(cockpit.claude_channel.session.session_source, "history_latest");
-  assert.equal(cockpit.claude_channel.session.action, "fresh_start_no_new_endpoint");
-  assert.equal(cockpit.claude_channel.session.identity_confidence, "fresh_launch_unverified_no_new_endpoint");
-  assert.equal(cockpit.claude_channel.session.fresh_launch_probe.new_project_count, 0);
-  assert.equal(cockpit.next_actions[0].startsWith("Fresh Claude launch did not register"), true);
-  const cockpitText = run(cwd, ["watch", "--once", "--no-live-channel"], env).stdout;
-  assert.match(cockpitText, /Claude startup: source=history_latest confidence=fresh_launch_unverified_no_new_endpoint/);
-  assert.match(cockpitText, /probe=require-new:yes new=0 existing=1 checked=0 selected=none/);
-  assert.match(cockpitText, /Fresh Claude launch did not register a new same-project endpoint/);
-});
-
-test("CLI smoke: new named Claude start does not reuse unrelated same-project history", () => {
-  const cwd = tempRoot();
-  const binDir = tempRoot();
-  const readyFile = path.join(cwd, "ready");
-  const renameFile = path.join(cwd, "rename-called");
-  writeExecutable(path.join(binDir, "claude-channel"), [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"status\" ]; then",
-    "  if [ -f \"$FAKE_READY\" ]; then",
-    "    printf '%s\\n' '{\"target\":\"ep_new\",\"endpoint\":{\"endpoint_id\":\"ep_new\",\"display_name\":\"new-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1},\"reachable\":true,\"health\":{\"ok\":true}}'",
-    "    exit 0",
-    "  fi",
-    "  printf '%s\\n' '{\"target\":\"ep_old\",\"endpoint\":{\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1},\"reachable\":true,\"health\":{\"ok\":true}}'",
-    "  exit 0",
-    "fi",
-    "if [ \"$1\" = \"list\" ]; then",
-    "  if [ -f \"$FAKE_READY\" ]; then",
-    "    printf '%s\\n' '{\"targets\":[{\"target\":\"ep_new\",\"endpoint_id\":\"ep_new\",\"display_name\":\"new-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1,\"started_at\":\"2026-06-28T00:00:02.000Z\"},{\"target\":\"ep_old\",\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1,\"started_at\":\"2026-06-28T00:00:01.000Z\"}]}'",
-    "  else",
-    "    printf '%s\\n' '{\"targets\":[{\"target\":\"ep_old\",\"endpoint_id\":\"ep_old\",\"display_name\":\"old-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1,\"started_at\":\"2026-06-28T00:00:01.000Z\"}]}'",
-    "  fi",
-    "  exit 0",
-    "fi",
-    "if [ \"$1\" = \"rename\" ]; then",
-    "  touch \"$FAKE_RENAME_FILE\"",
-    "  exit 12",
-    "fi",
-    "exit 1"
-  ]);
-  writeExecutable(path.join(binDir, "claude"), [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
-    "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
-    "  exit 0",
-    "fi",
-    "touch \"$FAKE_READY\"",
-    "echo 'backgrounded - fake123 - new-thread'",
-    "exit 0"
-  ]);
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    FAKE_ENDPOINT_PID: String(process.pid),
-    FAKE_READY: readyFile,
-    FAKE_RENAME_FILE: renameFile
-  };
-  const result = spawnSync(
-    process.execPath,
-    [cli, "start", "--name", "new-thread", "--timeout-ms", "1000", "--poll-ms", "10", "--launch-mode", "background"],
-    {
-      cwd,
-      env,
-      encoding: "utf8"
-    }
-  );
-  assert.equal(result.status, 0);
-  const start = JSON.parse(result.stdout);
-  assert.equal(fs.existsSync(renameFile), false);
-  assert.equal(start.claude_channel_startup.ok, true);
-  assert.equal(start.claude_channel_startup.action, "started");
-  assert.equal(start.claude_channel_startup.endpoint_selection.strategy, "launched_new_endpoint");
-  assert.equal(start.claude_channel_startup.endpoint_selection.selected_target, "ep_new");
-  assert.equal(start.claude_channel_startup.endpoint_selection.matched_display_name, true);
 });
 
 test("CLI smoke: cockpit preserves visible Claude startup proof from session history", () => {
@@ -3026,131 +2432,35 @@ test("CLI smoke: start can launch Claude from an explicit project directory", ()
   const cwd = tempRoot();
   const projectDir = tempRoot();
   const binDir = tempRoot();
-  const readyFile = path.join(projectDir, "ready");
-  writeExecutable(path.join(binDir, "claude-channel"), [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"status\" ]; then",
-    "  if [ -f \"$FAKE_READY\" ]; then",
-    "    echo '{\"target\":\"codex-thread\",\"endpoint\":{\"endpoint_id\":\"ep_fake\",\"display_name\":\"codex-thread\",\"project_dir\":\"'$PWD'\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
-    "    exit 0",
-    "  fi",
-    "  echo '{\"reachable\":false,\"health\":{\"ok\":false}}'",
-    "  exit 1",
-    "fi",
-    "if [ \"$1\" = \"list\" ]; then",
-    "  echo '{\"targets\":[]}'",
-    "  exit 0",
-    "fi",
-    "exit 1"
-  ]);
   writeExecutable(path.join(binDir, "claude"), [
     "#!/bin/sh",
     "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
     "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
     "  exit 0",
     "fi",
-    "printf '%s\\n' \"$@\" > \"$FAKE_ARGS_FILE\"",
-    "touch \"$FAKE_READY\"",
-    "echo 'backgrounded - fake123 - codex-thread'",
     "exit 0"
   ]);
-  const argsFile = path.join(projectDir, "claude-args.txt");
+  const launcher = path.join(binDir, "launcher");
+  writeExecutable(launcher, ["#!/bin/sh", "sh -c \"$1\" >/dev/null 2>&1 &", "exit 0"]);
   const env = {
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
-    FAKE_READY: readyFile,
-    FAKE_ARGS_FILE: argsFile
+    AGENT_TEAM_VISIBLE_LAUNCHER: launcher
   };
   const start = JSON.parse(
-    run(
-      cwd,
-      [
-        "start",
-        "--name",
-        "codex-thread",
-        "--project-dir",
-        projectDir,
-        "--timeout-ms",
-        "1000",
-        "--poll-ms",
-        "10",
-        "--launch-mode",
-        "background"
-      ],
-      env
+    spawnSync(
+      process.execPath,
+      [cli, "start", "--name", "codex-thread", "--project-dir", projectDir, "--timeout-ms", "2000", "--poll-ms", "50"],
+      { cwd, env, encoding: "utf8" }
     ).stdout
   );
+  // Harness state lives under cwd; the teammate's project is the explicit --project-dir.
   assert.equal(start.root, path.join(fs.realpathSync.native(cwd), ".agent-team"));
   assert.equal(start.claude_channel_startup.ok, true);
-  assert.equal(start.claude_channel_startup.action, "started");
+  assert.equal(start.claude_channel_startup.action, "started_visible_mcp_pending");
   assert.equal(start.claude_channel_startup.project_dir, fs.realpathSync.native(projectDir));
-  assert.equal(start.claude_channel_startup.harness_cwd, fs.realpathSync.native(cwd));
   assert.equal(start.claude_channel_startup.command.env.CLAUDE_CHANNEL_PROJECT_DIR, fs.realpathSync.native(projectDir));
   assert.equal(start.claude_channel.project_dir, fs.realpathSync.native(projectDir));
-  const launchArgs = fs.readFileSync(argsFile, "utf8");
-  assert.equal(launchArgs.includes(cli), true);
-  assert.equal(launchArgs.includes(fs.realpathSync.native(cwd)), true);
-  assert.equal(launchArgs.includes(path.join(projectDir, "agent-team", "src", "cli.js")), false);
-  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json"], env).stdout);
-  assert.equal(cockpit.claude_channel.session.project_dir, fs.realpathSync.native(projectDir));
-  assert.equal(cockpit.claude_channel.session.harness_cwd, fs.realpathSync.native(cwd));
-  assert.equal(cockpit.claude_channel.runtime.ok, true);
-  assert.equal(cockpit.claude_channel.runtime.parsed.endpoint.project_dir, fs.realpathSync.native(projectDir));
-});
-
-test("CLI smoke: cockpit reports loaded Claude when local health fetch is blocked", () => {
-  const cwd = tempRoot();
-  const binDir = tempRoot();
-  writeExecutable(path.join(binDir, "claude-channel"), [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"status\" ]; then",
-    "  printf '%s\\n' '{\"target\":\"codex-thread\",\"endpoint\":{\"endpoint_id\":\"ep_loaded\",\"display_name\":\"codex-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1},\"reachable\":false,\"health\":{\"ok\":false,\"error\":\"channel server is not reachable: fetch failed\"}}'",
-    "  exit 1",
-    "fi",
-    "if [ \"$1\" = \"list\" ]; then",
-    "  printf '%s\\n' '{\"targets\":[{\"target\":\"ep_loaded\",\"endpoint_id\":\"ep_loaded\",\"display_name\":\"codex-thread\",\"project_dir\":\"'$PWD'\",\"pid\":'$FAKE_ENDPOINT_PID',\"last_seen_seconds\":1}]}'",
-    "  exit 0",
-    "fi",
-    "exit 1"
-  ]);
-  const sessionDir = path.join(cwd, ".agent-team", "comms", "claude-channel");
-  fs.mkdirSync(sessionDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(sessionDir, "session.json"),
-    JSON.stringify(
-      {
-        ok: true,
-        action: "started",
-        name: "codex-thread",
-        target: "codex-thread",
-        launch_mode: "visible",
-        reply_ready: "unchecked"
-      },
-      null,
-      2
-    )
-  );
-  const env = {
-    ...process.env,
-    PATH: `${binDir}:${process.env.PATH}`,
-    FAKE_ENDPOINT_PID: String(process.pid)
-  };
-  const status = JSON.parse(run(cwd, ["channel", "status", "--target", "codex-thread"], env).stdout);
-  assert.equal(status.ok, false);
-  assert.equal(status.delivery_ready, false);
-  assert.equal(status.presence_ok, true);
-  assert.equal(status.status_kind, "loaded_fetch_failed");
-  assert.equal(status.operator_hint.kind, "local_loopback_or_sandbox_blocked");
-  assert.equal(status.operator_hint.blocking_for_claiming_claude_working, true);
-  const cockpit = JSON.parse(run(cwd, ["cockpit", "--json", "--target", "codex-thread"], env).stdout);
-  assert.equal(cockpit.claude_channel.runtime.ok, false);
-  assert.equal(cockpit.claude_channel.runtime.presence_ok, true);
-  assert.equal(cockpit.claude_channel.runtime.status_kind, "loaded_fetch_failed");
-  assert.equal(cockpit.claude_channel.runtime.operator_hint.kind, "local_loopback_or_sandbox_blocked");
-  const text = run(cwd, ["cockpit", "--target", "codex-thread"], env).stdout;
-  assert.match(text, /Claude: loaded-channel-unverified/);
-  assert.doesNotMatch(text, /Claude: not-live/);
-  assert.match(text, /presence=loaded/);
 });
 
 test("CLI smoke: start does not expose stale raw channel diagnostics after startup failure", () => {
@@ -3269,45 +2579,31 @@ test("CLI smoke: channel auth guides login and can run the Claude login flow", (
 test("CLI smoke: channel ensure starts a named Claude side through fake binaries", () => {
   const cwd = tempRoot();
   const binDir = tempRoot();
-  const readyFile = path.join(cwd, "ready");
-  writeExecutable(path.join(binDir, "claude-channel"), [
-    "#!/bin/sh",
-    "if [ \"$1\" = \"status\" ]; then",
-    "  if [ -f \"$FAKE_READY\" ]; then",
-    "    echo '{\"target\":\"codex-thread\",\"endpoint\":{\"endpoint_id\":\"ep_fake\",\"display_name\":\"codex-thread\"},\"reachable\":true,\"health\":{\"ok\":true}}'",
-    "    exit 0",
-    "  fi",
-    "  echo '{\"reachable\":false,\"health\":{\"ok\":false}}'",
-    "  exit 1",
-    "fi",
-    "exit 1"
-  ]);
   writeExecutable(path.join(binDir, "claude"), [
     "#!/bin/sh",
     "if [ \"$1\" = \"auth\" ] && [ \"$2\" = \"status\" ]; then",
     "  echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\",\"subscriptionType\":\"max\"}'",
     "  exit 0",
     "fi",
-    "touch \"$FAKE_READY\"",
-    "echo 'backgrounded - fake123 - codex-thread'",
     "exit 0"
   ]);
+  // Hermetic visible launcher: runs the launch shell command (writing the real launch
+  // marker) with the no-op fake claude; injected via AGENT_TEAM_VISIBLE_LAUNCHER so the
+  // subprocess CLI exercises the real visible-launch flow without opening a window.
+  const launcher = path.join(binDir, "launcher");
+  writeExecutable(launcher, ["#!/bin/sh", "sh -c \"$1\" >/dev/null 2>&1 &", "exit 0"]);
   const env = {
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
-    FAKE_READY: readyFile
+    AGENT_TEAM_VISIBLE_LAUNCHER: launcher
   };
   const result = JSON.parse(
-    run(
-      cwd,
-      ["channel", "ensure", "--name", "codex-thread", "--timeout-ms", "1000", "--poll-ms", "10", "--launch-mode", "background"],
-      env
-    ).stdout
+    run(cwd, ["channel", "ensure", "--name", "codex-thread", "--project-dir", cwd, "--timeout-ms", "2000", "--poll-ms", "50"], env).stdout
   );
   assert.equal(result.ok, true);
-  assert.equal(result.action, "started");
-  const start = JSON.parse(run(cwd, ["start", "--name", "codex-thread"], env).stdout);
-  assert.equal(start.claude_channel.name, "codex-thread");
+  assert.equal(result.action, "started_visible_mcp_pending");
+  assert.equal(result.launch_mode, "visible");
+  assert.equal(result.name, "codex-thread");
 });
 
 test("CLI smoke: channel boot-ack records durable boot ack and mailbox checkin", () => {

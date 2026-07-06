@@ -18,7 +18,7 @@ const DEFAULT_TEAMMATE_QUICKSTART = [
   "## Source Of Truth",
   "",
   "- The durable mailbox is the communication truth.",
-  "- Live Claude Channel is only a startup, health, smoke, or opportunistic delivery path.",
+  "- The first-party Agent Team MCP channel is the visible wake/reply path.",
   "- Codex owns canonical task state, merge, proof, and final done.",
   "- Claude owns frontend/UI/UX execution and helps review backend clarity when asked.",
   "",
@@ -177,8 +177,8 @@ function startupPrompt(name, cwd, options = {}) {
     "Own frontend UI, UX, layout, copy polish, visual QA, and large-context critique when asked.",
     "Help Codex on backend review, simplification, debugging, and re-grounding when asked.",
     "Use available browser observation tools when they are available and useful for frontend observation.",
-    "Use the durable mailbox as your always-on lane to Codex. Send progress, blockers, steering, and replies even when no claude-channel request is pending.",
-    "Real planning, implementation, review, refactor, and debugging work must flow through mailbox-backed harness state. Treat raw live-channel requests as health, smoke, or diagnostics only.",
+    "Use the durable mailbox as your always-on lane to Codex. Send progress, blockers, steering, and replies even when no synchronous request is pending.",
+    "Real planning, implementation, review, refactor, and debugging work must flow through mailbox-backed harness state and first-party Agent Team MCP replies.",
     `Mailbox command shape: ${cliCommand} mailbox send --from claude --to codex --kind checkin --subject "Working" --body "Status/update" --task <task-id>.`,
     `For two or more replies, review verdicts, check-ins, or recommendations, write a JSON batch and run: ${cliCommand} mailbox send-batch --json <file>.`,
     "Do not hand-roll shell loops, relative cli.js calls, head parsing, or subshell variables for mailbox delivery from temporary job directories.",
@@ -186,7 +186,6 @@ function startupPrompt(name, cwd, options = {}) {
     "For a durable reply to a Codex dispatch, use --kind reply --in-reply-to <harness-request-id>. Key replies to the harness request_id Codex created, not any MCP-side channel id.",
     "If Codex nudges after you already replied, send one concise pointer to the already-delivered mailbox message instead of redelivering the same payload through ad hoc scripts.",
     "If a CLI, skill, plugin, mailbox, review import, channel, or harness hiccup appears, record a self-heal recommendation or request-change and keep the main goal moving when safe.",
-    "For explicit synchronous claude-channel requests, complete_channel_request is allowed when it is available, but still send important status or late replies through the mailbox.",
     "If the mailbox CLI is unavailable, write a Markdown notice for Codex.",
     "Preferred notice paths: docs/planning/claude-notice-<topic>.md or .agent-team/comms/codex-inbox/claude-notice-<topic>.md.",
     "Start notices with '# NOTICE for Codex', include task/goal IDs when known, and make them actionable."
@@ -264,7 +263,6 @@ function claudeSessionArgs(name, cwd, options, includeStartupPromptAsArg) {
   const channelFlag = options.use_development_channel === true ? "--dangerously-load-development-channels" : "--channels";
   const channels = [];
   if (options.use_first_party_mcp_channel !== false) channels.push(`server:${mcpConfig ? mcpConfig.server_name : MCP_SERVER_NAME}`);
-  channels.push("server:claude-channel-cli");
   for (const channel of channels) args.push(channelFlag, channel);
   if (options.chrome !== false) args.push("--chrome");
   args.push("--permission-mode", options.permission_mode || "auto");
@@ -343,6 +341,9 @@ function codexTerminalLauncher(options = {}) {
 
 function launchVisible(claude, cwd, name, options) {
   const command = visibleShellCommand(claude, cwd, name, options);
+  // An explicit launcher (a fake script in tests; the operator's choice in prod) runs the
+  // command directly and never opens a real window, so it is allowed even under headless —
+  // this is the hermetic launch path tests use to exercise the real launch flow.
   if (options.visible_launcher || process.env.AGENT_TEAM_VISIBLE_LAUNCHER) {
     const launcher = options.visible_launcher || process.env.AGENT_TEAM_VISIBLE_LAUNCHER;
     const result = spawnSync(launcher, [command], {
@@ -356,9 +357,20 @@ function launchVisible(claude, cwd, name, options) {
       mode: "visible",
       launcher,
       exit_code: result.status,
-      stdout: result.stdout.trim(),
-      stderr: result.stderr.trim(),
+      stdout: (result.stdout || "").trim(),
+      stderr: (result.stderr || "").trim(),
       error: result.error ? result.error.message : undefined,
+      command: launchCommand(command, name, cwd, options)
+    };
+  }
+  // The default path shells out to osascript -> Terminal.app, which DOES open a real
+  // window; suppress it under headless so tests/CI never spawn windows.
+  if (process.env.AGENT_TEAM_HEADLESS === "1" || process.env.AGENT_TEAM_HEADLESS === "true") {
+    return {
+      ok: false,
+      mode: "visible",
+      suppressed: true,
+      reason: "AGENT_TEAM_HEADLESS is set: visible Terminal launch suppressed (tests/CI must not spawn windows).",
       command: launchCommand(command, name, cwd, options)
     };
   }

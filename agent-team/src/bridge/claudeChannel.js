@@ -3,25 +3,9 @@ const manual = require("./manual");
 const {
   findCli,
   findClaudeCli,
-  pluginRootFromCli,
   canonicalPath
 } = require("./claudeChannel/utils");
-const {
-  channelStatus,
-  compactList,
-  compactStatus,
-  endpointTarget,
-  endpointFromStatus,
-  findProjectEndpointByTarget,
-  findReachableProjectEndpoint,
-  listTargets,
-  renameTarget,
-  runSmoke,
-  waitForReachable,
-  waitForStartedEndpoint,
-  workspaceCwd,
-  workspaceMismatch
-} = require("./claudeChannel/status");
+const { workspaceCwd } = require("./claudeChannel/status");
 const {
   auth,
   authHelp,
@@ -46,47 +30,28 @@ const {
   launchPty,
   launchVisible
 } = require("./claudeChannel/launcher");
-const { sendChannelRequest } = require("./claudeChannel/request");
 const { loadEnsureSession, persistEnsure } = require("./claudeChannel/session");
 const { createStartupPacket } = require("./claudeChannel/startupPacket");
+const { statusClaudeMcp } = require("../mcp/claudeInstall");
 
-function rememberedSessionTarget(session, identity, projectCwd, strictSessionIdentity) {
-  if (!strictSessionIdentity || !session || !session.ok || !identity || !identity.token) return null;
-  const sessionIdentity = session.session_identity || {};
-  if (sessionIdentity.thread_ref !== identity.token) return null;
-  if (session.project_dir && canonicalPath(session.project_dir) !== canonicalPath(projectCwd)) return null;
-  return endpointTarget(session.endpoint) || session.target || null;
-}
-
-function launchedIdentityConfidence(discovered, rename, recoveredEndpoint) {
-  if (discovered && discovered.ok && discovered.is_new && rename && rename.ok) return "launched_new_endpoint_renamed";
-  if (discovered && discovered.ok && discovered.is_new) return "launched_new_endpoint";
-  if (discovered && discovered.ok) return "launched_existing_endpoint";
-  if (recoveredEndpoint && recoveredEndpoint.ok) return "recovered_project_endpoint";
-  return "launch_unverified";
-}
-
-function compactEndpoint(endpoint) {
-  if (!endpoint || typeof endpoint !== "object") return null;
-  return {
-    target: endpointTarget(endpoint),
-    endpoint_id: endpoint.endpoint_id || endpoint.target || null,
-    display_name: endpoint.display_name || null,
-    project_dir: endpoint.project_dir || null,
-    started_at: endpoint.started_at || null,
-    pid: Number.isInteger(endpoint.pid) ? endpoint.pid : null
-  };
-}
-
-function endpointMatchesRequested(endpoint, parsedTarget, name, target) {
-  const resolvedTarget = endpointTarget(endpoint);
-  return Boolean(
-    resolvedTarget === target ||
-      resolvedTarget === name ||
-      parsedTarget === target ||
-      parsedTarget === name ||
-      (endpoint && endpoint.display_name === name)
-  );
+// Liveness probe for a recorded session: the MCP server runs iff the Claude
+// session is alive, and its start proof row carries that server's pid. A recorded
+// session is only reusable if that process is still running — otherwise "reuse"
+// would report a closed window as delivery_ready and steer into the void.
+function sessionProcessAlive(cwd, session) {
+  const launchId = session && session.launch_id;
+  if (!launchId) return false;
+  const proof = startupProofDiagnostics(cwd, launchId);
+  const mcpStart = proof && proof.selected && proof.selected.mcp_start;
+  const pid = mcpStart && mcpStart.pid;
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH => the process is gone; EPERM => it exists but is owned by another user.
+    return err.code === "EPERM";
+  }
 }
 
 function channelDiagnosticHint(authStatus, status) {
@@ -109,6 +74,87 @@ function channelDiagnosticHint(authStatus, status) {
     };
   }
   return null;
+}
+
+function sessionMatchesTarget(session, target) {
+  if (!target) return true;
+  if (!session) return false;
+  return [session.name, session.target, session.launch_id].filter(Boolean).includes(target);
+}
+
+function firstPartyStatus(cwd, target = null, options = {}) {
+  const session = loadEnsureSession(cwd);
+  const mcp = statusClaudeMcp(cwd, options);
+  const matches = sessionMatchesTarget(session, target);
+  const proof = session && session.launch_id ? startupProofDiagnostics(cwd, session.launch_id) : null;
+  const launchMarker = session?.launch_marker || (proof && proof.selected.launch_marker ? { ok: true, record: proof.selected.launch_marker } : null);
+  const mcpStart = session?.mcp_start || (proof && proof.selected.mcp_start ? { ok: true, record: proof.selected.mcp_start } : null);
+  const mcpInit = session?.mcp_init || (proof && proof.selected.mcp_init ? { ok: true, record: proof.selected.mcp_init } : null);
+  const bootAck = session?.boot_ack || (proof && proof.selected.boot_ack ? { ok: true, record: proof.selected.boot_ack } : null);
+  const deliveryReady = Boolean(matches && mcp.ok && (mcpInit?.ok || bootAck?.ok));
+  const visibleLoaded = Boolean(matches && launchMarker?.ok);
+  return {
+    ok: deliveryReady || visibleLoaded,
+    delivery_ready: deliveryReady,
+    visible_loaded: visibleLoaded,
+    transport: "first_party_agent_team_mcp",
+    target: target || session?.target || session?.name || null,
+    session_name: session?.name || null,
+    launch_id: session?.launch_id || null,
+    session_path: session ? "recorded" : null,
+    first_party_mcp: mcp,
+    launch_marker: launchMarker || { ok: false, reason: session ? "not_recorded" : "no_session" },
+    mcp_start: mcpStart || { ok: false, reason: session ? "not_recorded" : "no_session" },
+    mcp_init: mcpInit || { ok: false, reason: session ? "not_recorded" : "no_session" },
+    boot_ack: bootAck || { ok: false, reason: session ? "not_recorded" : "no_session" },
+    startup_proof: proof,
+    operator_hint:
+      !mcp.ok
+        ? {
+            kind: "first_party_mcp_not_configured",
+            reason: "Install/register the first-party Agent Team Claude MCP wrapper, then restart visible Claude.",
+            next_step: "agent-team channel mcp install",
+            blocking_for_claiming_claude_working: true
+          }
+        : !session
+          ? {
+              kind: "visible_claude_not_started",
+              reason: "No Agent Team Claude startup session has been recorded.",
+              next_step: "agent-team start --daemon or agent-team channel ensure",
+              blocking_for_claiming_claude_working: true
+            }
+          : !matches
+            ? {
+                kind: "target_mismatch",
+                reason: "A Claude startup session exists, but it does not match the requested target/name.",
+                next_step: "Run channel ensure with the requested --name/--project-dir.",
+                blocking_for_claiming_claude_working: true
+              }
+            : undefined
+  };
+}
+
+function firstPartyList(cwd, options = {}) {
+  const session = loadEnsureSession(cwd);
+  return {
+    ok: true,
+    transport: "first_party_agent_team_mcp",
+    sessions: session
+      ? [
+          {
+            name: session.name,
+            target: session.target,
+            launch_id: session.launch_id,
+            project_dir: session.project_dir,
+            action: session.action,
+            delivery_ready: session.delivery_ready,
+            visible_loaded: session.visible_loaded,
+            updated_at: session.updated_at
+          }
+        ]
+      : [],
+    first_party_mcp: statusClaudeMcp(cwd, options)
+  };
 }
 
 function proofResult(current, selected) {
@@ -134,17 +180,9 @@ function attachStartupProof(cwd, launchId, record) {
 }
 
 function diagnose(cwd, options = {}) {
-  const cli = findCli();
   const claude = findClaudeCli();
   const target = options.target || defaultSessionName(cwd);
   const issues = [];
-  const cliCheck = {
-    ok: cli.ok,
-    path: cli.path,
-    source: cli.source,
-    reason: cli.reason
-  };
-  if (!cli.ok) issues.push(cli.reason);
   const claudeCheck = {
     ok: claude.ok,
     path: claude.path,
@@ -154,27 +192,28 @@ function diagnose(cwd, options = {}) {
   const version = claude.ok ? claudeVersion(claude, cwd) : null;
   const authStatus = claude.ok ? claudeAuthStatus(claude, cwd) : null;
   if (authStatus && !authStatus.ok) issues.push("Claude Code auth is not logged in or cannot be verified");
-  const channels = cli.ok && claude.ok ? channelsFlagCheck(claude, cli, cwd) : null;
-  if (channels && !channels.ok) issues.push("Claude Code did not accept the claude-channel receiver launch flags");
-  const list = cli.ok ? listTargets(cli.command, cwd) : null;
-  const status = cli.ok ? channelStatus(cli.command, target, cwd) : null;
-  if (status && !status.ok) issues.push(`No healthy Claude channel endpoint resolved for target ${target}`);
-  const smoke = options.smoke && cli.ok && status && status.ok ? runSmoke(cli.command, cwd, target, options.smoke_timeout_ms || 120000) : null;
-  if (smoke && !smoke.ok) issues.push("Claude channel endpoint is healthy, but Claude did not complete the reply request");
+  const channels = claude.ok ? channelsFlagCheck(claude, cwd, options) : null;
+  if (channels && !channels.ok) issues.push("Claude Code did not accept the first-party Agent Team MCP channel launch flags");
+  const mcpStatus = statusClaudeMcp(cwd, options);
+  if (!mcpStatus.ok) issues.push("First-party Agent Team Claude MCP server is not installed/configured");
+  const status = firstPartyStatus(cwd, target, options);
+  if (status && !status.ok) issues.push(`No first-party Claude MCP startup proof resolved for target ${target}`);
+  const smoke = options.smoke ? { ok: false, skipped: true, reason: "raw synchronous smoke was removed; use channel steer --recover-visible" } : null;
   const hint = channelDiagnosticHint(authStatus, status);
   return {
     ok: issues.length === 0,
     checked_at: new Date().toISOString(),
     target,
-    claude_channel_cli: cliCheck,
+    transport: "first_party_agent_team_mcp",
     claude_code: claudeCheck,
     claude_version: version,
     claude_auth: authStatus,
     auth_help: authStatus && !authStatus.ok ? authHelp(cwd, options) : null,
     channels_flag: channels,
-    endpoint_list: compactList(list),
-    endpoint_status: compactStatus(status),
-    reply_ready: smoke ? smoke.ok : "unchecked",
+    first_party_mcp: mcpStatus,
+    endpoint_list: firstPartyList(cwd, options),
+    endpoint_status: status,
+    reply_ready: "mailbox_required",
     smoke,
     operator_hint: hint,
     issues
@@ -182,16 +221,13 @@ function diagnose(cwd, options = {}) {
 }
 
 function ensure(cwd, options = {}) {
-  const cli = findCli();
-  if (!cli.ok) return persistEnsure(cwd, { ok: false, action: "missing_channel_cli", reason: cli.reason });
   const inferredDefaultName = !(options.name || options.target);
   const identity = codexSessionIdentity();
   const name = options.name || options.target || defaultSessionName(cwd);
   const target = options.target || name;
   const projectCwd = workspaceCwd(cwd, options);
   const strictSessionIdentity = Boolean(inferredDefaultName && identity && identity.token && !options.allow_cross_project_reuse);
-  const previousSession = loadEnsureSession(cwd);
-  const rememberedTarget = rememberedSessionTarget(previousSession, identity, projectCwd, strictSessionIdentity);
+  const previousSession = loadEnsureSession(cwd, { name, target, projectCwd });
   const baseRecord = {
     name,
     target,
@@ -205,169 +241,61 @@ function ensure(cwd, options = {}) {
         }
         : null
   };
-  const selectionBase = {
-    transport: "legacy_claude_channel_endpoint_registry",
-    display_name: name,
-    target,
-    project_dir: projectCwd,
-    strict_session_identity: strictSessionIdentity,
-    remembered_target: rememberedTarget || null,
-    allow_cross_project_reuse: Boolean(options.allow_cross_project_reuse),
-    fresh_claude: Boolean(options.fresh_claude),
-    reuse_claude: Boolean(options.reuse_claude)
-  };
   const persist = (record) => {
     const { endpoint_selection: endpointSelection, ...rest } = record;
     return persistEnsure(cwd, {
       ...baseRecord,
       ...rest,
       endpoint_selection: {
-        ...selectionBase,
+        transport: "first_party_agent_team_mcp",
+        display_name: name,
+        target,
+        project_dir: projectCwd,
+        strict_session_identity: strictSessionIdentity,
+        allow_cross_project_reuse: Boolean(options.allow_cross_project_reuse),
+        fresh_claude: Boolean(options.fresh_claude),
+        reuse_claude: Boolean(options.reuse_claude),
         ...(endpointSelection || {})
       }
     });
   };
   const timeoutMs = options.timeout_ms || 45000;
   const pollMs = options.poll_ms || 1000;
-  const initialStatus = channelStatus(cli.command, target, projectCwd);
-  const initialMismatch = workspaceMismatch(endpointFromStatus(initialStatus), projectCwd);
-  const initialEndpoint = endpointFromStatus(initialStatus);
-  const initialEndpointTarget = endpointTarget(initialEndpoint);
-  const initialParsedTarget = initialStatus.parsed ? initialStatus.parsed.target : null;
-  const initialMatchesRemembered = !rememberedTarget || initialEndpointTarget === rememberedTarget || initialParsedTarget === rememberedTarget;
-  const initialMatchesRequested = endpointMatchesRequested(initialEndpoint, initialParsedTarget, name, target);
-  const automaticReuseFilter = options.reuse_claude ? {} : { display_name: name };
-  if (
-    initialStatus.ok &&
-    !options.fresh_claude &&
-    (!initialMismatch || options.allow_cross_project_reuse) &&
-    initialMatchesRemembered &&
-    (options.reuse_claude || rememberedTarget || initialMatchesRequested)
-  ) {
-    const smoke = options.smoke ? runSmoke(cli.command, projectCwd, target, options.smoke_timeout_ms || 120000) : null;
-    return persist({
-      ok: smoke ? smoke.ok : true,
-      action: smoke && !smoke.ok ? "reused_smoke_failed" : "reused",
-      identity_confidence: rememberedTarget ? "remembered_endpoint_status_reused" : "target_status_reused",
-      endpoint_selection: {
-        strategy: rememberedTarget ? "remembered_target_status" : "target_status",
-        selected_target: initialEndpointTarget || initialParsedTarget || target,
-        selected_endpoint: compactEndpoint(initialEndpoint),
-        matched_display_name: initialEndpoint && initialEndpoint.display_name === name,
-        automatic_reuse_filter: options.reuse_claude ? "target" : "target_or_display_name"
-      },
-      remembered_endpoint: rememberedTarget
-        ? { ok: true, target: rememberedTarget, endpoint: initialEndpoint, status: initialStatus }
-        : null,
-      endpoint: initialEndpoint,
-      workspace_mismatch: initialMismatch,
-      cross_project_reuse_allowed: Boolean(initialMismatch && options.allow_cross_project_reuse),
-      status: initialStatus,
-      reply_ready: smoke ? smoke.ok : "unchecked",
-      smoke
-    });
-  }
-  const beforeList = listTargets(cli.command, projectCwd);
-  const rememberedProjectEndpoint =
-    !options.fresh_claude && rememberedTarget
-      ? findProjectEndpointByTarget(cli.command, projectCwd, beforeList, rememberedTarget)
-      : { ok: false, reason: rememberedTarget ? "--fresh-claude" : "no_remembered_endpoint", target: rememberedTarget };
-  const reusableProjectEndpoint = options.fresh_claude
-    ? { ok: false, skipped: true, reason: "--fresh-claude" }
-    : rememberedProjectEndpoint.ok
-      ? rememberedProjectEndpoint
-      : findReachableProjectEndpoint(cli.command, projectCwd, beforeList, automaticReuseFilter);
-  const reuseSource = options.fresh_claude
-    ? "fresh_claude"
-    : rememberedProjectEndpoint.ok
-      ? "remembered_endpoint_id"
-      : options.reuse_claude
-        ? "explicit_project_endpoint"
-      : "project_endpoint";
-  if (reusableProjectEndpoint.ok && !options.fresh_claude) {
-    let rename = null;
-    if (reusableProjectEndpoint.endpoint.display_name !== name) {
-      rename = renameTarget(cli.command, reusableProjectEndpoint.target, name, projectCwd);
-      if (!rename.ok) {
-        return persist({
-          ok: false,
-          action: "reuse_rename_failed",
-          endpoint: reusableProjectEndpoint.endpoint,
-          rename,
-          initial_status: initialStatus,
-          workspace_mismatch: initialMismatch,
-          before_list: beforeList,
-          remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
-          reuse_source: reuseSource
-        });
-      }
+
+  // Adopt-first: by default, reuse a recorded session for this project+name when its
+  // process is still alive, instead of launching another visible window every time
+  // (--fresh-claude forces a new launch; the liveness probe keeps us from adopting a
+  // closed window). This is what stops the "N launches per session" churn.
+  if (!options.fresh_claude && previousSession && previousSession.ok) {
+    const sameProject = previousSession.project_dir && canonicalPath(previousSession.project_dir) === canonicalPath(projectCwd);
+    const sameName = previousSession.name === name || previousSession.target === target;
+    if (sameProject && sameName && sessionProcessAlive(cwd, previousSession)) {
+      const proof = previousSession.launch_id ? startupProofDiagnostics(cwd, previousSession.launch_id) : null;
+      return persist({
+        ok: true,
+        action: "reused_recorded_first_party_session",
+        identity_confidence: "recorded_first_party_session_reused",
+        endpoint_selection: {
+          strategy: "explicit_reuse_recorded_session",
+          selected_target: target,
+          selected_endpoint: null,
+          proof
+        },
+        launch_id: previousSession.launch_id,
+        launch_mode: previousSession.launch_mode,
+        delivery_ready: Boolean(previousSession.delivery_ready || previousSession.mcp_init?.ok || previousSession.boot_ack?.ok),
+        visible_loaded: Boolean(previousSession.visible_loaded || previousSession.launch_marker?.ok),
+        launch_marker: previousSession.launch_marker,
+        mcp_start: previousSession.mcp_start,
+        mcp_init: previousSession.mcp_init,
+        boot_ack: previousSession.boot_ack,
+        startup_proof: proof,
+        status: firstPartyStatus(cwd, target, options),
+        reply_ready: "mailbox_required"
+      });
     }
-    const finalTarget = reusableProjectEndpoint.target;
-    const finalStatus =
-      reusableProjectEndpoint.status && reusableProjectEndpoint.status.presence_ok && !reusableProjectEndpoint.status.ok
-        ? reusableProjectEndpoint.status
-        : waitForReachable(cli.command, finalTarget, projectCwd, timeoutMs, pollMs);
-    const smoke = options.smoke && finalStatus && finalStatus.ok ? runSmoke(cli.command, projectCwd, finalTarget, options.smoke_timeout_ms || 120000) : null;
-    const deliveryReady = Boolean(finalStatus && finalStatus.ok);
-    const channelLoaded = Boolean(finalStatus && finalStatus.presence_ok);
-    const acceptable = deliveryReady || (!options.smoke && channelLoaded);
-    return persist({
-      ok: acceptable && (!smoke || smoke.ok),
-      identity_confidence:
-        reuseSource === "remembered_endpoint_id"
-          ? "remembered_endpoint_id_reused"
-          : strictSessionIdentity
-            ? "thread_display_name_project_reused"
-            : "same_project_endpoint_reused",
-      endpoint_selection: {
-        strategy:
-          reuseSource === "remembered_endpoint_id"
-            ? "remembered_endpoint_id"
-            : reuseSource === "explicit_project_endpoint"
-              ? "explicit_same_project_endpoint"
-            : strictSessionIdentity
-              ? "thread_display_name_project_endpoint"
-              : "same_project_endpoint",
-        selected_target: finalTarget,
-        selected_endpoint: compactEndpoint(reusableProjectEndpoint.endpoint),
-        matched_display_name: reusableProjectEndpoint.endpoint && reusableProjectEndpoint.endpoint.display_name === name,
-        automatic_reuse_filter: options.reuse_claude ? "none" : "display_name",
-        compatibility_note:
-          reuseSource === "explicit_project_endpoint"
-            ? "--reuse-claude allowed loose same-project endpoint reuse"
-            : strictSessionIdentity && reuseSource !== "remembered_endpoint_id"
-            ? "strict thread identity limited endpoint reuse to matching display name"
-            : null
-      },
-      action:
-        smoke && !smoke.ok
-          ? rename
-            ? "renamed_reused_smoke_failed"
-            : "reused_project_endpoint_smoke_failed"
-          : deliveryReady
-            ? rename
-              ? "renamed_reused"
-              : "reused_project_endpoint"
-            : channelLoaded
-              ? rename
-                ? "renamed_reused_channel_unverified"
-                : "reused_project_endpoint_channel_unverified"
-            : "reused_unreachable",
-      target: finalTarget,
-      delivery_ready: deliveryReady,
-      channel_loaded: channelLoaded,
-      endpoint: reusableProjectEndpoint.endpoint,
-      rename,
-      initial_status: initialStatus,
-      workspace_mismatch: initialMismatch,
-      before_list: beforeList,
-      remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
-      reuse_source: reuseSource,
-      status: finalStatus,
-      reply_ready: smoke ? smoke.ok : "unchecked",
-      smoke
-    });
   }
+
   const claude = findClaudeCli();
   if (!claude.ok) {
     return persist({
@@ -375,35 +303,30 @@ function ensure(cwd, options = {}) {
       action: "missing_claude_cli",
       reason: claude.reason,
       endpoint_selection: { strategy: "preflight_missing_claude_cli" },
-      initial_status: initialStatus,
-      workspace_mismatch: initialMismatch,
-      skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
-      remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
-      reuse_source: reuseSource
+      status: firstPartyStatus(cwd, target, options)
     });
   }
   const authStatus = claudeAuthStatus(claude, projectCwd);
-  if (!authStatus.ok) {
+  // Only a DEFINITE logged-out result blocks the launch. An "unverifiable" probe
+  // (sandboxed shell, timeout, non-JSON output) must not masquerade as logged-out:
+  // the visible Claude launched in the user's own terminal usually has valid auth,
+  // and the boot-ack / MCP proof chain will surface a genuine auth failure if there
+  // is one. This replaces the prose "Codex App sandbox rule" with real behavior.
+  if (authStatus.status === "logged_out") {
     return persist({
       ok: false,
       action: "claude_auth_required",
-      reason: "Claude Code auth is not logged in or cannot be verified",
+      reason: "Claude Code reports it is not logged in",
       endpoint_selection: { strategy: "preflight_claude_auth" },
       claude_path: claude.path,
       claude_auth: authStatus,
       auth_help: authHelp(projectCwd, options),
-      initial_status: initialStatus,
-      workspace_mismatch: initialMismatch,
-      skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
-      remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
-      reuse_source: reuseSource,
-      before_list: beforeList
+      status: firstPartyStatus(cwd, target, options)
     });
   }
   const launchOptions = {
     ...options,
     harness_cwd: path.resolve(cwd),
-    plugin_dir: options.plugin_dir || pluginRootFromCli(cli),
     launch_id: options.launch_id || createLaunchId(name, projectCwd)
   };
   const launchMode = options.launch_mode || "visible";
@@ -414,10 +337,7 @@ function ensure(cwd, options = {}) {
       action: "invalid_launch_mode",
       reason: "launch_mode must be codex-terminal, visible, pty, or background",
       endpoint_selection: { strategy: "preflight_invalid_launch_mode" },
-      initial_status: initialStatus,
-      workspace_mismatch: initialMismatch,
-      remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
-      reuse_source: reuseSource
+      status: firstPartyStatus(cwd, target, options)
     });
   }
   const started =
@@ -436,11 +356,7 @@ function ensure(cwd, options = {}) {
       endpoint_selection: { strategy: "launch_failed" },
       start: started,
       background: started.background,
-      initial_status: initialStatus,
-      workspace_mismatch: initialMismatch,
-      skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
-      remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
-      reuse_source: reuseSource
+      status: firstPartyStatus(cwd, target, options)
     });
   }
   const markerWaitMs =
@@ -460,10 +376,6 @@ function ensure(cwd, options = {}) {
   const mcpInit = mcpStart.ok
     ? waitForMcpInitialized(cwd, launchOptions.launch_id, handshakeWaitMs, Math.min(pollMs, 100))
     : { ok: false, reason: "mcp_start_not_recorded", launch_id: launchOptions.launch_id };
-  const discovered = waitForStartedEndpoint(cli.command, projectCwd, beforeList, timeoutMs, pollMs, {
-    require_new: Boolean(options.fresh_claude),
-    display_name: options.reuse_claude ? null : name
-  });
   const bootAckWaitMs =
     launchMode === "visible" || launchMode === "codex-terminal"
       ? options.boot_ack_timeout_ms === undefined
@@ -471,175 +383,55 @@ function ensure(cwd, options = {}) {
         : options.boot_ack_timeout_ms
       : options.boot_ack_timeout_ms || 0;
   const bootAck = waitForBootAck(cwd, launchOptions.launch_id, bootAckWaitMs, Math.min(pollMs, 100));
-  let rename = null;
-  let finalStatus = null;
-  let endpoint = discovered.ok ? discovered.endpoint : null;
-  let finalTarget = target;
-  let recoveredEndpoint = null;
-  if (discovered.ok) {
-    if (endpoint.display_name !== name) {
-      rename = renameTarget(cli.command, discovered.target, name, projectCwd);
-      if (!rename.ok) {
-        return persist({
-          ok: false,
-          action: "started_rename_failed",
-          launch_mode: started.mode,
-          claude_path: claude.path,
-          channel_path: cli.path,
-          start: started,
-          background: started.background,
-          endpoint,
-          rename,
-          initial_status: initialStatus,
-          workspace_mismatch: initialMismatch,
-          skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
-          before_list: beforeList,
-          remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
-          reuse_source: reuseSource,
-          identity_confidence: launchedIdentityConfidence(discovered, rename, null),
-          discovered
-        });
+  const deliveryReady = Boolean(mcpInit.ok || bootAck.ok);
+  const visibleStarted = Boolean(launchMarker.ok && (started.mode === "visible" || started.mode === "codex-terminal"));
+  const channelAcceptable = deliveryReady || (!options.smoke && visibleStarted);
+  const smoke = options.smoke
+    ? {
+        ok: bootAck.ok,
+        method: "first_party_boot_ack",
+        reason: bootAck.ok ? undefined : "boot_ack_not_recorded"
       }
-    }
-    finalStatus =
-      discovered.status && discovered.status.presence_ok && !discovered.status.ok
-        ? discovered.status
-        : waitForReachable(cli.command, discovered.target, projectCwd, timeoutMs, pollMs);
-    finalTarget = discovered.target;
-  } else if (options.fresh_claude) {
-    const record = {
-      ok: false,
-      action: "fresh_start_no_new_endpoint",
-      reason: "Claude launch command completed, but no new same-project Claude channel endpoint appeared. Existing endpoints were intentionally not reused because --fresh-claude was requested.",
-      name,
-      target,
-      project_dir: projectCwd,
-      harness_cwd: path.resolve(cwd),
-      session_identity: identity
-        ? {
-            source: identity.source,
-            thread_ref: identity.token,
-            strict_project_reuse: strictSessionIdentity
-          }
-        : null,
-      identity_confidence: "fresh_launch_unverified_no_new_endpoint",
-      endpoint_selection: {
-        strategy: "fresh_new_endpoint_required",
-        selected_target: null,
-        selected_endpoint: null,
-        probe: discovered.probe || null
-      },
-      launch_id: launchOptions.launch_id,
-      launch_mode: started.mode,
-      launch_marker: launchMarker,
-      mcp_start: mcpStart,
-      mcp_init: mcpInit,
-      boot_ack: bootAck,
-      claude_path: claude.path,
-      channel_path: cli.path,
-      start: started,
-      background: started.background,
-      initial_status: initialStatus,
-      workspace_mismatch: initialMismatch,
-      skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
-      before_list: beforeList,
-      discovered,
-      fresh_launch_probe: discovered.probe || null,
-      command: started.command
-    };
-    const reconciled = attachStartupProof(cwd, launchOptions.launch_id, record);
-    if (reconciled.launch_marker.ok && !reconciled.boot_ack.ok) {
-      reconciled.fallback_packet = createStartupPacket(cwd, { launch_id: launchOptions.launch_id, session: reconciled });
-    }
-    return persist(reconciled);
-  } else {
-    recoveredEndpoint = findReachableProjectEndpoint(
-      cli.command,
-      projectCwd,
-      listTargets(cli.command, projectCwd),
-      automaticReuseFilter
-    );
-    if (recoveredEndpoint.ok) {
-      finalTarget = recoveredEndpoint.target;
-      finalStatus = recoveredEndpoint.status;
-      endpoint = recoveredEndpoint.endpoint;
-    } else {
-      finalStatus = waitForReachable(cli.command, target, projectCwd, timeoutMs, pollMs);
-      endpoint = endpointFromStatus(finalStatus);
-    }
-  }
-  const finalMismatch = workspaceMismatch(endpoint, projectCwd);
-  const deliveryReady = Boolean(finalStatus && finalStatus.ok);
-  const visibleLoaded = Boolean(finalStatus && finalStatus.presence_ok && started.mode === "visible");
-  const channelAcceptable = deliveryReady || (!options.smoke && visibleLoaded);
-  const smoke =
-    options.smoke && deliveryReady && (!finalMismatch || options.allow_cross_project_reuse)
-      ? runSmoke(cli.command, projectCwd, finalTarget, options.smoke_timeout_ms || 120000)
-      : null;
+    : null;
   const record = {
-    ok: channelAcceptable && (!finalMismatch || options.allow_cross_project_reuse) && (!smoke || smoke.ok),
-    identity_confidence: launchedIdentityConfidence(discovered, rename, recoveredEndpoint),
+    ok: channelAcceptable && (!smoke || smoke.ok),
+    identity_confidence: deliveryReady ? "first_party_mcp_started" : visibleStarted ? "visible_launch_started" : "launch_unverified",
     launch_id: launchOptions.launch_id,
     action:
-      finalMismatch && !options.allow_cross_project_reuse
-        ? "workspace_mismatch"
-        : smoke && !smoke.ok
-          ? "started_smoke_failed"
-          : deliveryReady
-            ? recoveredEndpoint && recoveredEndpoint.ok
-              ? "started_recovered_endpoint"
-              : "started"
-            : visibleLoaded
-              ? "started_visible_channel_unverified"
-            : "started_unreachable",
-    target: finalTarget,
+      smoke && !smoke.ok
+        ? "started_boot_ack_missing"
+        : deliveryReady
+          ? "started_first_party_mcp"
+          : visibleStarted
+            ? "started_visible_mcp_pending"
+            : "started_unproven",
+    target,
     endpoint_selection: {
-      strategy: discovered && discovered.ok
-        ? options.fresh_claude
-          ? "fresh_new_endpoint"
-          : discovered.is_new
-            ? "launched_new_endpoint"
-            : "launched_existing_endpoint"
-        : recoveredEndpoint && recoveredEndpoint.ok
-          ? strictSessionIdentity
-            ? "post_launch_thread_display_name_project_endpoint"
-            : "post_launch_same_project_endpoint"
-          : "target_after_launch",
-      selected_target: finalTarget,
-      selected_endpoint: compactEndpoint(endpoint),
-      matched_display_name: endpoint && endpoint.display_name === name,
-      automatic_reuse_filter: options.reuse_claude ? "none" : "display_name",
-      probe: discovered && discovered.probe ? discovered.probe : null
+      strategy: "visible_launch_first_party_mcp",
+      selected_target: target,
+      selected_endpoint: null,
+      selected_launch_id: launchOptions.launch_id
     },
     delivery_ready: deliveryReady,
-    visible_loaded: visibleLoaded,
+    visible_loaded: visibleStarted,
     launch_mode: started.mode,
     launch_marker: launchMarker,
     mcp_start: mcpStart,
     mcp_init: mcpInit,
     boot_ack: bootAck,
     claude_path: claude.path,
-    channel_path: cli.path,
     start: started,
     background: started.background,
-    endpoint,
-    rename,
-    initial_status: initialStatus,
-    workspace_mismatch: finalMismatch || initialMismatch,
-    cross_project_reuse_allowed: Boolean(finalMismatch && options.allow_cross_project_reuse),
-    skipped_reuse: reusableProjectEndpoint.skipped ? reusableProjectEndpoint : null,
-    before_list: beforeList,
-    discovered,
-    fresh_launch_probe: options.fresh_claude && discovered ? discovered.probe || null : null,
-    remembered_endpoint: rememberedTarget ? rememberedProjectEndpoint : null,
-    reuse_source: reuseSource,
-    recovered_endpoint: recoveredEndpoint && recoveredEndpoint.ok ? recoveredEndpoint : null,
-    status: finalStatus,
+    status: firstPartyStatus(cwd, target, options),
     command: started.command,
-    reply_ready: smoke ? smoke.ok : "unchecked",
+    reply_ready: "mailbox_required",
     smoke
   };
-  return persist(attachStartupProof(cwd, launchOptions.launch_id, record));
+  const reconciled = attachStartupProof(cwd, launchOptions.launch_id, record);
+  if (reconciled.launch_marker.ok && !reconciled.boot_ack.ok) {
+    reconciled.fallback_packet = createStartupPacket(cwd, { launch_id: launchOptions.launch_id, session: reconciled });
+  }
+  return persist(reconciled);
 }
 
 function create() {
@@ -647,14 +439,10 @@ function create() {
   return {
     name: "claude-channel",
     status(target, cwd = process.cwd()) {
-      const cli = findCli();
-      if (!cli.ok) return cli;
-      return { ...channelStatus(cli.command, target, cwd), path: cli.path, source: cli.source };
+      return firstPartyStatus(cwd, target);
     },
     list(cwd = process.cwd()) {
-      const cli = findCli();
-      if (!cli.ok) return cli;
-      return { ...listTargets(cli.command, cwd), path: cli.path, source: cli.source };
+      return firstPartyList(cwd);
     },
     diagnose,
     install(cwd, options = {}) {
@@ -662,12 +450,17 @@ function create() {
     },
     ensure,
     request(cwd, request) {
-      const cli = findCli();
-      if (!cli.ok) {
-        throw new Error(cli.reason);
-      }
-      const row = base.request(cwd, { ...request, adapter: "claude-channel", channel_command: cli.command });
-      const response = sendChannelRequest(cwd, row, request, cli.command);
+      const row = base.request(cwd, { ...request, adapter: "claude-channel", channel_command: "removed" });
+      const response = {
+        request_id: row.request_id,
+        task_id: request.task_id,
+        kind: request.kind,
+        adapter: "claude-channel",
+        result_state: "failed",
+        status: "removed",
+        exit_code: 1,
+        note: "The synchronous external Claude channel request path was removed. Use mailbox-backed channel steer or await reply."
+      };
       base.importResponse(cwd, response);
       return { ...row, response };
     },
@@ -676,4 +469,4 @@ function create() {
   };
 }
 
-module.exports = { create, findCli, findClaudeCli };
+module.exports = { create, findCli, findClaudeCli, sessionProcessAlive };

@@ -19,6 +19,7 @@
         <a href="#flow">Flow</a>
         <a href="#install">Install</a>
         <a href="#proof">Proof</a>
+        <a href="#reliability">Reliability</a>
         <a class="nav-button" href="https://github.com/andrewnova/agent-team-harness">GitHub</a>
       </nav>
     </header>
@@ -144,6 +145,26 @@ $ agent-team verify final
             <p>Completion can include tasks, approvals, proof artifacts, warnings, screenshots, and self-heal notes.</p>
           </div>
         </div>
+      </section>
+
+      <section class="section proof" id="reliability">
+        <p class="eyebrow">Reliability &amp; Self-Healing</p>
+        <h2>Built to survive partial failure and repair itself instead of stalling.</h2>
+        <div class="proof-list">
+          <div>
+            <h3>Adopt-first reuse</h3>
+            <p>Resumes reattach to a still-alive visible Claude through a process-liveness probe — never a duplicate window or a dead endpoint. Auth reads as logged-in, logged-out, or unverifiable, so sandbox-hidden auth never looks broken.</p>
+          </div>
+          <div>
+            <h3>Self-repairing state</h3>
+            <p>Readers skip malformed mailbox rows instead of crashing, <code>agent-team state repair</code> rebuilds projections from canonical truth, and a single-daemon guard keeps two routers from fighting one mailbox.</p>
+          </div>
+          <div>
+            <h3>In-session self-heal</h3>
+            <p>An <code>agent_team_self_heal</code> MCP tool lets Claude propose a harness change from inside a live session — recorded for review, never applied silently.</p>
+          </div>
+        </div>
+        <p class="reliability-note">Every push and pull request runs an ESLint <code>no-undef</code> gate and the full test suite in CI.</p>
       </section>
 
       <section class="section install" id="install">

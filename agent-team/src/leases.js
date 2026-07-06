@@ -26,7 +26,12 @@ function saveLeaseBook(cwd, book) {
 
 function normalizePaths(values) {
   const paths = (values || []).map((value) => String(value || "").trim()).filter(Boolean);
-  return paths.length ? [...new Set(paths)] : ["*"];
+  // An unscoped task (no allowed_paths) claims NO paths rather than a global "*" lease.
+  // A "*" lease overlaps everything (pathsOverlap), so it serialized all parallel work —
+  // an unscoped Claude task would block every Codex claim. An empty lease conflicts with
+  // nothing, so unscoped tasks run in parallel; scope a task with allowed_paths for real
+  // write protection.
+  return paths.length ? [...new Set(paths)] : [];
 }
 
 function leaseBase(pattern) {

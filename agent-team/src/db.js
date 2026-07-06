@@ -752,9 +752,16 @@ function rebuildDatabase(cwd) {
 }
 
 function tableCounts(db) {
-  const tables = ["goals", "tasks", "runs", "events", "attempts", "reviews", "proof", "leases", "worktrees", "merges", "plans", "regrounds", "advisory"];
+  const tables = ["goals", "tasks", "runs", "events", "attempts", "reviews", "proof", "leases", "worktrees", "merges", "plans", "regrounds"];
   const counts = {};
   for (const table of tables) counts[table] = db.prepare(`SELECT count(*) AS count FROM ${table}`).get().count;
+  // Exclude the mailbox advisory kinds: they are mirrored in comms/*.jsonl, not in
+  // state/advisory/, so countAdvisoryMirrors never counts them. Counting them here made
+  // the SQLite total permanently exceed the mirror total -> needs_rebuild always true ->
+  // a full O(history) rebuild on every state.init (i.e. every mailbox write).
+  counts.advisory = db
+    .prepare("SELECT count(*) AS count FROM advisory WHERE kind NOT IN ('mailbox-messages', 'mailbox-acks')")
+    .get().count;
   return counts;
 }
 

@@ -68,7 +68,7 @@ function packetText(cwd, session) {
     "",
     "- Do not edit project files just to acknowledge startup.",
     "- Do not mark task state, review, merge, proof, or done gates yourself.",
-    "- Do not use raw complete_channel_request as the durable reply path.",
+    "- Do not treat visible transcript text as the durable reply path.",
     "",
     "## Relevant Files And Context",
     "",

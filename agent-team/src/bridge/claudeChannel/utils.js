@@ -1,6 +1,5 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { managedCliPath } = require("./install");
 
 function executableCandidates(candidate) {
   if (process.platform !== "win32" || path.extname(candidate)) return [candidate];
@@ -51,22 +50,14 @@ function findBinary(candidates, missingReason, source = "path") {
 }
 
 function findCli() {
-  if (process.env.AGENT_TEAM_CHANNEL_CLI) {
-    const fromEnv = findBinary(
-      [process.env.AGENT_TEAM_CHANNEL_CLI],
-      "AGENT_TEAM_CHANNEL_CLI is set, but the file is not executable",
-      "env"
-    );
-    if (fromEnv.ok) return fromEnv;
-    return fromEnv;
-  }
-  const managed = findBinary([managedCliPath()], "Managed Claude channel bridge is not installed", "managed");
-  if (managed.ok) return managed;
-  return findBinary(
-    ["claude-channel", "claude-channel-cli"],
-    "Claude channel bridge is not installed; run agent-team channel install or scripts/install-codex.sh",
-    "path"
-  );
+  return {
+    ok: false,
+    command: null,
+    path: null,
+    source: "removed",
+    reason:
+      "The external Claude channel CLI was removed. Use the first-party Agent Team Claude MCP server plus mailbox-backed channel steer."
+  };
 }
 
 function findClaudeCli() {

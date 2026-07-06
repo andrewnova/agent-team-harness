@@ -13,10 +13,14 @@
     "agent-team-codex-wake": "./src/mcp/codexWakeCommand.js"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "AGENT_TEAM_HEADLESS=1 node --test",
+    "lint": "eslint src tests"
   },
   "engines": {
     "node": ">=22.13.0"
   },
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "eslint": "^10.6.0"
+  }
 }
