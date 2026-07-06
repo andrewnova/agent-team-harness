@@ -10,7 +10,7 @@ Agent Team Harness is a local CLI for running Codex and Claude Code as visible, 
 
 Codex owns the harness, task state, merge gates, and proof. Claude Code is the visible teammate for frontend/UI/UX work, long-context critique, and cross-model review. Communication is mailbox-first and MCP-woken: Claude-bound work uses the first-party Claude MCP outbox, Claude-to-Codex traffic uses the first-party Codex MCP wake adapter, and semantic mailbox replies are the completion truth.
 
-![Agent Team Harness flow](assets/agent-team-flow.svg)
+![Agent Team Harness flow](assets/agent-team-flow.png)
 
 Landing page: [`site/index.html`](site/index.html), deployed through GitHub Pages at <https://andrewnova.github.io/agent-team-harness/>.
 
@@ -233,7 +233,7 @@ agent-team/                         CLI source and tests
 plugins/agent-team-harness/         Codex orchestrator skill + Claude teammate skill
 scripts/install-codex.sh            local Codex installer
 .github/workflows/ci.yml            lint + test CI gate
-assets/agent-team-flow.svg          README diagram
+assets/agent-team-flow.png          README diagram
 ```
 
 Generated runtime state is written to `.agent-team/` in the project being operated on. It should not be committed.
