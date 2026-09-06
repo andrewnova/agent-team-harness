@@ -1,6 +1,6 @@
 # Native team acceptance
 
-This is the live acceptance procedure for the public native cmux workflow. The deterministic suites are `agent-team/tests/team-workflow-e2e.test.js` and `agent-team/tests/team-runner-recovery.test.js`. Passing them does not establish that Astra, Fable, native Agent Teams, cmux tab lifetime, account access, or trust prompts work.
+This is the live acceptance procedure for the public native cmux workflow. The [September 6 trial](native-workflow-findings.md) failed its small-task efficiency target; this procedure is not a claim that the coordinated workflow is accepted. The deterministic suites are `agent-team/tests/team-workflow-e2e.test.js` and `agent-team/tests/team-runner-recovery.test.js`. Passing them does not establish that Astra, Fable, native Agent Teams, cmux tab lifetime, account access, or trust prompts work.
 
 ## Deterministic integration coverage
 
@@ -36,7 +36,7 @@ Limitations: the suite does not emulate the terminal UI, real model execution, a
 
 `team_report` stores the original semantic result and its `reported_result.message_id` without waking the lead. After `finishJob` records `process_stopped: true`, `jobFinishedMessage` emits a separate deterministic `jobexit_<job-id>_<attempt>` notice with `event: "job_stopped"`. Its body contains the final status and `result_message_id` when a semantic result exists, or failure details when the process crashed without one. The runner wakes the assigned parent using this notice ID and saves a delivery receipt. Retry may resubmit that wake but must reuse the same durable notice; an old sender or parent attempt cannot receive a new delivery.
 
-Both suites must pass on the integrated runtime. The runner regression additionally requires an explicit nonzero native exit to fail even if the model reported completion before the supervisor initiated shutdown. Expected termination signals and explicit nonzero exit codes must be distinguished. The workflow suite checks notice ordering by observing actual persisted sender state at the external cmux send boundary; terminal output alone is insufficient.
+Both suites must pass on the integrated runtime. The runner regression additionally requires unexpected nonzero native exits to fail even if the model reported completion. Claude's observed exit 143 is accepted only after report-driven supervisor shutdown and verified cleanup; 143 without that context and exit 23 remain failures. Signal warnings do not replace final process proof. The workflow suite checks notice ordering by observing actual persisted sender state at the external cmux send boundary; terminal output alone is insufficient.
 
 ## Live run setup
 
@@ -83,7 +83,7 @@ Perform these failure probes in separate disposable attempts after the happy pat
 | --- | --- |
 | Recipient not yet ready | Send remains durable and pending. Recipient reads it after ready. A wake receipt is never counted as a reply. |
 | Unavailable/missing recipient tab | Delivery error is visible and durable message is retained. Recovery addresses the exact job and message. No resend loop or wrong-tab fallback. |
-| Abrupt worker exit | A nonzero exit is failed even after a completion report. Process and descendant evidence controls release; the stopped notice includes failure details. Neither tab disappearance nor elapsed time proves stop. |
+| Abrupt worker exit | An unexpected nonzero exit is failed even after a completion report; only an observed report-driven termination convention is accepted after complete cleanup proof. Process and descendant evidence controls release; the stopped notice includes failure details. Neither tab disappearance nor elapsed time proves stop. |
 | Wrapper dies or inventory becomes unavailable | Health/status reports unresolved process ownership. A writer is not relaunched until actual stopped evidence or safe lifecycle recovery is established. |
 | Interrupted replacement review | Existing approval cannot satisfy an active, failed, or cancelled new review attempt. Retry starts a fresh identity and requires a fresh result. |
 | Candidate changes during review | Late approval is rejected; snapshot, checks and review must all bind the new candidate. |
