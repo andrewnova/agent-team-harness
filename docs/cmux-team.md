@@ -1,4 +1,6 @@
-# Native teams in cmux
+# Experimental native teams in cmux
+
+For bounded coding or review work, use [direct native sessions](direct-sessions.md). This coordinated path is an explicit experiment: the [September 6 trial](native-workflow-findings.md) did not reach complete feature acceptance within twenty minutes.
 
 `agent-team team` runs parallel native Codex and Claude Code sessions inside one cmux project. It reuses the harness mailbox and local state without starting the legacy daemon. A lead owns the brief, assignments, repair decisions, and acceptance.
 

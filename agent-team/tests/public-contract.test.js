@@ -5,9 +5,9 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..", "..");
 
-test("public skill keeps Claude work mailbox-first and nonblocking", () => {
+test("legacy skill reference keeps daemon work mailbox-first and nonblocking", () => {
   const skill = fs.readFileSync(
-    path.join(root, "plugins", "agent-team-harness", "skills", "agent-team-harness", "SKILL.md"),
+    path.join(root, "plugins", "agent-team-harness", "skills", "agent-team-harness", "references", "legacy-daemon.md"),
     "utf8"
   );
 

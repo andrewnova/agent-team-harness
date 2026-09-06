@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Agent Team Harness</title>
-    <meta name="description" content="Run native Codex and Claude Code sessions as one visible team inside cmux: a lead tab, worker and reviewer tabs, a private checkout for every writer, and review by the opposite model before a feature counts as ready.">
+    <meta name="description" content="Start bounded coding work in a direct native Codex or Claude Code session. Explore experimental cmux teams when substantial independent work justifies coordination.">
     <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
     <link rel="stylesheet" href="styles.css">
   </head>
@@ -17,7 +17,7 @@
         <span>Agent Team Harness</span>
       </a>
       <nav aria-label="Primary">
-        <a href="#layout">Layout</a>
+        <a href="#layout">Experimental teams</a>
         <a href="#roles">Roles</a>
         <a href="#workflow">Workflow</a>
         <a href="#messaging">Messaging</a>
@@ -29,23 +29,55 @@
     <main id="main">
       <section class="hero" id="top" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow">Native teams in cmux &middot; 0.1.0-alpha</p>
-          <h1 id="hero-title">Codex and Claude. One visible team.</h1>
+          <p class="eyebrow">Direct sessions first &middot; teams experimental</p>
+          <h1 id="hero-title">Start with a native session.</h1>
           <p class="lede">
-            Give a lead your task. Watch native Codex and Claude Code workers build and review
-            it in separate tabs, all inside one cmux project.
+            Open your repository in Codex or Claude Code, give it a bounded task, and verify the result.
+            Try a coordinated cmux team when substantial independent work earns the extra steps.
           </p>
           <div class="hero-actions">
-            <a class="button primary" href="#quickstart">Start a team</a>
-            <a class="button secondary" href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/cmux-team.md">Read the docs</a>
+            <a class="button primary" href="#quickstart">Start directly</a>
+            <a class="button secondary" href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/direct-sessions.md">Read the guide</a>
           </div>
           <p class="credit">Created and maintained by Andrew Guzman. Source on GitHub.</p>
         </div>
 
         <figure class="hero-figure">
           <img src="assets/cmux-team-hero.png" width="1672" height="941" alt="Conceptual artwork: four terminal panels connected to a central message tray inside one dark frame.">
-          <figcaption>Conceptual illustration of a team sharing one mailbox. This is artwork, not a live product screenshot.</figcaption>
+          <figcaption>Conceptual artwork of the experimental team workflow. Direct sessions do not need the harness.</figcaption>
         </figure>
+      </section>
+
+      <section class="section quickstart" id="quickstart" aria-labelledby="direct-title">
+        <div class="quickstart-copy">
+          <p class="eyebrow">The default for bounded work</p>
+          <h2 id="direct-title">Your repo. One native session.</h2>
+          <p>Use your installed, signed-in CLI and a model available to your account. Native trust and permission settings stay in force.</p>
+          <p>No harness installation or coordinator is needed. cmux is optional for arranging your terminals.</p>
+          <p><a href="#team-start">Experimental team setup</a></p>
+        </div>
+        <div class="quickstart-main">
+          <div class="code-block" data-copy>
+            <div class="code-top"><span class="code-title">Codex &middot; Astra at xhigh</span></div>
+            <pre><code>cd /absolute/path/to/your/repo
+codex --model gpt-6-astra -c 'model_reasoning_effort="xhigh"'</code></pre>
+            <p class="code-status" role="status" aria-live="polite"></p>
+          </div>
+          <div class="code-block" data-copy>
+            <div class="code-top"><span class="code-title">Claude Code &middot; Fable at medium</span></div>
+            <pre><code>cd /absolute/path/to/your/repo
+claude --model 'claude-fable-5-1[1m]' --effort medium \
+  --settings '{"switchModelsOnFlag":false}'</code></pre>
+            <p class="code-status" role="status" aria-live="polite"></p>
+          </div>
+          <ol class="next-steps">
+            <li>Give the session a concrete task and observable acceptance criteria.</li>
+            <li>Let native child agents handle useful independent work. Keep simultaneous writers in separate checkouts.</li>
+            <li>Verify the result, commit the candidate, and use a fresh session for focused independent review.</li>
+          </ol>
+          <p><a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/direct-sessions.md">Implementation and review prompts</a></p>
+          <p>The coordinated September 6 trial did not reach small-task acceptance within twenty minutes. Teams remain experimental; passing component tests does not establish a speed advantage. <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/native-workflow-findings.md">Trial findings</a>.</p>
+        </div>
       </section>
 
       <section class="band intro" aria-label="At a glance">
@@ -65,7 +97,7 @@
 
       <section class="section layout" id="layout" aria-labelledby="layout-title">
         <div class="section-head">
-          <p class="eyebrow">What you see</p>
+          <p class="eyebrow">Experimental teams</p>
           <h2 id="layout-title">A lead, its workers, and its reviewers, all as tabs you can watch and steer.</h2>
           <p class="section-lede">
             The launcher creates one cmux project in the sidebar and opens the lead as the first
@@ -154,7 +186,7 @@
 
         <div class="table-wrap">
           <table class="routing">
-            <caption>Default routing for a native team</caption>
+            <caption>Default routing for an experimental native team</caption>
             <thead>
               <tr>
                 <th scope="col">Assignment</th>
@@ -286,10 +318,10 @@
         </div>
       </section>
 
-      <section class="section quickstart" id="quickstart" aria-labelledby="quickstart-title">
+      <section class="section quickstart" id="team-start" aria-labelledby="quickstart-title">
         <div class="quickstart-copy">
           <p class="eyebrow">Quickstart</p>
-          <h2 id="quickstart-title">Three commands from a terminal inside cmux.</h2>
+          <h2 id="quickstart-title">Try an experimental team.</h2>
           <h3>Before you start</h3>
           <ul class="checklist">
             <li>macOS with <a href="https://cmux.com/">cmux</a> installed</li>
@@ -340,7 +372,7 @@ node scripts/start-team.js --project /absolute/path/to/your/repo</code></pre>
       <span>Created by Andrew Guzman</span>
       <span class="footer-links">
         <a href="https://github.com/andrewnova/agent-team-harness">GitHub</a>
-        <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/cmux-team.md">Docs</a>
+        <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/direct-sessions.md">Guide</a>
       </span>
     </footer>
 

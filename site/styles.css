@@ -592,6 +592,10 @@ footer {
   text-transform: uppercase;
 }
 
+.quickstart-main .code-block {
+  margin-bottom: 20px;
+}
+
 .checklist,
 .next-steps {
   margin: 0 0 18px;
