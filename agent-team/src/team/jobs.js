@@ -249,21 +249,70 @@ function cancelJob(root, id, attempt) {
 // can precede surface binding; running requires both observations.
 function reportJob(root, id, attempt, input = {}) {
   if (input.status !== "ready" && !TERMINAL.has(input.status)) throw new Error("report status must be ready, completed, failed or cancelled");
+  return locked(root, (loc) => saveReport(loc, current(loc, id, attempt), input));
+}
+
+function saveReport(loc, job, input) {
+  if (input.status === "ready") {
+    if (job.status === "cancelling") throw new Error("cancelling job cannot report readiness");
+    job.ready_at ||= now();
+    if (job.surface_id && job.workspace_id) job.status = "running";
+  } else {
+    if (input.message_id !== undefined) identifier(input.message_id, "report message id");
+    if (job.reported_result) {
+      if (job.reported_result.status === input.status && isDeepStrictEqual(job.reported_result.result, input.result ?? null)) return job;
+      throw new Error("native attempt already reported a different terminal result");
+    }
+    job.reported_result = { status: input.status, result: input.result ?? null, ...(input.message_id ? { message_id: input.message_id } : {}), reported_at: now() };
+  }
+  return save(loc, { ...job, updated_at: now() });
+}
+
+// Serialize addressing, mailbox commit and report metadata with attempt changes.
+// The mailbox is the retry receipt if a later write fails (including an append's
+// secondary index/event writes). A stable ID and status prevent a second result.
+function reportJobResult(root, id, attempt, input = {}) {
+  if (!TERMINAL.has(input.status)) throw new Error("terminal report status must be completed, failed or cancelled");
+  text(input.result, "result");
+  if (Boolean(input.to_job) === Boolean(input.in_reply_to)) throw new Error("terminal report requires either to_job or in_reply_to");
   return locked(root, (loc) => {
     const job = current(loc, id, attempt);
-    if (input.status === "ready") {
-      if (job.status === "cancelling") throw new Error("cancelling job cannot report readiness");
-      job.ready_at ||= now();
-      if (job.surface_id && job.workspace_id) job.status = "running";
-    } else {
-      if (input.message_id !== undefined) identifier(input.message_id, "report message id");
-      if (job.reported_result) {
-        if (job.reported_result.status === input.status && isDeepStrictEqual(job.reported_result.result, input.result ?? null)) return job;
+    const rows = messages(loc);
+    const toJob = input.to_job || rows.find((row) => (row.id === input.in_reply_to || row.request_id === input.in_reply_to)
+      && row.metadata?.to_job === id && row.metadata.to_attempt === attempt)?.metadata.from_job;
+    if (!toJob) throw new Error("reply target is not in this job's current inbox");
+    if (job.parent_job) {
+      if (toJob !== job.parent_job) throw new Error("terminal result must address the assigned parent lead");
+      current(loc, job.parent_job, job.parent_attempt);
+    }
+    const previous = job.reported_result;
+    if (previous && (previous.status !== input.status || !isDeepStrictEqual(previous.result, input.result))) {
+      throw new Error("native attempt already reported a different terminal result");
+    }
+    if (previous && !previous.message_id) throw new Error("terminal report retry is missing the original addressed result");
+    const messageId = previous?.message_id || `jobresult_${crypto.createHash("sha256").update(JSON.stringify([id, attempt])).digest("hex")}`;
+    const expected = prepareJobMessage(loc, {
+      from_job: id, from_attempt: attempt, to_job: toJob, body: input.result,
+      kind: input.in_reply_to ? "reply" : "checkin", in_reply_to: input.in_reply_to
+    }, messageId);
+    expected.metadata.report_status = input.status;
+    let message = mailbox.loadMessage(loc.cwd, messageId, { include_body: true });
+    if (message) {
+      // Mailbox body files use writeText's trailing-newline convention.
+      const body = message.body_path && !input.result.endsWith("\n") ? `${input.result}\n` : input.result;
+      if (message.body !== body || (message.body_path && message.body_sha256 !== crypto.createHash("sha256").update(input.result).digest("hex")) ||
+          (message.metadata?.report_status ?? previous?.status) !== input.status) {
         throw new Error("native attempt already reported a different terminal result");
       }
-      job.reported_result = { status: input.status, result: input.result ?? null, ...(input.message_id ? { message_id: input.message_id } : {}), reported_at: now() };
+      if (["from", "to", "kind", "request_id", "in_reply_to"].some((key) => message[key] !== expected[key]) ||
+          ["from_job", "from_attempt", "to_job", "to_attempt"].some((key) => message.metadata?.[key] !== expected.metadata[key])) {
+        throw new Error("terminal report retry does not match the original addressed result");
+      }
+    } else {
+      if (previous) throw new Error("terminal report retry is missing the original addressed result");
+      message = mailbox.appendMessage(loc.cwd, expected).message;
     }
-    return save(loc, { ...job, updated_at: now() });
+    return { job: saveReport(loc, job, { status: input.status, result: input.result, message_id: message.id }), message };
   });
 }
 
@@ -312,33 +361,34 @@ function jobFinishedMessage(root, id, attempt) {
 
 function sendJobMessage(root, input = {}) {
   text(input.body, "body");
-  return locked(root, (loc) => {
-    const from = load(loc, input.from_job);
-    current(loc, from.id, input.from_attempt ?? from.attempt);
-    const to = load(loc, input.to_job);
-    current(loc, to.id, to.attempt);
-    const rows = messages(loc);
-    const kind = input.kind ?? (input.in_reply_to ? "reply" : "request");
-    if (!["request", "reply", "notify", "checkin"].includes(kind)) throw new Error("job message kind must be request, reply, notify or checkin");
-    if ((kind === "reply") !== Boolean(input.in_reply_to)) throw new Error("reply requires in_reply_to; only replies can set it");
-    let original;
-    if (input.in_reply_to) {
-      original = rows.find((row) => {
-        const meta = row.metadata;
-        return (row.id === input.in_reply_to || row.request_id === input.in_reply_to)
-          && meta?.to_job === from.id && meta.to_attempt === from.attempt
-          && meta.from_job === to.id && meta.from_attempt === to.attempt;
-      });
-      if (!original) throw new Error("reply must reference a message addressed between these current job attempts");
-    }
-    const id = `jobmsg_${crypto.randomUUID()}`;
-    return mailbox.appendMessage(loc.cwd, {
-      id, from: from.runtime, to: to.runtime, body: input.body, kind,
-      request_id: original?.request_id || original?.id || id,
-      in_reply_to: original?.id, reply_required: kind === "request",
-      metadata: { from_job: from.id, from_attempt: from.attempt, to_job: to.id, to_attempt: to.attempt }
-    }).message;
-  });
+  return locked(root, (loc) => mailbox.appendMessage(loc.cwd, prepareJobMessage(loc, input)).message);
+}
+
+function prepareJobMessage(loc, input, id = `jobmsg_${crypto.randomUUID()}`) {
+  const from = load(loc, input.from_job);
+  current(loc, from.id, input.from_attempt ?? from.attempt);
+  const to = load(loc, input.to_job);
+  current(loc, to.id, to.attempt);
+  const rows = messages(loc);
+  const kind = input.kind ?? (input.in_reply_to ? "reply" : "request");
+  if (!["request", "reply", "notify", "checkin"].includes(kind)) throw new Error("job message kind must be request, reply, notify or checkin");
+  if ((kind === "reply") !== Boolean(input.in_reply_to)) throw new Error("reply requires in_reply_to; only replies can set it");
+  let original;
+  if (input.in_reply_to) {
+    original = rows.find((row) => {
+      const meta = row.metadata;
+      return (row.id === input.in_reply_to || row.request_id === input.in_reply_to)
+        && meta?.to_job === from.id && meta.to_attempt === from.attempt
+        && meta.from_job === to.id && meta.from_attempt === to.attempt;
+    });
+    if (!original) throw new Error("reply must reference a message addressed between these current job attempts");
+  }
+  return {
+    id, from: from.runtime, to: to.runtime, body: input.body, kind,
+    request_id: original?.request_id || original?.id || id,
+    in_reply_to: original?.id, reply_required: kind === "request",
+    metadata: { from_job: from.id, from_attempt: from.attempt, to_job: to.id, to_attempt: to.attempt }
+  };
 }
 
 function jobInbox(root, id, attempt) {
@@ -360,5 +410,5 @@ function jobInbox(root, id, attempt) {
 
 module.exports = {
   routeRuntime, createJob, listJobs, getJob, claimJob, claimRunner, bindJob, cancelJob,
-  reportJob, finishJob, jobFinishedMessage, sendJobMessage, jobInbox
+  reportJob, reportJobResult, finishJob, jobFinishedMessage, sendJobMessage, jobInbox
 };

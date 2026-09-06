@@ -78,12 +78,14 @@ function buildNativeCommand(root, job, options = {}) {
     // including in read-only sessions without the general ToolSearch tool.
     fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { agent_team: { command: process.execPath, args: serverArgs, alwaysLoad: true } } }), { mode: 0o600, flag: "wx" });
     argv = [options.claude_bin || "claude", "--model", job.model, "--effort", config.claude.effort, "--name", job.id, "--session-id", session_id,
-      "--mcp-config", configPath, "--strict-mcp-config", "--permission-mode", job.writable ? "acceptEdits" : "dontAsk",
+      "--mcp-config", configPath, "--strict-mcp-config",
       // Preserve the assigned model: native safeguards must pause the job,
       // rather than silently fulfilling its assignment on another model.
       "--settings", JSON.stringify(settings),
       "--allowedTools", "Agent", "SendMessage", "mcp__agent_team__*", "mcp__agent_team__team_inbox", "mcp__agent_team__team_send", "mcp__agent_team__team_reply", "mcp__agent_team__team_report"];
-    if (!job.writable) argv.push("--tools", [...readTools].join(","));
+    // Coding jobs inherit the user's native approval policy (including auto).
+    // Reviewers retain an explicit read-only tool and permission boundary.
+    if (!job.writable) argv.push("--permission-mode", "dontAsk", "--tools", [...readTools].join(","));
     if (reviewContext) argv.push("--add-dir", directory, "--add-dir", reviewSource);
     argv.push("--", instructions);
   } else if (job.runtime === "codex") {
@@ -147,24 +149,43 @@ function jobHealth(root, jobOrId, { transport = createTransport(), now_ms = Date
   const evidence_directory = path.join(fs.realpathSync(root), ".agent-team", "sessions", job.id, String(job.attempt));
   const result = (state, note) => ({ job_id: job.id, attempt: job.attempt, status: job.status, ready: state === "ready", state, note, evidence_directory });
   if (["queued", "completed", "failed", "cancelled"].includes(job.status)) return result(job.status, job.result || (job.status === "queued" ? "Job has not launched." : "Native process stopped."));
-  if (job.runner_pid) {
+  // A retained runner/tab can outlive the native child and even a failed finishJob.
+  // Evidence only gates health here; the runner still owns releasing the claim.
+  for (const file of ["exit.json", "launch-error.json", "mcp-error.json"]) {
+    const evidence = path.join(evidence_directory, file);
     try {
-      const observed = read_processes().find((row) => row.pid === job.runner_pid);
-      if (!job.runner_identity || !observed || observed.started !== job.runner_identity.started) return result("blocked", "The owning runner is missing or its process identity changed. Native descendants may remain alive; inspect ownership before retrying.");
-    } catch (error) { return result("blocked", `Cannot observe the owning runner: ${error.message}. Ownership remains reserved.`); }
+      if (!fs.lstatSync(evidence).isFile()) throw new Error("expected a regular evidence file");
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      return result("blocked", `Cannot inspect ${file}: ${error.message}. Ownership remains reserved.`);
+    }
+    let receipt;
+    try {
+      receipt = JSON.parse(fs.readFileSync(evidence, "utf8"));
+      if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new Error("expected an evidence object");
+      if (receipt.error !== undefined && typeof receipt.error !== "string") throw new Error("expected a text evidence error");
+      if (file === "exit.json" && typeof receipt.process_stopped !== "boolean") throw new Error("expected stopped-process evidence");
+    } catch (error) { return result("blocked", `Cannot read ${file}: ${error.message}. Ownership remains reserved.`); }
+    if (file === "exit.json") return result(receipt.process_stopped === true ? "stopping" : "blocked",
+      `exit.json records native exit${receipt.error ? `: ${receipt.error}` : "."} ${receipt.process_stopped === true
+        ? "Waiting for the owning runner to finalize stopped-process evidence; ownership remains reserved."
+        : "Native descendants may remain alive; ownership remains reserved until cleanup is proven."}`);
+    return result("blocked", `${file}: ${receipt.error || "Native error evidence recorded"}. Inspect the owned tab and evidence before retrying; the claim remains reserved.`);
+  }
+  if (job.runner_pid || job.pid) {
+    try {
+      const processes = read_processes();
+      const observed = processes.find((row) => row.pid === job.runner_pid);
+      if (!job.runner_identity || job.runner_identity.pid !== job.runner_pid || !observed || observed.started !== job.runner_identity.started) return result("blocked", "The owning runner is missing or its process identity changed. Native descendants may remain alive; inspect ownership before retrying.");
+      const child = job.pid && processes.find((row) => row.pid === job.pid);
+      if (job.pid && (!child || child.parent !== job.runner_pid)) return result("blocked", "The native child is missing or no longer belongs to the owning runner. A retained terminal is not readiness; ownership remains reserved until cleanup is proven.");
+    } catch (error) { return result("blocked", `Cannot observe the owning runner or native child: ${error.message}. Ownership remains reserved.`); }
   }
   if (job.status === "cancelling") return result("stopping", "Cancellation requested; ownership remains reserved until the native process stops.");
   if (job.reported_result) return result("stopping", "Native result reported; waiting for stopped-process evidence before acceptance.");
   if (job.surface_id && job.workspace_id) {
     try { transport.readSession(job); } catch (error) { return result("blocked", `Owned terminal is unavailable: ${error.message}. The claim remains reserved.`); }
     if (job.status === "running" && job.ready_at) return result("ready", "Native readiness reported and the addressed terminal is available.");
-  }
-  for (const file of ["launch-error.json", "mcp-error.json"]) {
-    const evidence = path.join(evidence_directory, file);
-    if (fs.existsSync(evidence)) {
-      const error = JSON.parse(fs.readFileSync(evidence, "utf8"));
-      return result("blocked", `${file}: ${error.error}. Inspect the owned tab and evidence before retrying; the claim remains reserved.`);
-    }
   }
   const age = now_ms - Date.parse(job.runner_started_at || job.updated_at);
   return age >= startup_timeout_ms
