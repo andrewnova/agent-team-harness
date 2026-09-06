@@ -264,6 +264,24 @@ test("health distinguishes readiness, stalled startup, missing terminals and cle
   assert.equal(jobs.getJob(f.root, job.id).status, "running");
 });
 
+test("health never treats a dead or reused supervising process as a ready native job", (t) => {
+  const f = fixture(t);
+  f.start("worker");
+  const identity = { pid: 123456789, started: "original-start" };
+  jobs.claimRunner(f.root, "worker", 1, identity.pid, identity);
+  jobs.bindJob(f.root, "worker", 1, ADDRESS);
+  jobs.reportJob(f.root, "worker", 1, { status: "ready" });
+  const options = { transport: { readSession: (target) => ({ ...target, text: "retained terminal" }) } };
+  assert.equal(native.jobHealth(f.root, "worker", { ...options, read_processes: () => [identity] }).ready, true);
+  for (const rows of [[], [{ ...identity, started: "unrelated-reused-pid" }]]) {
+    const health = native.jobHealth(f.root, "worker", { ...options, read_processes: () => rows });
+    assert.equal(health.ready, false);
+    assert.equal(health.state, "blocked");
+  }
+  assert.equal(native.jobHealth(f.root, "worker", { ...options, read_processes() { throw new Error("inventory unavailable"); } }).state, "blocked");
+  assert.equal(jobs.getJob(f.root, "worker").process_stopped, false);
+});
+
 test("bounded wait observes semantic readiness and stopped evidence without cancelling timed-out jobs", async (t) => {
   const f = fixture(t);
   f.start("worker");
