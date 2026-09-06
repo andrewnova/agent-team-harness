@@ -72,7 +72,7 @@ Use absolute executable overrides when a shell or cmux wrapper shadows the inten
 
 ## How the agents talk
 
-Both CLIs receive the same local stdio MCP server, bound to a job ID and attempt:
+Both CLIs receive the same local stdio MCP server, bound to a job ID and attempt. Claude's per-session server configuration sets [`alwaysLoad: true`](https://code.claude.com/docs/en/mcp#exempt-a-server-from-deferral), so the four communication tools are available at startup even in read-only sessions without tool search:
 
 - `team_report({status: "ready"})` confirms agent readiness. Allocating a pane alone does not.
 - `team_send({to_job, body})` appends a durable message to the existing mailbox.

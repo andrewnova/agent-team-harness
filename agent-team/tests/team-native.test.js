@@ -89,7 +89,8 @@ for (const leader of ["codex", "claude"]) {
       assert.match(launch.argv.at(-1), /team_inbox/);
       assert.deepEqual(mcpConfig(launch), {
         command: process.execPath,
-        args: [require.resolve("../src/team/sessionMcp"), "--cwd", f.root, "--job", job.id, "--attempt", "2"]
+        args: [require.resolve("../src/team/sessionMcp"), "--cwd", f.root, "--job", job.id, "--attempt", "2"],
+        ...(expectedRuntime === "claude" ? { alwaysLoad: true } : {})
       });
       if (expectedRuntime === "codex") {
         assert.equal(option(flags, "-C"), f.cwd);

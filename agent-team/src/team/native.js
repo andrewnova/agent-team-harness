@@ -49,7 +49,9 @@ function buildNativeCommand(root, job, options = {}) {
   if (job.runtime === "claude") {
     session_id = crypto.randomUUID();
     const configPath = path.join(directory, "mcp.json");
-    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { agent_team: { command: process.execPath, args: serverArgs } } }), { mode: 0o600, flag: "wx" });
+    // These four communication tools must be available before the first prompt,
+    // including in read-only sessions without the general ToolSearch tool.
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { agent_team: { command: process.execPath, args: serverArgs, alwaysLoad: true } } }), { mode: 0o600, flag: "wx" });
     argv = [options.claude_bin || "claude", "--model", job.model, "--name", job.id, "--session-id", session_id,
       "--mcp-config", configPath, "--strict-mcp-config", "--permission-mode", job.writable ? "acceptEdits" : "dontAsk",
       // Preserve the assigned model: native safeguards must pause the job,
