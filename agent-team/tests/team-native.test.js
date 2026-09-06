@@ -282,6 +282,110 @@ test("health never treats a dead or reused supervising process as a ready native
   assert.equal(jobs.getJob(f.root, "worker").process_stopped, false);
 });
 
+function nativeHealthFixture(t) {
+  const f = fixture(t);
+  f.start("worker", { writable: true });
+  f.create("next", { writable: true });
+  const runner = { pid: 123456789, parent: 1, group: 123456789, started: "runner-start" };
+  const child = { pid: 123456790, parent: runner.pid, group: 123456790, started: "native-start" };
+  jobs.claimRunner(f.root, "worker", 1, runner.pid, runner);
+  jobs.bindJob(f.root, "worker", 1, { ...ADDRESS, pid: child.pid });
+  const job = jobs.reportJob(f.root, "worker", 1, { status: "ready" });
+  const directory = native.attemptDirectory(f.root, job);
+  const options = {
+    transport: { readSession: (target) => ({ ...target, text: "retained native terminal" }) },
+    read_processes: () => [runner, child]
+  };
+  assert.equal(native.jobHealth(f.root, job.id, options).ready, true, "control has a verified runner and its live native child");
+  const assertOwnership = () => {
+    assert.deepEqual(jobs.getJob(f.root, job.id), job, "health must not mutate the persisted job");
+    assert.throws(() => jobs.claimJob(f.root, "next", { max_active: 2 }), /writer/, "health must retain checkout ownership");
+  };
+  const writeExit = (process_stopped) => fs.writeFileSync(path.join(directory, "exit.json"), JSON.stringify({
+    job_id: job.id, attempt: job.attempt, runner_pid: runner.pid, pid: child.pid,
+    code: 0, signal: null, process_stopped, observed_processes: [child],
+    remaining: process_stopped ? [] : [child], stopped_at: new Date().toISOString()
+  }));
+  return { ...f, job, runner, child, directory, options, assertOwnership, writeExit };
+}
+
+for (const process_stopped of [true, false]) {
+  test(`health rejects a retained ready session with exit.json process_stopped=${process_stopped}`, (t) => {
+    const f = nativeHealthFixture(t);
+    f.writeExit(process_stopped);
+    const health = native.jobHealth(f.root, f.job.id, f.options);
+    assert.equal(health.ready, false);
+    assert.ok(["stopping", "blocked"].includes(health.state), health.state);
+    assert.match(health.note, /exit/i);
+    f.assertOwnership();
+  });
+}
+
+for (const state of ["missing", "reparented"]) {
+  test(`health blocks a ${state} native child despite a verified live runner and retained terminal`, (t) => {
+    const f = nativeHealthFixture(t);
+    const rows = state === "missing" ? [f.runner] : [f.runner, { ...f.child, parent: 1 }];
+    const health = native.jobHealth(f.root, f.job.id, { ...f.options, read_processes: () => rows });
+    assert.equal(health.ready, false);
+    assert.equal(health.state, "blocked");
+    assert.match(health.note, /native|child|process|pid/i);
+    f.assertOwnership();
+  });
+}
+
+for (const file of ["exit.json", "launch-error.json", "mcp-error.json"]) {
+  for (const failure of ["corrupt", "malformed error", "inaccessible", "directory", "dangling symlink"]) {
+    test(`health visibly blocks ${failure} ${file} after ready without throwing`, (t) => {
+      const f = nativeHealthFixture(t);
+      const evidence = path.join(f.directory, file);
+      if (failure === "directory") fs.mkdirSync(evidence);
+      else if (failure === "dangling symlink") fs.symlinkSync(path.join(f.directory, "missing-receipt.json"), evidence);
+      else if (failure === "malformed error") fs.writeFileSync(evidence, JSON.stringify({ error: { toString: null }, process_stopped: true }));
+      else fs.writeFileSync(evidence, failure === "corrupt" ? "{broken" : JSON.stringify({ error: "fixture failure" }));
+      if (failure === "inaccessible") {
+        const read = fs.readFileSync;
+        t.mock.method(fs, "readFileSync", function (target, ...args) {
+          if (target === evidence) throw Object.assign(new Error("fixture evidence access denied"), { code: "EACCES" });
+          return read.call(this, target, ...args);
+        });
+      }
+      let health;
+      assert.doesNotThrow(() => { health = native.jobHealth(f.root, f.job.id, f.options); });
+      assert.equal(health.ready, false);
+      assert.equal(health.state, "blocked");
+      assert.ok(health.note.includes(file), `diagnostic must identify ${file}: ${health.note}`);
+      f.assertOwnership();
+    });
+  }
+}
+
+test("health blocks an mcp-error.json written after the native job reported ready", (t) => {
+  const f = nativeHealthFixture(t);
+  fs.writeFileSync(path.join(f.directory, "mcp-error.json"), JSON.stringify({ error: "fixture MCP disconnected" }));
+  const health = native.jobHealth(f.root, f.job.id, f.options);
+  assert.equal(health.ready, false);
+  assert.equal(health.state, "blocked");
+  assert.match(health.note, /mcp-error\.json/);
+  f.assertOwnership();
+});
+
+for (const evidence of ["stopped exit", "unstopped exit", "missing child"]) {
+  test(`bounded wait until ready rejects a retained session with ${evidence}`, { timeout: 2000 }, async (t) => {
+    const f = nativeHealthFixture(t);
+    if (evidence !== "missing child") f.writeExit(evidence === "stopped exit");
+    t.mock.method(require("../src/team/processes"), "inventory", () =>
+      evidence === "missing child" ? [f.runner] : [f.runner, f.child]);
+    const result = await native.waitForJob(f.root, f.job.id, {
+      until: "ready", timeout_ms: 10, transport: f.options.transport
+    });
+    assert.equal(result.reached, false);
+    assert.equal(result.until, "ready");
+    assert.equal(result.health.ready, false);
+    assert.ok(["stopping", "blocked"].includes(result.health.state), result.health.state);
+    f.assertOwnership();
+  });
+}
+
 test("bounded wait observes semantic readiness and stopped evidence without cancelling timed-out jobs", async (t) => {
   const f = fixture(t);
   f.start("worker");
