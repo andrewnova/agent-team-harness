@@ -1,6 +1,30 @@
 # Native teams in cmux
 
-`agent-team team` is an opt-in workflow for parallel native Codex and Claude Code sessions. It reuses the harness mailbox and local state without starting the legacy daemon. A lead owns the brief, assignments, repair decisions, and acceptance.
+`agent-team team` runs parallel native Codex and Claude Code sessions inside one cmux project. It reuses the harness mailbox and local state without starting the legacy daemon. A lead owns the brief, assignments, repair decisions, and acceptance.
+
+## Start a team
+
+Install cmux, Git, Node.js >=22.13.0, and the native Codex and Claude Code CLIs on macOS. Sign in to both coding CLIs and confirm account access to the chosen models. From a terminal inside cmux, in this harness clone:
+
+```sh
+node scripts/start-team.js --project /absolute/path/to/your/repo
+```
+
+The target must be an existing Git repository. The starter opens `Team · your-project` with an Astra lead; once it reports ready, give it a task. Append `--leader claude` for a Fable lead. The lead creates worker and reviewer tabs through the CLI as work becomes ready, with four active jobs including itself by default. There is no automatic scheduler.
+
+Startup prints a coordinator path and lead job ID. State defaults to `~/.local/state/agent-team/cmux/<project-id>`; use `--coordinator /absolute/path` for another location. The coordinator must be separate from the target checkout. The starter gives it an isolated local Git root so the writable lead cannot claim an enclosing project by accident. Source implementation belongs in separate feature and worker worktrees.
+
+The same startup command reports an existing active lead instead of opening another one. To change its startup configuration, finish or cancel the existing jobs first. A stopped lead may be replaced only after its workers have finished or stopped. Existing messages stay addressed to their original job and attempt.
+
+Use `--max-active`, `--codex-bin`, `--claude-bin`, `--codex-model`, and `--claude-model` to select capacity, executable paths and model IDs explicitly. `node scripts/start-team.js --help` lists the options. For example, when a shell wrapper selects an unintended CLI:
+
+```sh
+node scripts/start-team.js --project /absolute/path/to/your/repo \
+  --codex-bin "$HOME/.local/bin/codex" \
+  --claude-bin "$HOME/.local/bin/claude"
+```
+
+This startup path does not install global skills or MCP configuration. Each native session receives the team tools and its assignment directly. Login, trust, and approval prompts stay visible in its terminal. The model defaults below describe the intended routing; your accounts must support the specified IDs.
 
 | Assignment | Runtime and model |
 | --- | --- |

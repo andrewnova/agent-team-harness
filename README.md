@@ -1,257 +1,107 @@
 # Agent Team Harness
 
-<img src="site/assets/logo.svg" alt="Agent Team Harness logo" width="96">
+<img src="site/assets/logo.svg" alt="Agent Team Harness logo" width="72">
 
-Alpha release: `0.1.0-alpha`
+**Run native Codex and Claude Code sessions together in cmux.**
 
-Created and maintained by Andrew Guzman.
+One project in the sidebar. A lead and separate worker and reviewer tabs inside it. Give the lead a task, watch the agents work, and steer any session directly.
 
-Agent Team Harness is a local CLI for running Codex and Claude Code as visible, proof-gated coding teammates.
+[Website](https://andrewnova.github.io/agent-team-harness/) · [Quickstart](#quickstart) · [Workflow and commands](docs/cmux-team.md)
 
-The opt-in [`agent-team team` workflow](docs/cmux-team.md) groups native agents as tabs inside one cmux project. Either model can lead; Astra implements backend work, Fable implements frontend work, and the opposite model supplies independent review. It reuses the mailbox without starting the legacy daemon.
+![Conceptual illustration of four coding sessions connected through a shared mailbox inside one workspace](site/assets/cmux-team-hero.png)
 
-Codex owns the harness, task state, merge gates, and proof. Claude Code is the visible teammate for frontend/UI/UX work, long-context critique, and cross-model review. Communication is mailbox-first and MCP-woken: Claude-bound work uses the first-party Claude MCP outbox, Claude-to-Codex traffic uses the first-party Codex MCP wake adapter, and semantic mailbox replies are the completion truth.
-
-![Agent Team Harness flow](assets/agent-team-flow.png)
-
-Landing page: [`site/index.html`](site/index.html), deployed through GitHub Pages at <https://andrewnova.github.io/agent-team-harness/>.
-
-## What It Does
-
-- Starts or reuses a visible Claude Code teammate for the current project with launch-scoped first-party MCP config.
-- Stores goals, tasks, leases, reviews, proof, mailbox messages, and closeout records locally.
-- Routes frontend work to Claude and backend/proof work to Codex.
-- Uses a durable mailbox as the source of truth and first-party MCP servers as the local wake/read/reply adapters.
-- Makes `channel steer` visible-or-blocking by default, with an optional visible recovery launch when Claude does not send the required semantic mailbox reply.
-- Supports nonblocking review requests, semantic acknowledgements, check-ins, and batch replies.
-- Requires proof before tasks can be marked done.
-- Generates closeout reports and optional self-heal/refactor recommendations.
-- Survives partial failure: adopt-first teammate reuse gated by a process-liveness probe, corruption-tolerant state with `agent-team state repair`, a single-daemon guard, and an in-session `agent_team_self_heal` MCP tool.
-
-## Requirements
-
-- Node.js `>=22.13.0`
-- Codex
-- Claude Code, for live Claude teammate sessions
-- `npm`, used by the installer to run tests and install local wrappers
-
-## Install For Codex
-
-```bash
-git clone https://github.com/andrewnova/agent-team-harness.git
-cd agent-team-harness
-./scripts/install-codex.sh
-```
-
-The installer:
-
-- validates Node.js,
-- installs an `agent-team` wrapper into `~/.local/bin`,
-- installs the Codex skill into `${CODEX_HOME:-~/.codex}/skills/agent-team-harness`,
-- writes first-party `agent-team-claude-mcp`, `agent-team-codex-mcp`, and `agent-team-codex-wake` wrappers into `~/.local/bin`,
-- registers the first-party `agent-team-claude` MCP server in Claude Code config,
-- installs the first-party Codex MCP wake adapter wrapper for Codex-side mailbox reads,
-- validates the bundled plugin manifest,
-- runs the Node test suite.
-
-If Claude Code is not installed or authenticated yet, the installer still completes and reports the next repair command. After Claude is ready, run:
-
-```bash
-agent-team doctor --fix --target my-project
-agent-team channel auth
-agent-team channel doctor --fix --target my-project
-```
-
-Offline or minimal install:
-
-```bash
-./scripts/install-codex.sh --skip-channel
-agent-team channel mcp install
-agent-team codex mcp install
-```
+*Illustration generated with GPT Image 2. Alpha software, maintained by Andrew Guzman.*
 
 ## Quickstart
 
-From any project directory:
+You need **macOS**, [cmux](https://cmux.com/), Git, **Node.js 22.13 or later**, and the native [Codex](https://learn.chatgpt.com/docs/codex/cli) and [Claude Code](https://code.claude.com/docs/en/setup) CLIs installed and signed in. Your accounts must have access to the configured models.
 
-```bash
-agent-team start --name my-project --project-dir "$PWD" --daemon
+Open a terminal **inside cmux**, then run:
+
+```sh
+git clone https://github.com/andrewnova/agent-team-harness.git
+cd agent-team-harness
+node scripts/start-team.js --project /absolute/path/to/your/repo
 ```
 
-When no `--name` is provided, the harness derives a session name from the project and the Codex thread id when `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, or `AGENT_TEAM_SESSION_ID` is available. That lets an old Codex thread reattach to its matching Claude teammate while a new Codex thread gets a separate visible Claude session by default. Passing `--name` remains the explicit override.
+Replace the project path with an existing Git repository. The starter opens a **Team · your-project** workspace and launches an Astra lead. Complete any native trust or login prompts in its tab. Once it reports ready, give it a task:
 
-Automatic reuse is intentionally narrow: the remembered endpoint id wins for the same Codex thread and project, and same-project reuse is allowed when the endpoint target/display name matches the requested session name. A new named workstream does not silently rename or reuse an unrelated same-project Claude endpoint; it launches a visible Claude teammate instead. Use `--reuse-claude` or its compatibility alias `--no-fresh-claude` only when you intentionally want the older loose same-project reuse behavior.
+> Add a settings page with saved notification preferences. Inspect the existing app first, split independent work, and verify the complete user flow.
 
-`agent-team start` treats a failed Claude startup as a blocking setup error by default. That includes auth failures and failed visible launches, because a Claude-owned task must not look delegated when no reachable visible Claude teammate exists. Visible launches now write a durable launch marker before Claude starts, generate a per-launch Claude MCP config under `.agent-team/comms/claude-channel/mcp-configs/`, pass launch context into the Claude/MCP environment, and send an initial user prompt that tells Claude to run `agent-team channel boot-ack` immediately after reading the boot contract. Those are diagnostics, not proof of task delegation: the launch marker proves the visible shell command ran; `mcp_start` proves Claude spawned the first-party MCP server process for that launch; `mcp_init` proves Claude completed MCP initialization for the launch when available; the boot ACK proves Claude cooperated with the mailbox contract; the channel endpoint/smoke result still decides whether live steering is ready. Startup records also include `endpoint_selection` so remembered endpoint-id reuse, strict thread display-name selection, and fresh new endpoint selection are visible instead of implicit. Use `--allow-degraded-claude` only for offline diagnostics or Codex-only work where the failed startup is intentionally nonblocking.
+The lead creates worker and reviewer tabs as needed. Up to **four jobs, including the lead**, can be active by default. The starter does not schedule tasks itself.
 
-When startup is blocked, the JSON output includes `blocked_next_step` with a concrete repair command and suppresses the normal Planning/Dev prompt. Follow that blocker first. For example, `claude_auth_required` points to `channel auth login`, missing MCP setup points to `doctor --fix`, and smoke failures make endpoint reachability explicit without treating it as Claude confirmation.
+To use a Fable lead:
 
-If `channel status`, `channel doctor`, or `channel steer` reports a loaded/recent endpoint with `fetch_failed`, check the `operator_hint` before assuming Claude is broken. In Codex App or other sandboxed shells, Claude auth files or localhost channel access may be hidden from the process; rerun the live channel command from a local-permission context, then decide whether auth or endpoint repair is actually needed.
-
-Visible launches use Claude's approved `--channels` mode by default. `--use-development-channel` is reserved for local channel diagnostics because Claude may pause on an interactive development-channel warning before any MCP server or boot ACK can run.
-
-For offline or deterministic local testing:
-
-```bash
-agent-team start --name my-project --project-dir "$PWD" --no-ensure-claude
-agent-team start --name my-project --project-dir "$PWD" --allow-degraded-claude
-agent-team cockpit --no-live-channel
+```sh
+node scripts/start-team.js --project /absolute/path/to/your/repo --leader claude
 ```
 
-## Typical Flow
+The starter creates local coordinator state outside your source checkout. It supplies team communication tools per session; this path needs no global harness installation, global MCP registration, or receiver daemon. Running the same command again reports an existing active lead without creating a duplicate.
 
-```bash
-agent-team init
-agent-team goal new --title "Build feature" --objective "Ship the feature with proof"
-agent-team plan codex --goal G-000001 --text "Codex proposal"
-agent-team plan claude --goal G-000001 --prompt "Review this plan"
-agent-team plan import-claude --goal G-000001
-agent-team plan reconcile --goal G-000001 --text "Final task split"
-agent-team tasks create --json tasks.json
-agent-team promote-dev
+Use `--max-active` to set capacity, `--codex-bin` and `--claude-bin` to select explicit executable paths, or `--codex-model` and `--claude-model` to choose model IDs available to your accounts. See all options with `node scripts/start-team.js --help`. These choices are explicit; the harness does not silently fall back to another model.
+
+## Who does what
+
+| Assignment | Default runtime and model |
+| --- | --- |
+| Lead | Codex / Astra, or Claude Code / Fable |
+| Backend implementation and repairs | Codex / Astra |
+| Frontend implementation and repairs | Claude Code / Fable |
+| Review with an Astra lead | Fresh Fable sessions |
+| Review with a Fable lead | Fresh Astra sessions |
+
+Default IDs are `gpt-6-astra` and `claude-fable-5-1[1m]`. Review is a separate assignment from implementation, even when the same model helped write part of the feature.
+
+## From task to reviewed feature
+
+1. **Define.** The lead inspects the project and writes a brief, assignments, and meaningful checks.
+2. **Build.** Independent jobs run in parallel. Each simultaneous writer gets a private checkout.
+3. **Assemble.** Worker commits are combined into one feature worktree.
+4. **Freeze and review.** Fresh opposite-model reviewers inspect the complete candidate while checks run against that source.
+5. **Repair and recheck.** The lead collects the review round, assigns justified repairs, then obtains current reviews and checks for the changed candidate.
+
+A feature becomes eligible only when every required current review and check passes and required findings are resolved. Eligibility does not merge or deploy the feature.
+
+## Three responsibilities
+
+| Component | Responsibility |
+| --- | --- |
+| **cmux** | Visible project and tabs, direct steering, and addressed terminal wakes |
+| **Native Codex / Claude Code** | Reasoning, editing, tool use, authentication, and approvals |
+| **Harness** | Job ownership and capacity, durable messages, feature assembly, and evidence for acceptance |
+
+Both CLIs receive the same local MCP tools: `team_report`, `team_send`, `team_inbox`, and `team_reply`. Messages stay in the local mailbox. A wake asks the recipient to read its inbox; only its actual response proves it answered.
+
+The lead decides what to launch and what to accept. There is no additional scheduler or nested manager hierarchy.
+
+## Inspect and stop
+
+Startup prints the coordinator path and lead job ID. From the harness clone:
+
+```sh
+node agent-team/src/cli.js --cwd /absolute/coordinator team job list
+node agent-team/src/cli.js --cwd /absolute/coordinator team job read <job-id>
+node agent-team/src/cli.js --cwd /absolute/coordinator team job cancel <job-id>
 ```
 
-Then for each task:
+Run terminal reads, launches, and wakes inside cmux. Cancellation requests termination; inspect the job until its recorded processes have stopped. Cancel or finish workers before stopping their lead. Tabs and local evidence remain available for inspection.
 
-```bash
-agent-team claim T-000001 --owner codex --reason "backend/proof task"
-agent-team attempt T-000001 --json attempt.json
-agent-team review request T-000001
-agent-team review import T-000001
-agent-team merge T-000001
-agent-team verify run T-000001
-agent-team done T-000001
-agent-team verify final
-```
+[Detailed job, assembly, review, and recovery commands](docs/cmux-team.md)
 
-## Mailbox-First, MCP-Woken Communication
+## Current boundaries
 
-The mailbox is the durable communication truth. First-party MCP servers are the normal local wake/read/reply adapters. Normal development coordination does not depend on a raw synchronous channel reply window.
+This is an alpha native workflow. Live grouped tabs, agent readiness, messages and replies in both directions, and shutdown have been exercised on macOS. CI runs lint and the test suite. Account access, native approvals, and model pauses can still block a job; incomplete work stays incomplete. Throughput improvement has not been benchmarked.
 
-The receiver daemon is the local router that makes Codex and Claude feel connected without blocking either model. It watches mailbox traffic, records receipt ACKs, surfaces real-reply requirements, queues first-party Claude MCP channel notifications for Claude-bound non-heartbeat traffic, queues Codex wake payloads for Claude-to-Codex messages, shows check-ins in cockpit, and lets Codex import Claude's answer when it arrives.
+Code and prompts are processed by the selected native coding services. Local coordination does not mean offline model execution.
 
-For Claude-to-Codex traffic, the daemon writes wake payloads under `.agent-team/comms/codex-wake/` and invokes the first available Codex wake adapter: explicit `AGENT_TEAM_CODEX_WAKE_COMMAND` first, then the installed `agent-team-codex-wake` command recorded by `agent-team codex mcp install`. The mailbox remains the source of truth; the wake stream is the local real-time delivery adapter for Codex surfaces that can consume it. The first-party `agent-team-codex-mcp` adapter reads that wake stream, loads mailbox messages, writes Codex ACKs, and sends Codex replies back through the same durable mailbox.
-
-`agent-team cockpit` and `agent-team watch` show Claude MCP outbox totals, MCP-emitted counts, Codex MCP adapter status, Codex wake totals, missing-adapter queues, the wake stream path, and a per-message timeline so operators can see whether teammate messages are moving in real time.
-
-The cockpit timeline is derived from existing mailbox rows, ACK rows, MCP outbox/delivery rows, Codex wake payloads, Codex MCP receipts, and daemon events. The JSON keeps stable machine stage keys, while the text cockpit renders human labels such as "mailbox sent," "Claude wake queued," "Codex MCP saw it," and "mailbox replied" without creating a second state store.
-
-Do not delegate real Claude work through raw `ask_claude` or a direct live-channel wait. Planning, implementation, review, refactor, and debugging work should go through mailbox-backed harness commands such as `plan claude`, `review request`, `channel steer`, or `mailbox send --to claude --kind request --reply-required`. The first-party MCP path wakes Claude and lets Claude write durable ACKs/replies. `channel ask` exits nonzero unless Claude returns a semantic answer, and the mailbox reply remains the completion truth.
-
-`agent-team channel steer` is visible-or-blocking by default. It first queues the durable reply-required mailbox request, immediately runs a bounded daemon wake pass for that exact mailbox message, briefly waits for a semantic mailbox reply, and returns success only when Claude gives a semantic live answer or a semantic mailbox reply already exists. The first-party Claude MCP path is the primary delivery path: queued/emitted MCP notifications prove the wake moved, not that Claude answered. Receipt ACKs, `wake_sent`, and `wake_sent_reply_pending` are also not enough for success. When the wake moved but no real reply landed, `blocking_next_step.kind` is `first_party_mcp_reply_missing` and the missing piece is Claude calling the first-party channel `reply` tool, `agent_team_reply`, `agent_team_ack`, or otherwise writing an equivalent semantic mailbox reply. Add `--recover-visible` when Codex should immediately launch the fresh visible recovery session, inject the exact mailbox request into the startup prompt, and wait for Claude's semantic mailbox reply in one command. The returned `visible_recovery_command` is the manual equivalent. Use `--no-live` or `--mailbox-only` only when quiet mailbox-only delegation is intentional.
-
-When `blocking_next_step.operator_hint.kind` is `rerun_live_channel_with_local_permissions`, the mailbox request still exists. Rerun `channel status`, `channel doctor`, or the steering smoke with local auth/loopback permissions before reauthenticating Claude or opening another teammate window.
-
-Claude can check in at any time:
-
-```bash
-agent-team mailbox send \
-  --from claude \
-  --to codex \
-  --kind checkin \
-  --task T-000001 \
-  --subject "Still working" \
-  --body "Waiting on frontend subagents; next milestone is mobile proof."
-```
-
-Codex can ask Claude for a nonblocking review:
-
-```bash
-agent-team review request T-000001
-agent-team await reply --request-id req_... --once
-agent-team review import T-000001 --request-id req_...
-```
-
-## First-Party Claude MCP Channel
-
-The repo includes a first-party Claude MCP server at `agent-team-claude-mcp`. It declares the Agent Team Claude Channel, watches `.agent-team/comms/claude-mcp/outbox.jsonl`, emits queued `notifications/claude/channel` wake-ups with protocol-compatible `sender`, `reply_required: "true" | "false"`, `received_at`, and native `chat_id`, `message_id`, `user`, and `ts` channel metadata, exposes the conventional channel `reply` tool plus mailbox-backed ACK/reply/check-in/status/task tools, and writes Claude responses through the same durable mailbox as the CLI.
-
-Install or inspect the first-party Claude MCP registration directly:
-
-```bash
-agent-team channel mcp install --mcp-scope user
-agent-team channel mcp status --mcp-scope user
-```
-
-This is the normal Claude-bound teammate lane. The daemon writes the first-party outbox and treats the first-party MCP notification plus mailbox reply tools as the work path.
-
-The MCP server uses standard stdio newline-delimited JSON-RPC. It waits until Claude sends the MCP `notifications/initialized` lifecycle event before emitting queued Claude Channel notifications, so queued outbox items cannot corrupt the startup handshake. Visible launches pass a generated `--mcp-config` file directly to Claude and use a launch-scoped server name such as `agent-team-claude-<launch-id>` so the first-party MCP server receives the exact launch id, session name, project directory, and harness root for that session instead of relying on or being shadowed by global Claude config inheritance.
-
-Visible Terminal launch is the default when a reusable matching Claude endpoint is not found. A configured `AGENT_TEAM_CODEX_TERMINAL_LAUNCHER` is used only when `--launch-mode codex-terminal` is explicitly requested; otherwise it must not silently replace the user-visible Terminal path. For deliberately clean teammate launches, `--fresh-claude` requires a genuinely new same-project channel endpoint. If no new endpoint appears, the harness reports `fresh_start_no_new_endpoint` instead of silently reusing or renaming an old Claude session.
-
-For same Codex thread resumes, Claude channel ensure now prefers the remembered endpoint id from `.agent-team/comms/claude-channel/session.json` when `session_identity.thread_ref` and `project_dir` match. Display names are human labels and fallback selectors, not the primary continuity proof. Fresh launch failures include an endpoint probe (`discovered.probe` / `fresh_launch_probe`) with old endpoints, new endpoint counts, checked candidates, and the selected target when one exists. Visible startup records also include `endpoint_selection`, `launch_marker`, `mcp_start`, `mcp_init`, `boot_ack`, `startup_proof`, and `fallback_packet` status. `agent-team cockpit` and `agent-team watch` render this as a `Claude startup:` line with endpoint-selection and duplicate-proof diagnostics so visible-launch blockers are readable without opening JSON. Duplicate MCP start/init rows do not make startup fail by themselves; cockpit selects the latest durable row for readiness and reports duplicates as diagnostics.
-
-If a visible shell launch is recorded but Claude does not boot-ACK, generate the copy/paste recovery packet:
-
-```bash
-agent-team channel startup-packet --launch-id launch_... --text
-```
-
-The packet includes the exact `channel boot-ack` command and manual recovery instructions. If Claude cannot run the command but gives you a status or error in chat, import that pasted text back into the same durable mailbox:
-
-```bash
-agent-team channel startup-import --launch-id launch_... --text "Claude pasted status or error"
-```
-
-Use `--file <path>` for longer replies, `--boot-ack` when the pasted reply is a valid startup ACK, and `--kind reply --request-id <id>` only when the pasted text is answering a specific mailbox request. Startup import records either a boot ACK or a Claude-to-Codex mailbox check-in/reply. It does not bypass mailbox, review, merge, proof, or done gates.
-
-Claude can manually or automatically acknowledge a boot prompt with:
-
-```bash
-agent-team channel boot-ack --launch-id launch_... --name my-project --project-dir "$PWD"
-```
-
-That command records `.agent-team/comms/claude-channel/boot-acks.jsonl` and sends a Claude-to-Codex mailbox check-in, so Codex can tell whether Claude actually read the startup contract.
-
-## First-Party Codex MCP Adapter
-
-The repo also includes a first-party Codex-facing MCP server at `agent-team-codex-mcp` plus a local wake command at `agent-team-codex-wake`. The MCP server exposes mailbox-backed tools for Codex to watch Claude-to-Codex wake payloads, read full mailbox messages, acknowledge messages, reply to Claude, and open canonical task state. The wake command is the daemon's local push target when no explicit `AGENT_TEAM_CODEX_WAKE_COMMAND` is set. Neither replaces the mailbox, and neither claims to force a native Codex UI wake by itself; together they provide the clean local adapter pair that Codex surfaces or hooks can consume.
-
-Install or inspect the Codex MCP adapter for a project:
-
-```bash
-agent-team codex mcp install
-agent-team codex mcp status
-```
-
-The install command writes a wrapper into `~/.local/bin` and stores a local adapter manifest at `.agent-team/comms/codex-mcp/adapter.json`. `agent-team cockpit` reports whether that wrapper and manifest are present, how many wake payloads are pending, and where the stream lives.
-
-## Reliability & Self-Healing
-
-The harness is built to survive partial failure and repair itself instead of stalling:
-
-- **Adopt-first teammate reuse.** For the same project and session name, `start`/`channel ensure` adopts an already-running visible Claude teammate only when a process-liveness probe confirms its MCP process is still alive, so a resume reattaches to the live window instead of spawning a duplicate or reusing a dead endpoint.
-- **Three-valued Claude auth.** Auth status is classified as `logged_in`, `logged_out`, or `unverifiable`. Startup only hard-blocks on `logged_out`; when the probe cannot read Claude's auth (for example inside a sandboxed Codex shell), the status is `unverifiable` and non-blocking, so hidden-but-valid auth does not look broken.
-- **Single daemon per project.** `agent-team daemon run` refuses to start a second receiver daemon while a live one owns the pid record (`daemon_already_running`); pass `--force` to take over, or stop the existing one first, so two daemons never fight over one mailbox.
-- **Corruption-tolerant state.** Mailbox and event readers skip malformed JSONL rows instead of crashing, and `agent-team state repair [--apply]` reports and rebuilds derived projections from canonical truth.
-- **In-session self-heal.** The first-party Claude MCP server exposes an `agent_team_self_heal` tool so Claude can propose a harness tool/skill change from inside a live session; the request is recorded for review rather than applied silently.
-
-Continuous integration enforces the same guarantees. The GitHub Actions workflow runs `npm run lint` — an ESLint `no-undef` hard gate that catches the class of missing-reference crash that previously shipped as the daemon `spawnSync` and bridge `endpointTarget` failures — and the full `npm test` suite on every push and pull request.
-
-## Project Layout
-
-```text
-agent-team/                         CLI source and tests
-plugins/agent-team-harness/         Codex orchestrator skill + Claude teammate skill
-scripts/install-codex.sh            local Codex installer
-.github/workflows/ci.yml            lint + test CI gate
-assets/agent-team-flow.png          README diagram
-```
-
-Generated runtime state is written to `.agent-team/` in the project being operated on. It should not be committed.
+Existing users of the older `start --daemon` workflow can use the [legacy guide](docs/legacy-workflow.md). Its commands and bundled installer are separate from this cmux quickstart.
 
 ## Development
 
-```bash
-cd agent-team
-npm run lint
-npm test
+```sh
+npm --prefix agent-team ci
+npm --prefix agent-team run lint
+npm --prefix agent-team test
 ```
 
-`npm run lint` is an ESLint `no-undef` hard gate; `npm test` runs the Node test suite. Both run in CI on every push and pull request. The suite covers task lifecycle, review import, mailbox behavior, durable waiting, daemon receipts, adopt-first session reuse and liveness, Claude auth classification, browser/computer proof gates, worktrees, closeout reports, and plugin launch behavior.
-
-## Safety Notes
-
-- Do not commit credentials, browser profiles, Claude channel tokens, provider keys, or generated `.agent-team/` runtime state.
-- Use the CLI for state changes; do not hand-edit task JSON or SQLite.
-- Codex remains final proof owner even when Claude implements or reviews work.
+The website is static HTML, CSS, and JavaScript under `site/`. GitHub Actions deploys it to GitHub Pages when `main` changes. [Image provenance](docs/website-image.md).
