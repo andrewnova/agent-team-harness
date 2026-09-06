@@ -13,7 +13,11 @@ if (process.env.TEAM_WORKFLOW_FIXTURE) {
     const method = args[4];
     const params = JSON.parse(args[5]);
     const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile)) : null;
-    fs.appendFileSync(path.join(directory, "rpc.jsonl"), JSON.stringify({ method, params }) + "\n");
+    const jobDirectory = path.join(process.env.TEAM_WORKFLOW_COORDINATOR, ".agent-team", "state", "jobs");
+    const observedJobs = method === "surface.send_text"
+      ? fs.readdirSync(jobDirectory).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(jobDirectory, name))))
+      : undefined;
+    fs.appendFileSync(path.join(directory, "rpc.jsonl"), JSON.stringify({ method, params, observedJobs }) + "\n");
     let result;
     if (method === "workspace.create") {
       if (state) throw new Error("Unexpected second workspace");
@@ -40,6 +44,9 @@ if (process.env.TEAM_WORKFLOW_FIXTURE) {
         result = { ...result, surface_id, pane_id: state.pane_id, type: "terminal" };
       } else if (method === "surface.list") {
         result.surfaces = state.surfaces;
+      } else if (method === "surface.read_text") {
+        const log = path.join(directory, `${params.surface_id}.log`);
+        result.text = fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "Fixture terminal";
       } else if (["surface.send_text", "surface.send_key", "tab.action"].includes(method)) {
         if (!state.surfaces.some((s) => s.id === params.surface_id)) throw new Error("Unknown fixture surface");
         if (method.startsWith("surface.send") && fs.existsSync(path.join(directory, "wake-unavailable"))) {

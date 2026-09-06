@@ -28,7 +28,7 @@ function fixture(t) {
   const model = path.join(directory, "native-model");
   fs.mkdirSync(repo);
   fs.writeFileSync(model, `#!${process.execPath}\nrequire(${JSON.stringify(fixtureModel)}).main().catch(error => { console.error(error); process.exit(1); });\n`, { mode: 0o700 });
-  const env = { ...process.env, TEAM_WORKFLOW_FIXTURE: directory,
+  const env = { ...process.env, TEAM_WORKFLOW_FIXTURE: directory, TEAM_WORKFLOW_COORDINATOR: root,
     NODE_OPTIONS: `--require=${JSON.stringify(fixturePreload)}`, AGENT_TEAM_HEADLESS: "1",
     GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_AUTHOR_NAME: "Workflow fixture", GIT_AUTHOR_EMAIL: "fixture@example.test",
@@ -66,6 +66,8 @@ function fixture(t) {
   const show = (id) => run(["job", "show", id]);
   const stateFile = (id) => path.join(root, ".agent-team", "state", "jobs", `${id}.json`);
   const read = (file) => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file)) : null;
+  const wakes = (messageId) => fs.readFileSync(path.join(directory, "rpc.jsonl"), "utf8").trim().split("\n").map(JSON.parse)
+    .filter((row) => row.method === "surface.send_text" && row.params.text.includes(messageId));
   const jobState = (id) => read(stateFile(id));
   const prefix = (job) => path.join(directory, `${job.id}-${job.attempt}`);
   const boot = (job) => until(() => read(`${prefix(job)}.boot.json`), Boolean, `${job.id} MCP handshake`);
@@ -102,13 +104,39 @@ function fixture(t) {
     prompt: "Deterministic integration assignment; native model is a fixture.", ...overrides
   })]);
   async function stopped(job, expected) {
-    const current = await until(() => jobState(job.id), (value) => value?.process_stopped === true, `${job.id} stopped evidence`);
+    const waited = run(["job", "wait", job.id, "--until", "stopped", "--timeout-ms", "12000"]);
+    assert.equal(waited.reached, true);
+    assert.equal(waited.job.attempt, job.attempt);
+    const current = show(job.id);
     assert.equal(current.status, expected);
-    const receipt = read(path.join(root, ".agent-team", "sessions", job.id, String(job.attempt), "exit.json"));
+    // The wait proves release; delivery has its own subsequent durable receipt.
+    const exitFile = path.join(root, ".agent-team", "sessions", job.id, String(job.attempt), "exit.json");
+    const receipt = await until(() => read(exitFile), (value) => value?.delivery, `${job.id} lifecycle delivery receipt`);
     assert.equal(receipt.process_stopped, true);
     assert.equal(receipt.attempt, job.attempt);
     assert.deepEqual(receipt.remaining, []);
     assert.throws(() => process.kill(receipt.pid, 0), { code: "ESRCH" });
+    const notices = run(["job", "inbox", current.parent_job]).filter((message) => message.metadata.event === "job_stopped" &&
+      message.metadata.from_job === job.id && message.metadata.from_attempt === job.attempt);
+    assert.equal(notices.length, 1);
+    const notice = notices[0];
+    assert.equal(notice.id, `jobexit_${job.id}_${job.attempt}`);
+    assert.equal(notice.metadata.to_attempt, current.parent_attempt);
+    const body = JSON.parse(notice.body);
+    assert.equal(body.status, expected);
+    assert.equal(body.process_stopped, true);
+    if (current.reported_result) {
+      assert.equal(body.result_message_id, current.reported_result.message_id);
+      assert.deepEqual(wakes(current.reported_result.message_id), [], "semantic report must not wake before stopped evidence");
+    }
+    assert.equal(receipt.delivery.message_id, notice.id);
+    assert.equal(receipt.delivery.status, "submitted");
+    const submitted = wakes(notice.id);
+    assert.equal(submitted.length, 1);
+    const observed = submitted[0].observedJobs.find((item) => item.id === job.id);
+    assert.equal(observed.process_stopped, true);
+    assert.equal(observed.status, expected);
+    assert.equal(submitted[0].params.surface_id, show(current.parent_job).surface_id);
     return { current, receipt };
   }
   t.after(async () => {
@@ -163,14 +191,20 @@ test("integration: startup, durable task/reply, stopped worker, candidate checks
   })]);
   const workerCwd = path.join(f.directory, "worker checkout");
   f.git(f.repo, "worktree", "add", "-b", "codex/worker", workerCwd, "HEAD");
-  f.create("worker", { cwd: workerCwd, writable: true, feature_id: feature.id });
+  const assigned = f.create("worker", { cwd: workerCwd, writable: true, feature_id: feature.id });
+  assert.equal(assigned.parent_job, lead.id, "one active lead supplies the parent assignment");
   const worker = f.launch("worker");
+  assert.equal(worker.parent_attempt, lead.attempt);
   await f.boot(worker);
+  assert.equal(f.run(["job", "wait", worker.id, "--until", "ready", "--timeout-ms", "20"], 1).reached, false);
+  assert.equal(f.show(worker.id).status, "launching");
   // An allocation cannot claim readiness; pending delivery still stores the task.
   const sent = await f.mcp(lead, "team_send", { to_job: worker.id, body: "Set answer() to 42. Reply with the commit and focused check." });
   assert.equal(sent.delivery.status, "pending");
   assert.equal(sent.delivery.reason, "recipient_not_ready");
   await f.ready(worker);
+  assert.equal(f.run(["job", "wait", worker.id, "--until", "ready", "--timeout-ms", "1000"]).reached, true);
+  assert.equal(f.run(["status"]).jobs.find((job) => job.job_id === worker.id).state, "ready");
   assert.equal((await f.mcp(worker, "team_inbox", {})).messages[0].id, sent.message.id);
   const wake = f.run(["job", "wake", worker.id, "--message", sent.message.id]);
   assert.equal(wake.status, "submitted");
@@ -190,6 +224,9 @@ test("integration: startup, durable task/reply, stopped worker, candidate checks
   const report = await f.mcp(worker, "team_report", { status: "completed", result: JSON.stringify({ commit }), in_reply_to: sent.message.id });
   assert.equal(report.job.status, "running");
   assert.equal(report.job.process_stopped, false);
+  assert.equal(report.job.reported_result.message_id, report.message.id);
+  assert.equal(report.delivery.reason, "waiting_for_process_stop");
+  assert.equal(f.run(["status"]).jobs.find((job) => job.job_id === worker.id).state, "stopping");
   f.create("next-writer", { cwd: workerCwd, writable: true });
   assert.match(f.launch("next-writer", 1).stderr, /writer/);
   const finished = await f.stopped(worker, "completed");
@@ -277,7 +314,7 @@ test("integration: failed wake keeps one durable message; abrupt model exit rele
   const { current, receipt } = await f.stopped(worker, "failed");
   assert.equal(receipt.code, 23);
   assert.equal(current.reported_result, undefined);
-  assert.match(current.result, /without a semantic result/);
+  assert.match(current.result, /23/);
   assert.equal(receipt.observed_processes.some((row) => row.pid === boot.mcp_pid), true);
   assert.throws(() => process.kill(boot.mcp_pid, 0), { code: "ESRCH" });
   const retry = await f.ready(f.launch(worker.id));
