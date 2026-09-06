@@ -110,16 +110,40 @@ test("post-send wake seam preserves durable messages across callback failure for
   const report = mcp.dispatchTool(worker, "team_report", { status: "completed", result: "Reviewed", in_reply_to: sent.message.id });
   assert.equal(report.ok, true);
   assert.equal(report.job.reported_result.result, "Reviewed");
-  assert.equal(report.delivery.status, "failed");
+  assert.deepEqual(report.delivery, { status: "pending", reason: "waiting_for_process_stop" });
+  assert.equal(report.job.reported_result.message_id, report.message.id);
   const failedSend = mcp.dispatchTool(worker, "team_send", { to_job: "lead", body: "Still sent" });
   assert.equal(failedSend.ok, true);
   assert.equal(failedSend.delivery.status, "failed");
   assert.match(failedSend.message.id, /^jobmsg_/);
-  assert.equal(attempts, 3);
+  assert.equal(attempts, 2);
   assert.equal(jobs.jobInbox(root, "lead", 1).length, 3);
   assert.equal(jobs.jobInbox(root, "worker", 1).length, 1);
   const noWake = mcp.dispatchTool(mcp.createContext({ root, job_id: "worker", attempt: 1 }), "team_send", { to_job: "lead", body: "pending" });
   assert.equal(noWake.delivery.status, "pending");
+});
+
+test("terminal reports retry without duplicate messages or premature wakes and cannot overwrite the result", (t) => {
+  const { root, context } = fixture(t);
+  let wakes = 0;
+  const worker = mcp.createContext({ root, job_id: "worker", attempt: 1, onMessage() { wakes++; return { status: "submitted" }; } });
+  const input = { status: "completed", result: "Verified result", to_job: "lead" };
+  const first = mcp.dispatchTool(worker, "team_report", input);
+  const retry = mcp.dispatchTool(worker, "team_report", input);
+  assert.equal(retry.message.id, first.message.id);
+  assert.equal(wakes, 0);
+  assert.equal(mcp.dispatchTool(context("lead"), "team_inbox").messages.length, 1);
+  assert.equal(jobs.getJob(root, "worker").process_stopped, false);
+  assert.throws(() => jobs.jobFinishedMessage(root, "worker", 1), /must have stopped/);
+  assert.throws(() => mcp.dispatchTool(worker, "team_report", { ...input, result: "Changed after report" }), /different terminal result/);
+  assert.throws(() => mcp.dispatchTool(worker, "team_report", { ...input, to_job: "sibling" }), /parent lead/);
+  jobs.finishJob(root, "worker", 1, { status: "completed", process_stopped: true });
+  const notice = jobs.jobFinishedMessage(root, "worker", 1).message;
+  assert.equal(jobs.jobFinishedMessage(root, "worker", 1).message.id, notice.id);
+  assert.equal(notice.metadata.event, "job_stopped");
+  const inbox = mcp.dispatchTool(context("lead"), "team_inbox").messages;
+  assert.equal(inbox.length, 2);
+  assert.equal(JSON.parse(inbox[1].body).result_message_id, first.message.id);
 });
 
 test("standalone stdio server is self-gated and serves handshake, tools and errors without runtimes", (t) => {

@@ -49,11 +49,15 @@ function location(root, create = false) {
 function locked(root, fn) {
   const loc = location(root, true);
   const lock = path.join(path.dirname(loc.dir), "jobs.lock");
-  try {
-    fs.mkdirSync(lock);
-  } catch (error) {
-    if (error.code === "EEXIST") throw new Error("job state is locked; retry after the current operation (inspect a crashed holder before removing jobs.lock)");
-    throw error;
+  const deadline = Date.now() + 1000;
+  while (true) {
+    try { fs.mkdirSync(lock); break; } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (Date.now() >= deadline) throw new Error("job state is locked; retry after the current operation (inspect a crashed holder before removing jobs.lock)");
+      // Independent native sessions often report at once. Serialize brief
+      // contention without stealing a stale lock or asking models to retry.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
   }
   try {
     fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: process.pid, created_at: now() }));
@@ -146,11 +150,18 @@ function createJob(root, input) {
   dependencies.forEach((dep) => identifier(dep, "dependency"));
   if (new Set(dependencies).size !== dependencies.length || dependencies.includes(id)) throw new Error("dependencies must be unique and cannot include the job itself");
   if (input.feature_id !== undefined) identifier(input.feature_id, "feature_id");
+  if (input.parent_job !== undefined) identifier(input.parent_job, "parent_job");
+  if (role === "lead" && input.parent_job) throw new Error("a lead cannot have another top-level parent");
   return locked(root, (loc) => {
     if (fs.existsSync(path.join(loc.dir, `${id}.json`))) throw new Error(`job already exists: ${id}`);
     dependencies.forEach((dep) => load(loc, dep)); // Existing-only edges cannot create cycles.
+    const leads = role === "lead" ? [] : all(loc).filter((job) => job.role === "lead" && job.leader === input.leader && ACTIVE.has(job.status));
+    if (!input.parent_job && leads.length > 1) throw new Error("multiple leads are active; specify parent_job");
+    const parent = input.parent_job ? load(loc, input.parent_job) : leads[0];
+    if (parent && (parent.role !== "lead" || parent.leader !== input.leader)) throw new Error("parent_job must be this team's lead");
     return save(loc, {
       id, feature_id: input.feature_id, leader: input.leader, role, runtime, model,
+      ...(parent ? { parent_job: parent.id } : {}),
       cwd, checkout: checkout(cwd), writable: input.writable, prompt,
       dependencies: [...dependencies], status: "queued", attempt: 0,
       created_at: now(), updated_at: now()
@@ -177,6 +188,12 @@ function claimJob(root, id, { max_active } = {}) {
     for (const dep of job.dependencies) {
       if (load(loc, dep).status !== "completed") throw new Error(`dependency is not completed: ${dep}`);
     }
+    let parentAttempt;
+    if (job.parent_job) {
+      const parent = load(loc, job.parent_job);
+      if (!ACTIVE.has(parent.status) || parent.status === "cancelling") throw new Error("parent lead is not active");
+      parentAttempt = parent.attempt;
+    }
     if (directory(job.cwd, "job cwd") !== job.cwd || checkout(job.cwd) !== job.checkout) throw new Error(`job checkout identity changed: ${id}`);
     const active = all(loc).filter((other) => ACTIVE.has(other.status));
     if (active.length >= max_active) throw new Error(`job capacity exhausted (max_active=${max_active})`);
@@ -186,11 +203,21 @@ function claimJob(root, id, { max_active } = {}) {
       job.previous_attempts = [...(job.previous_attempts || []), {
         attempt: job.attempt, status: job.status, result: job.result, reported_result: job.reported_result,
         workspace_id: job.workspace_id, surface_id: job.surface_id, session_id: job.session_id,
-        pid: job.pid, process_stopped: job.process_stopped, finished_at: job.finished_at
+        pid: job.pid, runner_pid: job.runner_pid, parent_job: job.parent_job, parent_attempt: job.parent_attempt,
+        process_stopped: job.process_stopped, finished_at: job.finished_at
       }];
     }
-    for (const key of ["workspace_id", "surface_id", "session_id", "pid", "result", "reported_result", "ready_at", "finished_at"]) delete job[key];
-    return save(loc, { ...job, status: "launching", attempt: job.attempt + 1, process_stopped: false, updated_at: now() });
+    for (const key of ["workspace_id", "surface_id", "session_id", "pid", "runner_pid", "runner_started_at", "result", "reported_result", "ready_at", "finished_at"]) delete job[key];
+    return save(loc, { ...job, ...(parentAttempt ? { parent_attempt: parentAttempt } : {}), status: "launching", attempt: job.attempt + 1, process_stopped: false, updated_at: now() });
+  });
+}
+
+function claimRunner(root, id, attempt, pid) {
+  if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("runner pid must be a positive integer");
+  return locked(root, (loc) => {
+    const job = current(loc, id, attempt);
+    if (job.runner_pid || job.pid || !["launching", "cancelling"].includes(job.status)) throw new Error("native attempt already has a runner");
+    return save(loc, { ...job, runner_pid: pid, runner_started_at: now(), updated_at: now() });
   });
 }
 
@@ -228,7 +255,12 @@ function reportJob(root, id, attempt, input = {}) {
       job.ready_at ||= now();
       if (job.surface_id && job.workspace_id) job.status = "running";
     } else {
-      job.reported_result = { status: input.status, result: input.result ?? null, reported_at: now() };
+      if (input.message_id !== undefined) identifier(input.message_id, "report message id");
+      if (job.reported_result) {
+        if (job.reported_result.status === input.status && isDeepStrictEqual(job.reported_result.result, input.result ?? null)) return job;
+        throw new Error("native attempt already reported a different terminal result");
+      }
+      job.reported_result = { status: input.status, result: input.result ?? null, ...(input.message_id ? { message_id: input.message_id } : {}), reported_at: now() };
     }
     return save(loc, { ...job, updated_at: now() });
   });
@@ -252,6 +284,29 @@ function finishJob(root, id, attempt, input = {}) {
 function messages(loc) {
   if (mailbox.mailboxDiagnostics(loc.cwd).malformed_total) throw new Error("mailbox contains malformed rows; repair before reading or sending job messages");
   return mailbox.listMessages(loc.cwd);
+}
+
+// Only stopped process evidence may emit a lifecycle notification. This also
+// reports crashes that never produced a semantic result, so the lead can repair
+// a failed job without polling every tab. Repeating collection is idempotent.
+function jobFinishedMessage(root, id, attempt) {
+  return locked(root, (loc) => {
+    const job = current(loc, id, attempt, false);
+    if (!TERMINAL.has(job.status) || job.process_stopped !== true) throw new Error("job must have stopped before notifying completion");
+    const report = job.reported_result?.message_id && messages(loc).find((row) => row.id === job.reported_result.message_id);
+    const parentId = job.parent_job || report?.metadata?.to_job;
+    const parentAttempt = job.parent_attempt || report?.metadata?.to_attempt;
+    if (!parentId) return { message: null, reason: "no_parent_assignment" };
+    const parent = load(loc, parentId);
+    if (!ACTIVE.has(parent.status) || parent.attempt !== parentAttempt) return { message: null, reason: "parent_attempt_not_active" };
+    const messageId = `jobexit_${job.id}_${attempt}`;
+    const body = JSON.stringify({ job_id: id, attempt, status: job.status, process_stopped: true,
+      ...(report ? { result_message_id: report.id } : { result: job.result }) });
+    return { message: mailbox.appendMessage(loc.cwd, {
+      id: messageId, from: job.runtime, to: parent.runtime, kind: "notify", body,
+      metadata: { from_job: id, from_attempt: attempt, to_job: parentId, to_attempt: parentAttempt, event: "job_stopped" }
+    }).message };
+  });
 }
 
 function sendJobMessage(root, input = {}) {
@@ -303,6 +358,6 @@ function jobInbox(root, id, attempt) {
 }
 
 module.exports = {
-  routeRuntime, createJob, listJobs, getJob, claimJob, bindJob, cancelJob,
-  reportJob, finishJob, sendJobMessage, jobInbox
+  routeRuntime, createJob, listJobs, getJob, claimJob, claimRunner, bindJob, cancelJob,
+  reportJob, finishJob, jobFinishedMessage, sendJobMessage, jobInbox
 };

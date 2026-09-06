@@ -169,7 +169,7 @@ test("launch binds only the allocated surface and requires an independent ready 
     assert.equal(launchData(request.command).job_id, "writer");
     return { ...ADDRESS, ready: true, status: "running" };
   });
-  const job = native.launchJob(f.root, "writer", { max_active: 1, transport: { createSession } });
+  const job = native.launchJob(f.root, "writer", { max_active: 1, transport: { createSession, readSession: (target) => ({ ...target, text: "controller" }) } });
   assert.equal(createSession.mock.callCount(), 1);
   assert.equal(job.status, "launching");
   assert.equal(job.ready_at, undefined);
@@ -184,14 +184,14 @@ for (const failure of ["allocation", "binding"]) {
     const f = fixture(t);
     f.create("writer", { writable: true });
     f.create("next", { writable: true });
-    const allocationError = Object.assign(new Error("fixture allocation response lost"), { session: ADDRESS });
+    const allocationError = Object.assign(new Error("fixture allocation response lost"), { session: ADDRESS, launch_uncertain: true });
     const createSession = t.mock.fn(() => {
       if (failure === "allocation") throw allocationError;
       // The runner can bind before workspace.create returns a conflicting response.
       jobs.bindJob(f.root, "writer", 1, ADDRESS);
       return { ...ADDRESS, surface_id: "33333333-3333-4333-8333-333333333333" };
     });
-    assert.throws(() => native.launchJob(f.root, "writer", { max_active: 2, transport: { createSession } }),
+    assert.throws(() => native.launchJob(f.root, "writer", { max_active: 2, transport: { createSession, readSession: (target) => ({ ...target, text: "controller" }) } }),
       failure === "allocation" ? /allocation response lost/ : /already bound/);
     assert.equal(createSession.mock.callCount(), 1);
     const job = jobs.getJob(f.root, "writer");
@@ -222,6 +222,78 @@ test("pre-launch configuration error proves no process started and releases the 
   assert.match(job.result, /EEXIST/);
   assert.equal(fs.readFileSync(path.join(directory, "launch.json"), "utf8"), "existing launch evidence");
   assert.equal(jobs.claimJob(f.root, "next", { max_active: 1 }).status, "launching");
+});
+
+for (const phase of ["controller", "session preflight"]) {
+  test(`${phase} failure releases a job that never reached native allocation`, (t) => {
+    const f = fixture(t);
+    f.create("writer", { writable: true });
+    f.create("next", { writable: true });
+    const transport = {
+      readSession: (target) => {
+        if (phase === "controller") throw Object.assign(new Error("controller allocation outcome unknown"), { launch_uncertain: true });
+        return { ...target, text: "controller" };
+      },
+      createSession: () => { throw new Error("session pane validation failed before allocation"); }
+    };
+    assert.throws(() => native.launchJob(f.root, "writer", { max_active: 1, transport }));
+    const failed = jobs.getJob(f.root, "writer");
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.process_stopped, true);
+    assert.equal(jobs.claimJob(f.root, "next", { max_active: 1 }).status, "launching");
+    const receipt = JSON.parse(fs.readFileSync(path.join(f.root, ".agent-team/sessions/writer/1/launch-error.json")));
+    assert.equal(receipt.claim_retained, false);
+  });
+}
+
+test("health distinguishes readiness, stalled startup, missing terminals and cleanup without changing ownership", (t) => {
+  const f = fixture(t);
+  const job = f.start("worker");
+  const transport = { readSession: (target) => ({ ...target, text: "native terminal" }) };
+  assert.equal(native.jobHealth(f.root, job, { transport }).state, "starting");
+  const future = Date.parse(job.updated_at) + 120001;
+  assert.equal(native.jobHealth(f.root, job, { transport, now_ms: future }).state, "blocked");
+  assert.equal(jobs.getJob(f.root, job.id).process_stopped, false);
+  jobs.bindJob(f.root, job.id, 1, ADDRESS);
+  jobs.reportJob(f.root, job.id, 1, { status: "ready" });
+  assert.equal(native.jobHealth(f.root, job.id, { transport }).ready, true);
+  const missing = { readSession() { throw new Error("terminal missing"); } };
+  assert.equal(native.jobHealth(f.root, job.id, { transport: missing }).state, "blocked");
+  jobs.reportJob(f.root, job.id, 1, { status: "completed", result: "done" });
+  assert.equal(native.jobHealth(f.root, job.id, { transport }).state, "stopping");
+  assert.equal(jobs.getJob(f.root, job.id).status, "running");
+});
+
+test("bounded wait observes semantic readiness and stopped evidence without cancelling timed-out jobs", async (t) => {
+  const f = fixture(t);
+  f.start("worker");
+  const transport = { readSession: (target) => ({ ...target, text: "native terminal" }) };
+  const pending = await native.waitForJob(f.root, "worker", { until: "ready", timeout_ms: 1, transport });
+  assert.equal(pending.reached, false);
+  assert.equal(jobs.getJob(f.root, "worker").status, "launching");
+  jobs.bindJob(f.root, "worker", 1, ADDRESS);
+  jobs.reportJob(f.root, "worker", 1, { status: "ready" });
+  assert.equal((await native.waitForJob(f.root, "worker", { until: "ready", transport })).reached, true);
+  jobs.cancelJob(f.root, "worker", 1);
+  const finish = setTimeout(() => jobs.finishJob(f.root, "worker", 1, { status: "cancelled", process_stopped: true }), 20);
+  t.after(() => clearTimeout(finish));
+  const stopped = await native.waitForJob(f.root, "worker", { until: "stopped", timeout_ms: 1000, transport });
+  assert.equal(stopped.reached, true);
+  assert.equal(stopped.job.status, "cancelled");
+});
+
+test("a bounded wait cannot silently follow a replacement attempt", async (t) => {
+  const f = fixture(t);
+  f.start("worker");
+  const replace = setTimeout(() => {
+    jobs.finishJob(f.root, "worker", 1, { status: "failed", process_stopped: true });
+    jobs.claimJob(f.root, "worker", { max_active: 1 });
+  }, 20);
+  t.after(() => clearTimeout(replace));
+  const result = await native.waitForJob(f.root, "worker", { until: "stopped", timeout_ms: 1000 });
+  assert.equal(result.reached, false);
+  assert.match(result.note, /attempt changed/);
+  assert.equal(jobs.getJob(f.root, "worker").attempt, 2);
 });
 
 test("claim rejection creates no launch artifacts and never reaches the transport", (t) => {

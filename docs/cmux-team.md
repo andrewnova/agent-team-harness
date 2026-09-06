@@ -16,6 +16,8 @@ Startup prints a coordinator path and lead job ID. State defaults to `~/.local/s
 
 The same startup command reports an existing active lead instead of opening another one. To change its startup configuration, finish or cancel the existing jobs first. A stopped lead may be replaced only after its workers have finished or stopped. Existing messages stay addressed to their original job and attempt.
 
+Startup reports `starting`, `ready`, `stopping`, or `blocked` from durable readiness and the addressed terminal. A missing controller is replaced only after cmux confirms its absence in the saved workspace. Unknown allocation outcomes remain reserved; known returned UUIDs can be verified and adopted on retry. A blocked startup exits unsuccessfully and includes the reason.
+
 Use `--max-active`, `--codex-bin`, `--claude-bin`, `--codex-model`, and `--claude-model` to select capacity, executable paths and model IDs explicitly. `node scripts/start-team.js --help` lists the options. For example, when a shell wrapper selects an unintended CLI:
 
 ```sh
@@ -65,6 +67,7 @@ Example assignment:
 {
   "id": "backend-1",
   "feature_id": "example-feature",
+  "parent_job": "lead-1",
   "leader": "codex",
   "role": "backend",
   "model": "gpt-6-astra",
@@ -76,6 +79,8 @@ Example assignment:
 ```
 
 Create a `lead` job with the same `leader`, its chosen model, and a coordinator assignment. Keep it active while workers and reviewers return results. For a Fable reviewer use `role: "review"`, `leader: "codex"`, `writable: false`, its explicit Fable model ID, the feature worktree, and the required reviewer ID. For an Astra reviewer use `leader: "claude"` and its Astra model ID. Model availability is account-specific.
+
+`parent_job` names the lead that receives the final result and process-exit notice. If omitted, a new worker or reviewer inherits the single active matching lead. The parent attempt is fixed when the worker launches; a replacement lead never receives an old attempt's notification by accident.
 
 The lead launches ready independent jobs up to its configured `--max-active` cap and refills slots as jobs finish. Dependencies must already exist and finish successfully. Each simultaneous writer needs a private checkout; aliases and subdirectories of one checkout share the same writer claim. This command does not create a scheduler; child agents inside a job are governed by the native CLI, not by this cap.
 
@@ -143,9 +148,19 @@ Eligibility means ready for target integration. It does not merge, publish, or d
 
 ## Stop and diagnose
 
-`team_report` reports a semantic result. The supervising wrapper subsequently stops the native process and observed descendants before releasing its capacity and checkout claim. It tracks tool servers that create separate process groups. Agents must not deliberately daemonize or launch work that outlives their assignment.
+`team_report` stores a semantic result. The supervising wrapper stops the native process and observed descendants, releases ownership, then sends the assigned lead a durable `job_stopped` notification referencing that result. A crash without a semantic result also produces a stopped-job notice. Repeating collection does not duplicate the notice. This ordering lets the lead act on one completion wake without racing process cleanup. Agents must not deliberately daemonize or launch work that outlives their assignment.
 
 `job cancel <id>` requests termination; it does not itself declare the process stopped. The owned terminal stays available for inspection after exit. Local launch, failure, and exit receipts live under `.agent-team/sessions/<job>/<attempt>/`; job records retain previous attempts.
+
+Use the public status and bounded waits instead of a custom polling script:
+
+```sh
+node /absolute/harness/agent-team/src/cli.js --cwd /absolute/coordinator team status
+node /absolute/harness/agent-team/src/cli.js --cwd /absolute/coordinator team job wait backend-1 --until ready --timeout-ms 30000
+node /absolute/harness/agent-team/src/cli.js --cwd /absolute/coordinator team job wait backend-1 --until stopped --timeout-ms 30000
+```
+
+A wait observes one attempt and leaves the job unchanged when it times out. Startup without readiness becomes visibly blocked after two minutes; inspect the native prompt or startup error before deciding to retry. Validation failures before native allocation release their unused claim. Uncertain native allocations retain it. The wrapper claims each attempt once, handles cancellation before spawn, and records failures during launch and cleanup.
 
 Uncertain allocation, lost surface identity, unobservable descendants, stale results, and locked/corrupt state fail visibly. Never clear a writer claim solely because a pane disappeared. Inspect and stop the exact owned processes before repairing coordinator state or retrying a job. Native session IDs are recorded when provided by the runtime; cmux UUIDs, process identity, and attempts always govern addressing.
 
