@@ -934,6 +934,7 @@ async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   argv = resolved.argv;
   cwd = resolved.cwd;
   const [command, subcommand, ...rest] = argv;
+  if (command === "team") return require("./team/cli").main(argv.slice(1), cwd);
   if (!command || wantsHelp(argv)) {
     process.stdout.write(usage());
     return 0;

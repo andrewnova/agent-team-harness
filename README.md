@@ -8,6 +8,8 @@ Created and maintained by Andrew Guzman.
 
 Agent Team Harness is a local CLI for running Codex and Claude Code as visible, proof-gated coding teammates.
 
+The opt-in [`agent-team team` workflow](docs/cmux-team.md) groups native agents as tabs inside one cmux project. Either model can lead; Astra implements backend work, Fable implements frontend work, and the opposite model supplies independent review. It reuses the mailbox without starting the legacy daemon.
+
 Codex owns the harness, task state, merge gates, and proof. Claude Code is the visible teammate for frontend/UI/UX work, long-context critique, and cross-model review. Communication is mailbox-first and MCP-woken: Claude-bound work uses the first-party Claude MCP outbox, Claude-to-Codex traffic uses the first-party Codex MCP wake adapter, and semantic mailbox replies are the completion truth.
 
 ![Agent Team Harness flow](assets/agent-team-flow.png)
