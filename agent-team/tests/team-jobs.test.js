@@ -21,6 +21,19 @@ function fixture(t) {
   return { root, create, start };
 }
 
+test("a new review round starts a fresh attempt after the previous process stops", (t) => {
+  const { root, start } = fixture(t);
+  start("reviewer", { role: "review" });
+  jobs.reportJob(root, "reviewer", 1, { status: "completed", result: "round one" });
+  assert.throws(() => jobs.claimJob(root, "reviewer", { max_active: 2 }), /cannot be claimed/);
+  jobs.finishJob(root, "reviewer", 1, { status: "completed", process_stopped: true });
+  const next = jobs.claimJob(root, "reviewer", { max_active: 2 });
+  assert.equal(next.attempt, 2);
+  assert.equal(next.reported_result, undefined);
+  assert.equal(next.previous_attempts[0].reported_result.result, "round one");
+  assert.throws(() => jobs.reportJob(root, "reviewer", 1, { status: "completed", result: "late" }), /stale/);
+});
+
 test("routing is symmetric and explicit; invalid assignments cannot mutate routing", (t) => {
   const { root, create } = fixture(t);
   for (const leader of ["codex", "claude"]) {

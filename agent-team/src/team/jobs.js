@@ -172,7 +172,8 @@ function claimJob(root, id, { max_active } = {}) {
   if (!Number.isSafeInteger(max_active) || max_active < 1) throw new Error("max_active must be a positive integer");
   return locked(root, (loc) => {
     const job = load(loc, id);
-    if (job.status !== "queued" && !(["failed", "cancelled"].includes(job.status) && job.process_stopped === true)) throw new Error(`job cannot be claimed: ${id} (${job.status})`);
+    const retryable = ["failed", "cancelled"].includes(job.status) || (job.status === "completed" && job.role === "review");
+    if (job.status !== "queued" && !(retryable && job.process_stopped === true)) throw new Error(`job cannot be claimed: ${id} (${job.status})`);
     for (const dep of job.dependencies) {
       if (load(loc, dep).status !== "completed") throw new Error(`dependency is not completed: ${dep}`);
     }
