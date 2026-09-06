@@ -6,11 +6,13 @@ const { createTransport } = require("./cmux");
 const project = require("./project");
 
 const usage = `agent-team --cwd <coordinator-root> team <command>
+  status
   project create --title <name> | show
   project attach --workspace <uuid> --surface <uuid> [--title <name>]
   job create --json <file> | list | show <id>
   job launch <id> --max-active <n> [--codex-bin <path>] [--claude-bin <path>]
   job cancel <id> | read <id> | inbox <id>
+  job wait <id> --until ready|stopped [--timeout-ms <1..60000>]
   job send <id> --json <file> | wake <id> --message <message-id>
   feature create --json <file>
   feature assemble <id> --json <file>
@@ -25,7 +27,9 @@ async function main(args, root) {
   const value = (flag) => { const i = args.indexOf(flag); if (i < 0 || !args[i + 1]) throw new Error(`${flag} is required`); return args[i + 1]; };
   const json = () => JSON.parse(fs.readFileSync(value("--json"), "utf8"));
   let result;
-  if (entity === "project") {
+  if (entity === "status") {
+    result = { project: project.getProject(root), jobs: jobs.listJobs(root).map((job) => native.jobHealth(root, job)) };
+  } else if (entity === "project") {
     if (operation === "show") result = project.getProject(root);
     else if (operation === "create") result = project.ensureProject(root, { title: value("--title") });
     else if (operation === "attach") result = project.attachProject(root, {
@@ -36,6 +40,9 @@ async function main(args, root) {
     if (operation === "create") result = jobs.createJob(root, json());
     else if (operation === "list") result = jobs.listJobs(root);
     else if (operation === "show") result = jobs.getJob(root, id);
+    else if (operation === "wait") result = await native.waitForJob(root, id, {
+      until: value("--until"), ...(args.includes("--timeout-ms") ? { timeout_ms: Number(value("--timeout-ms")) } : {})
+    });
     else if (operation === "launch") result = native.launchJob(root, id, {
       max_active: Number(value("--max-active")),
       ...(args.includes("--codex-bin") ? { codex_bin: value("--codex-bin") } : {}),
@@ -65,7 +72,8 @@ async function main(args, root) {
     else throw new Error("unknown team feature operation");
   } else throw new Error("unknown team command");
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  return (operation === "status" && result.eligible === false) || (operation === "check" && result.status !== "completed") ? 1 : 0;
+  return (entity === "status" && result.jobs.some((job) => job.state === "blocked")) ||
+    (operation === "wait" && !result.reached) || (operation === "status" && result.eligible === false) || (operation === "check" && result.status !== "completed") ? 1 : 0;
 }
 
 module.exports = { main, usage };

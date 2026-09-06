@@ -113,7 +113,8 @@ for (const leader of ["codex", "claude"]) {
         assert.equal(fs.statSync(childConfig).mode & 0o777, 0o600);
         assert.equal(launch.session_id, undefined, "Codex identity must come from the actual session");
       } else {
-        assert.equal(option(flags, "--permission-mode"), writable ? "acceptEdits" : "dontAsk");
+        if (writable) assert.equal(flags.includes("--permission-mode"), false);
+        else assert.equal(option(flags, "--permission-mode"), "dontAsk");
         const settings = JSON.parse(option(flags, "--settings"));
         assert.equal(option(flags, "--effort"), "medium");
         assert.equal(settings.switchModelsOnFlag, false);
@@ -169,7 +170,7 @@ test("launch binds only the allocated surface and requires an independent ready 
     assert.equal(launchData(request.command).job_id, "writer");
     return { ...ADDRESS, ready: true, status: "running" };
   });
-  const job = native.launchJob(f.root, "writer", { max_active: 1, transport: { createSession } });
+  const job = native.launchJob(f.root, "writer", { max_active: 1, transport: { createSession, readSession: (target) => ({ ...target, text: "controller" }) } });
   assert.equal(createSession.mock.callCount(), 1);
   assert.equal(job.status, "launching");
   assert.equal(job.ready_at, undefined);
@@ -184,14 +185,14 @@ for (const failure of ["allocation", "binding"]) {
     const f = fixture(t);
     f.create("writer", { writable: true });
     f.create("next", { writable: true });
-    const allocationError = Object.assign(new Error("fixture allocation response lost"), { session: ADDRESS });
+    const allocationError = Object.assign(new Error("fixture allocation response lost"), { session: ADDRESS, launch_uncertain: true });
     const createSession = t.mock.fn(() => {
       if (failure === "allocation") throw allocationError;
       // The runner can bind before workspace.create returns a conflicting response.
       jobs.bindJob(f.root, "writer", 1, ADDRESS);
       return { ...ADDRESS, surface_id: "33333333-3333-4333-8333-333333333333" };
     });
-    assert.throws(() => native.launchJob(f.root, "writer", { max_active: 2, transport: { createSession } }),
+    assert.throws(() => native.launchJob(f.root, "writer", { max_active: 2, transport: { createSession, readSession: (target) => ({ ...target, text: "controller" }) } }),
       failure === "allocation" ? /allocation response lost/ : /already bound/);
     assert.equal(createSession.mock.callCount(), 1);
     const job = jobs.getJob(f.root, "writer");
@@ -222,6 +223,200 @@ test("pre-launch configuration error proves no process started and releases the 
   assert.match(job.result, /EEXIST/);
   assert.equal(fs.readFileSync(path.join(directory, "launch.json"), "utf8"), "existing launch evidence");
   assert.equal(jobs.claimJob(f.root, "next", { max_active: 1 }).status, "launching");
+});
+
+for (const phase of ["controller", "session preflight"]) {
+  test(`${phase} failure releases a job that never reached native allocation`, (t) => {
+    const f = fixture(t);
+    f.create("writer", { writable: true });
+    f.create("next", { writable: true });
+    const transport = {
+      readSession: (target) => {
+        if (phase === "controller") throw Object.assign(new Error("controller allocation outcome unknown"), { launch_uncertain: true });
+        return { ...target, text: "controller" };
+      },
+      createSession: () => { throw new Error("session pane validation failed before allocation"); }
+    };
+    assert.throws(() => native.launchJob(f.root, "writer", { max_active: 1, transport }));
+    const failed = jobs.getJob(f.root, "writer");
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.process_stopped, true);
+    assert.equal(jobs.claimJob(f.root, "next", { max_active: 1 }).status, "launching");
+    const receipt = JSON.parse(fs.readFileSync(path.join(f.root, ".agent-team/sessions/writer/1/launch-error.json")));
+    assert.equal(receipt.claim_retained, false);
+  });
+}
+
+test("health distinguishes readiness, stalled startup, missing terminals and cleanup without changing ownership", (t) => {
+  const f = fixture(t);
+  const job = f.start("worker");
+  const transport = { readSession: (target) => ({ ...target, text: "native terminal" }) };
+  assert.equal(native.jobHealth(f.root, job, { transport }).state, "starting");
+  const future = Date.parse(job.updated_at) + 120001;
+  assert.equal(native.jobHealth(f.root, job, { transport, now_ms: future }).state, "blocked");
+  assert.equal(jobs.getJob(f.root, job.id).process_stopped, false);
+  jobs.bindJob(f.root, job.id, 1, ADDRESS);
+  jobs.reportJob(f.root, job.id, 1, { status: "ready" });
+  assert.equal(native.jobHealth(f.root, job.id, { transport }).ready, true);
+  const missing = { readSession() { throw new Error("terminal missing"); } };
+  assert.equal(native.jobHealth(f.root, job.id, { transport: missing }).state, "blocked");
+  jobs.reportJob(f.root, job.id, 1, { status: "completed", result: "done" });
+  assert.equal(native.jobHealth(f.root, job.id, { transport }).state, "stopping");
+  assert.equal(jobs.getJob(f.root, job.id).status, "running");
+});
+
+test("health never treats a dead or reused supervising process as a ready native job", (t) => {
+  const f = fixture(t);
+  f.start("worker");
+  const identity = { pid: 123456789, started: "original-start" };
+  jobs.claimRunner(f.root, "worker", 1, identity.pid, identity);
+  jobs.bindJob(f.root, "worker", 1, ADDRESS);
+  jobs.reportJob(f.root, "worker", 1, { status: "ready" });
+  const options = { transport: { readSession: (target) => ({ ...target, text: "retained terminal" }) } };
+  assert.equal(native.jobHealth(f.root, "worker", { ...options, read_processes: () => [identity] }).ready, true);
+  for (const rows of [[], [{ ...identity, started: "unrelated-reused-pid" }]]) {
+    const health = native.jobHealth(f.root, "worker", { ...options, read_processes: () => rows });
+    assert.equal(health.ready, false);
+    assert.equal(health.state, "blocked");
+  }
+  assert.equal(native.jobHealth(f.root, "worker", { ...options, read_processes() { throw new Error("inventory unavailable"); } }).state, "blocked");
+  assert.equal(jobs.getJob(f.root, "worker").process_stopped, false);
+});
+
+function nativeHealthFixture(t) {
+  const f = fixture(t);
+  f.start("worker", { writable: true });
+  f.create("next", { writable: true });
+  const runner = { pid: 123456789, parent: 1, group: 123456789, started: "runner-start" };
+  const child = { pid: 123456790, parent: runner.pid, group: 123456790, started: "native-start" };
+  jobs.claimRunner(f.root, "worker", 1, runner.pid, runner);
+  jobs.bindJob(f.root, "worker", 1, { ...ADDRESS, pid: child.pid });
+  const job = jobs.reportJob(f.root, "worker", 1, { status: "ready" });
+  const directory = native.attemptDirectory(f.root, job);
+  const options = {
+    transport: { readSession: (target) => ({ ...target, text: "retained native terminal" }) },
+    read_processes: () => [runner, child]
+  };
+  assert.equal(native.jobHealth(f.root, job.id, options).ready, true, "control has a verified runner and its live native child");
+  const assertOwnership = () => {
+    assert.deepEqual(jobs.getJob(f.root, job.id), job, "health must not mutate the persisted job");
+    assert.throws(() => jobs.claimJob(f.root, "next", { max_active: 2 }), /writer/, "health must retain checkout ownership");
+  };
+  const writeExit = (process_stopped) => fs.writeFileSync(path.join(directory, "exit.json"), JSON.stringify({
+    job_id: job.id, attempt: job.attempt, runner_pid: runner.pid, pid: child.pid,
+    code: 0, signal: null, process_stopped, observed_processes: [child],
+    remaining: process_stopped ? [] : [child], stopped_at: new Date().toISOString()
+  }));
+  return { ...f, job, runner, child, directory, options, assertOwnership, writeExit };
+}
+
+for (const process_stopped of [true, false]) {
+  test(`health rejects a retained ready session with exit.json process_stopped=${process_stopped}`, (t) => {
+    const f = nativeHealthFixture(t);
+    f.writeExit(process_stopped);
+    const health = native.jobHealth(f.root, f.job.id, f.options);
+    assert.equal(health.ready, false);
+    assert.ok(["stopping", "blocked"].includes(health.state), health.state);
+    assert.match(health.note, /exit/i);
+    f.assertOwnership();
+  });
+}
+
+for (const state of ["missing", "reparented"]) {
+  test(`health blocks a ${state} native child despite a verified live runner and retained terminal`, (t) => {
+    const f = nativeHealthFixture(t);
+    const rows = state === "missing" ? [f.runner] : [f.runner, { ...f.child, parent: 1 }];
+    const health = native.jobHealth(f.root, f.job.id, { ...f.options, read_processes: () => rows });
+    assert.equal(health.ready, false);
+    assert.equal(health.state, "blocked");
+    assert.match(health.note, /native|child|process|pid/i);
+    f.assertOwnership();
+  });
+}
+
+for (const file of ["exit.json", "launch-error.json", "mcp-error.json"]) {
+  for (const failure of ["corrupt", "malformed error", "inaccessible", "directory", "dangling symlink"]) {
+    test(`health visibly blocks ${failure} ${file} after ready without throwing`, (t) => {
+      const f = nativeHealthFixture(t);
+      const evidence = path.join(f.directory, file);
+      if (failure === "directory") fs.mkdirSync(evidence);
+      else if (failure === "dangling symlink") fs.symlinkSync(path.join(f.directory, "missing-receipt.json"), evidence);
+      else if (failure === "malformed error") fs.writeFileSync(evidence, JSON.stringify({ error: { toString: null }, process_stopped: true }));
+      else fs.writeFileSync(evidence, failure === "corrupt" ? "{broken" : JSON.stringify({ error: "fixture failure" }));
+      if (failure === "inaccessible") {
+        const read = fs.readFileSync;
+        t.mock.method(fs, "readFileSync", function (target, ...args) {
+          if (target === evidence) throw Object.assign(new Error("fixture evidence access denied"), { code: "EACCES" });
+          return read.call(this, target, ...args);
+        });
+      }
+      let health;
+      assert.doesNotThrow(() => { health = native.jobHealth(f.root, f.job.id, f.options); });
+      assert.equal(health.ready, false);
+      assert.equal(health.state, "blocked");
+      assert.ok(health.note.includes(file), `diagnostic must identify ${file}: ${health.note}`);
+      f.assertOwnership();
+    });
+  }
+}
+
+test("health blocks an mcp-error.json written after the native job reported ready", (t) => {
+  const f = nativeHealthFixture(t);
+  fs.writeFileSync(path.join(f.directory, "mcp-error.json"), JSON.stringify({ error: "fixture MCP disconnected" }));
+  const health = native.jobHealth(f.root, f.job.id, f.options);
+  assert.equal(health.ready, false);
+  assert.equal(health.state, "blocked");
+  assert.match(health.note, /mcp-error\.json/);
+  f.assertOwnership();
+});
+
+for (const evidence of ["stopped exit", "unstopped exit", "missing child"]) {
+  test(`bounded wait until ready rejects a retained session with ${evidence}`, { timeout: 2000 }, async (t) => {
+    const f = nativeHealthFixture(t);
+    if (evidence !== "missing child") f.writeExit(evidence === "stopped exit");
+    t.mock.method(require("../src/team/processes"), "inventory", () =>
+      evidence === "missing child" ? [f.runner] : [f.runner, f.child]);
+    const result = await native.waitForJob(f.root, f.job.id, {
+      until: "ready", timeout_ms: 10, transport: f.options.transport
+    });
+    assert.equal(result.reached, false);
+    assert.equal(result.until, "ready");
+    assert.equal(result.health.ready, false);
+    assert.ok(["stopping", "blocked"].includes(result.health.state), result.health.state);
+    f.assertOwnership();
+  });
+}
+
+test("bounded wait observes semantic readiness and stopped evidence without cancelling timed-out jobs", async (t) => {
+  const f = fixture(t);
+  f.start("worker");
+  const transport = { readSession: (target) => ({ ...target, text: "native terminal" }) };
+  const pending = await native.waitForJob(f.root, "worker", { until: "ready", timeout_ms: 1, transport });
+  assert.equal(pending.reached, false);
+  assert.equal(jobs.getJob(f.root, "worker").status, "launching");
+  jobs.bindJob(f.root, "worker", 1, ADDRESS);
+  jobs.reportJob(f.root, "worker", 1, { status: "ready" });
+  assert.equal((await native.waitForJob(f.root, "worker", { until: "ready", transport })).reached, true);
+  jobs.cancelJob(f.root, "worker", 1);
+  const finish = setTimeout(() => jobs.finishJob(f.root, "worker", 1, { status: "cancelled", process_stopped: true }), 20);
+  t.after(() => clearTimeout(finish));
+  const stopped = await native.waitForJob(f.root, "worker", { until: "stopped", timeout_ms: 1000, transport });
+  assert.equal(stopped.reached, true);
+  assert.equal(stopped.job.status, "cancelled");
+});
+
+test("a bounded wait cannot silently follow a replacement attempt", async (t) => {
+  const f = fixture(t);
+  f.start("worker");
+  const replace = setTimeout(() => {
+    jobs.finishJob(f.root, "worker", 1, { status: "failed", process_stopped: true });
+    jobs.claimJob(f.root, "worker", { max_active: 1 });
+  }, 20);
+  t.after(() => clearTimeout(replace));
+  const result = await native.waitForJob(f.root, "worker", { until: "stopped", timeout_ms: 1000 });
+  assert.equal(result.reached, false);
+  assert.match(result.note, /attempt changed/);
+  assert.equal(jobs.getJob(f.root, "worker").attempt, 2);
 });
 
 test("claim rejection creates no launch artifacts and never reaches the transport", (t) => {
@@ -318,12 +513,15 @@ function reviewFixture(t, leader = "codex") {
 
 test("review launch includes the frozen integrated diff and prior findings, and refuses changed source", (t) => {
   const f = reviewFixture(t);
-  const job = f.startReview();
+  const job = f.startReview({ cwd: f.cwd });
   const command = native.buildNativeCommand(f.root, job, { claude_bin: "claude-fixture-only" });
   const launch = launchData(command);
   assert.match(launch.argv.at(-1), /Frozen candidate:/);
   assert.ok(launch.argv.at(-1).includes(f.result.candidate.commit));
   assert.ok(fs.existsSync(path.join(command.directory, "candidate.diff")));
+  assert.deepEqual(launch.argv.flatMap((flag, index) => flag === "--add-dir" ? [launch.argv[index + 1]] : []), [command.directory, f.feature.cwd]);
+  assert.equal(option(launch.argv, "--permission-mode"), "dontAsk");
+  assert.equal(option(launch.argv, "--tools").split(",").includes("Write"), false);
   jobs.finishJob(f.root, job.id, 1, { status: "failed", process_stopped: true });
   const retry = jobs.claimJob(f.root, job.id, { max_active: 1 });
   fs.writeFileSync(path.join(f.feature.cwd, "unreviewed.txt"), "new source");

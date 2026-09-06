@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const jobs = require("./jobs");
-const { trackProcesses } = require("./processes");
+const { trackProcesses, inventory } = require("./processes");
 
 function groupExists(pid) {
   try { process.kill(-pid, 0); return true; } catch (error) {
@@ -14,74 +14,128 @@ function groupExists(pid) {
 
 // The wrapper runs inside the owned cmux terminal. Only this parent may turn
 // native child exit + process-group disappearance into released job ownership.
-async function runSession(file) {
+async function runSession(file, { onResult = notifyResult } = {}) {
   const launch = JSON.parse(fs.readFileSync(file, "utf8"));
   const { root, job_id, attempt } = launch;
   const directory = path.dirname(file);
-  const original = jobs.getJob(root, job_id);
-  if (original.attempt !== attempt || original.status !== "launching") throw new Error("native launch is stale or already started");
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const workspace_id = process.env.CMUX_WORKSPACE_ID?.toLowerCase();
-  const surface_id = process.env.CMUX_SURFACE_ID?.toLowerCase();
-  if (!uuid.test(workspace_id || "") || !uuid.test(surface_id || "")) throw new Error("native runner must be launched inside its cmux workspace");
-  jobs.bindJob(root, job_id, attempt, { workspace_id, surface_id, ...(launch.session_id ? { session_id: launch.session_id } : {}) });
-  const env = { ...process.env };
-  // Tab initial commands may receive only the system PATH. Codex's installed
-  // JavaScript launcher uses /usr/bin/env node; use this validated Node runtime.
-  env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH || ""}`;
-  // Never let a child mistake the coordinating Codex session for its own.
-  delete env.CODEX_THREAD_ID;
-  delete env.CLAUDECODE;
-  const child = spawn(launch.argv[0], launch.argv.slice(1), { cwd: launch.cwd, env, stdio: "inherit", detached: true });
+  let identity;
+  let inventoryError;
+  try { identity = inventory().find((row) => row.pid === process.pid); } catch (cause) { inventoryError = cause; }
+  jobs.claimRunner(root, job_id, attempt, process.pid, identity);
+  let child;
+  let exited;
+  let exit = { code: null, signal: null };
   let error;
-  child.on("error", (cause) => { error = cause; });
-  if (child.pid) jobs.bindJob(root, job_id, attempt, { workspace_id, surface_id, pid: child.pid });
   let stopAt;
+  let stoppedForReport = false;
   let runnerError;
-  const descendants = child.pid ? trackProcesses(child.pid) : null;
-  try { descendants?.scan(); } catch (cause) { runnerError = cause; }
+  let descendants;
+  const cleanupWarnings = [];
+  const signalOwnedProcess = (pid, signal, operation) => {
+    try { process.kill(pid, signal); } catch (cause) {
+      if (cause.code !== "ESRCH") cleanupWarnings.push({ operation, pid, signal, code: cause.code, message: cause.message, at: new Date().toISOString() });
+    }
+  };
   const stop = () => {
-    if (!child.pid) return;
+    if (!child?.pid) return;
     if (!stopAt) stopAt = Date.now();
     const signal = Date.now() - stopAt > 5000 ? "SIGKILL" : "SIGTERM";
     try { descendants?.stop(signal); } catch (cause) { runnerError = cause; }
-    try { process.kill(-child.pid, signal); } catch (cause) {
-      if (cause.code !== "ESRCH") runnerError = cause;
-    }
+    signalOwnedProcess(-child.pid, signal, "process_group_signal");
   };
   const timer = setInterval(() => {
     try {
       descendants?.scan();
       const current = jobs.getJob(root, job_id);
       if (current.attempt !== attempt) throw new Error("native attempt changed while process is alive");
-      if (current.status === "cancelling" || (current.reported_result && Date.now() - Date.parse(current.reported_result.reported_at) > 1000)) stop();
+      if (runnerError || current.status === "cancelling") stop();
+      else if (current.reported_result && Date.now() - Date.parse(current.reported_result.reported_at) > 1000) {
+        stoppedForReport = true;
+        stop();
+      }
     } catch (cause) { runnerError = cause; stop(); }
   }, 500);
-  const onSignal = () => { try { jobs.cancelJob(root, job_id, attempt); } finally { stop(); } };
+  const onSignal = () => { try { jobs.cancelJob(root, job_id, attempt); } catch (cause) { runnerError = cause; } finally { stop(); } };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
-  const exit = await new Promise((resolve) => child.on("close", (code, signal) => resolve({ code, signal })));
-  clearInterval(timer);
-  process.removeListener("SIGTERM", onSignal);
-  process.removeListener("SIGINT", onSignal);
-  // Clean up descendants after a natural parent exit, too.
-  if (child.pid && (groupExists(child.pid) || descendants.scan().length)) stop();
-  const deadline = Date.now() + 7000;
-  while (child.pid && (groupExists(child.pid) || descendants.scan().length) && Date.now() < deadline) {
+  process.on("SIGHUP", onSignal);
+  try {
+    if (inventoryError || !identity) throw inventoryError || new Error("cannot identify the native runner before launch");
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const workspace_id = process.env.CMUX_WORKSPACE_ID?.toLowerCase();
+    const surface_id = process.env.CMUX_SURFACE_ID?.toLowerCase();
+    if (!uuid.test(workspace_id || "") || !uuid.test(surface_id || "")) throw new Error("native runner must be launched inside its cmux workspace");
+    jobs.bindJob(root, job_id, attempt, { workspace_id, surface_id, ...(launch.session_id ? { session_id: launch.session_id } : {}) });
+    // Cancellation can win the race with the terminal's initial command.
+    if (jobs.getJob(root, job_id).status !== "cancelling") {
+      const env = { ...process.env };
+      env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH || ""}`;
+      delete env.CODEX_THREAD_ID;
+      delete env.CLAUDECODE;
+      child = spawn(launch.argv[0], launch.argv.slice(1), { cwd: launch.cwd, env, stdio: "inherit", detached: true });
+      child.on("error", (cause) => { error = cause; });
+      exited = new Promise((resolve) => child.on("close", (code, signal) => resolve({ code, signal })));
+      if (child.pid) {
+        // Signal failures may recover, but inventory failures remain fatal.
+        // Completion still requires both the final inventory and group proof.
+        descendants = trackProcesses(child.pid, { signal: (pid, signal) => signalOwnedProcess(pid, signal, "descendant_signal") });
+        descendants.scan();
+        jobs.bindJob(root, job_id, attempt, { workspace_id, surface_id, pid: child.pid });
+      }
+      exit = await exited;
+    }
+  } catch (cause) {
+    runnerError = cause;
     stop();
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Keep the escalation timer alive even when binding fails after spawn.
+    if (exited) exit = await exited;
+  } finally {
+    clearInterval(timer);
+    process.removeListener("SIGTERM", onSignal);
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGHUP", onSignal);
   }
-  const remaining = descendants?.scan() || [];
-  const process_stopped = !child.pid || (!groupExists(child.pid) && !remaining.length);
-  const receipt = { job_id, attempt, pid: child.pid, ...exit, process_stopped, observed_processes: descendants?.identities() || [], remaining,
+  let remaining = [];
+  let process_stopped = !child?.pid;
+  try {
+    const deadline = Date.now() + 7000;
+    while (child?.pid && (groupExists(child.pid) || descendants.scan().length) && Date.now() < deadline) {
+      stop();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    remaining = descendants?.scan() || [];
+    process_stopped = !child?.pid || (!groupExists(child.pid) && !remaining.length);
+  } catch (cause) {
+    runnerError = cause;
+    stop();
+  }
+  const receipt = { job_id, attempt, runner_pid: process.pid, pid: child?.pid, ...exit, process_stopped, observed_processes: descendants?.identities() || [], remaining,
+    stopped_for_report: stoppedForReport, cleanup_warnings: cleanupWarnings,
     error: error?.message || runnerError?.message, stopped_at: new Date().toISOString() };
   fs.writeFileSync(path.join(directory, "exit.json"), JSON.stringify(receipt, null, 2), { mode: 0o600 });
   if (!process_stopped) throw new Error("native descendants still alive; checkout claim retained");
   const current = jobs.getJob(root, job_id);
-  const status = current.status === "cancelling" ? "cancelled" : error || runnerError ? "failed" : current.reported_result?.status || "failed";
-  jobs.finishJob(root, job_id, attempt, { status, process_stopped, result: receipt.error || current.reported_result?.result || `Native session exited without a semantic result (${exit.code ?? exit.signal})` });
+  // Native Claude handles supervisor SIGTERM and exits with 128 + SIGTERM.
+  // Accept that observed convention only after report-driven supervisor stop.
+  const expectedReportStop = stoppedForReport && ((exit.code === null && ["SIGTERM", "SIGKILL"].includes(exit.signal)) ||
+    (exit.code === 143 && exit.signal === null));
+  const unexpectedExit = exit.code !== 0 && !expectedReportStop;
+  const status = current.status === "cancelling" ? "cancelled" : error || runnerError || unexpectedExit ? "failed" : current.reported_result?.status || "failed";
+  receipt.status = status;
+  if (status === "failed" && unexpectedExit) receipt.error ||= `Native session exited unexpectedly (${exit.code ?? exit.signal ?? "no process"}); its result is not accepted.`;
+  jobs.finishJob(root, job_id, attempt, { status, process_stopped, result: receipt.error || current.reported_result?.result ||
+    (status === "cancelled" ? "Native job cancelled." : `Native session exited without a semantic result (${exit.code ?? exit.signal})`) });
+  try { receipt.delivery = await onResult(root, job_id, attempt); }
+  catch (cause) { receipt.delivery = { status: "failed", error: cause.message }; }
+  fs.writeFileSync(path.join(directory, "exit.json"), JSON.stringify(receipt, null, 2), { mode: 0o600 });
   process.stdout.write(`\nAgent Team job ${job_id} ${status}; process stopped. Evidence: ${directory}\n`);
   return receipt;
+}
+
+function notifyResult(root, job_id, attempt) {
+  const notice = jobs.jobFinishedMessage(root, job_id, attempt);
+  if (!notice.message) return { status: "pending", reason: notice.reason };
+  return { message_id: notice.message.id, ...require("./native").wakeMessage(root, notice.message) };
 }
 
 function retainTerminal() {
@@ -96,4 +150,4 @@ if (require.main === module) runSession(process.argv[2]).then(retainTerminal).ca
   process.exitCode = 1;
   retainTerminal();
 });
-module.exports = { runSession, groupExists };
+module.exports = { runSession, groupExists, notifyResult };

@@ -127,7 +127,11 @@ function createTransport({ cmux_bin, run = spawnSync } = {}) {
   function terminal(surfaces, surface_id) {
     const matches = surfaces.filter((surface) => surface.id === surface_id);
     if (matches.length !== 1 || matches[0].type !== "terminal") {
-      throw new Error("Addressed terminal does not belong to this workspace");
+      const error = new Error("Addressed terminal does not belong to this workspace");
+      // Only a validated inventory proves absence. Connection failures, wrong
+      // workspace responses and a changed surface type must never trigger repair.
+      if (!matches.length) error.code = "CMUX_SURFACE_NOT_FOUND";
+      throw error;
     }
     return matches[0];
   }

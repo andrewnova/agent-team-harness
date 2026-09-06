@@ -2,7 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { encodeFrame, decodeFrames } = require("./claudeServer");
-const { getJob, bindJob, jobInbox, sendJobMessage, reportJob } = require("../team/jobs");
+const { getJob, bindJob, jobInbox, sendJobMessage, reportJob, reportJobResult } = require("../team/jobs");
 
 const string = { type: "string", minLength: 1 };
 const jobId = { ...string, pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$" };
@@ -114,6 +114,12 @@ function dispatchTool(context, name, args = {}, requestMeta) {
   if (args.to_job && args.in_reply_to) throw new Error("report accepts either to_job or in_reply_to, not both");
   if (args.status === "ready" && boundJob.status === "cancelling") throw new Error("cancelling job cannot report readiness");
   if (args.status !== "ready" && (!args.result || (!args.to_job && !args.in_reply_to))) throw new Error("terminal report requires result and to_job or in_reply_to");
+  if (args.status !== "ready") {
+    // Errors remain retryable tool errors. Even a partially committed report
+    // must never invoke afterSend while the worker process still owns its job.
+    const result = reportJobResult(context.root, context.job_id, context.attempt, args);
+    return { ok: true, ...result, delivery: { status: "pending", reason: "waiting_for_process_stop" } };
+  }
   let message;
   if (args.to_job || args.in_reply_to) {
     message = send({
@@ -124,7 +130,7 @@ function dispatchTool(context, name, args = {}, requestMeta) {
   }
   let job;
   try {
-    job = reportJob(context.root, context.job_id, context.attempt, { status: args.status, result: args.result });
+    job = reportJob(context.root, context.job_id, context.attempt, { status: args.status, result: args.result, message_id: message?.id });
   } catch (error) {
     if (!message) throw error;
     return { ok: true, report_error: error.message, ...afterSend(context, message) };
