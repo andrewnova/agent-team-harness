@@ -1,18 +1,40 @@
 # Experimental native teams in cmux
 
-For bounded coding or review work, use [direct native sessions](direct-sessions.md). This coordinated path is an explicit experiment: the [September 6 trial](native-workflow-findings.md) did not reach complete feature acceptance within twenty minutes.
+For bounded coding or review work, use [direct native sessions](direct-sessions.md), with the optional [team skill](../README.md#invoke-the-team-skill) for native agents and a fresh review. This coordinated path is an explicit experiment: the [September 6 trial](native-workflow-findings.md) did not reach complete feature acceptance within twenty minutes.
 
 `agent-team team` runs parallel native Codex and Claude Code sessions inside one cmux project. It reuses the harness mailbox and local state without starting the legacy daemon. A lead owns the brief, assignments, repair decisions, and acceptance.
 
 ## Start a team
 
-Install cmux, Git, Node.js >=22.13.0, Codex CLI >=0.153.4, and Claude Code >=2.1.263 on macOS; those are the native CLI versions verified with this workflow. Sign in to both coding CLIs and confirm account access to the chosen models. From a terminal inside cmux, in this harness clone:
+Install cmux, Git, Node.js >=22.13.0, Codex CLI >=0.153.4, and Claude Code >=2.1.263 on macOS; those are the native CLI versions verified with this workflow. Sign in to both coding CLIs and confirm account access to the chosen models. The target must be an existing Git repository.
+
+### With the team skill
+
+After the [one-time standalone skill installation](../README.md#invoke-the-team-skill), invoke it in your target project with a leading `cmux`:
+
+| App | Open a team ready for a task |
+| --- | --- |
+| Claude Code | `/team cmux` |
+| Codex desktop | Type `@team`, select the skill suggestion, then type `cmux` |
+| Codex CLI | `$team cmux` |
+
+The skill starts or reuses that project's team and selects the current native runtime as lead unless you choose another. It checks the returned coordinator, lead job, and health, then waits for native readiness. With no task, it leaves the ready lead waiting for you. Append a task, such as `/team cmux Build the settings page`, to enter it once in that exact lead's native terminal after readiness and confirm its acknowledgment.
+
+Startup must execute inside a cmux terminal. From a desktop session, the agent uses available authorized native computer control to open cmux and run the starter there. If that control is unavailable, it gives you the exact command to run in a cmux terminal. Native authentication, trust, and permissions remain in force; complete any blocking native prompts before activation can finish.
+
+### Direct startup without the skill
+
+From a terminal inside cmux, clone the harness or use your existing clone:
 
 ```sh
+git clone https://github.com/andrewnova/agent-team-harness.git
+cd agent-team-harness
 node scripts/start-team.js --project /absolute/path/to/your/repo
 ```
 
-The target must be an existing Git repository. The starter opens `Team · your-project` with an Astra lead; once it reports ready, give it a task. Append `--leader claude` for a Fable lead. The lead creates worker and reviewer tabs through the CLI as work becomes ready, with four active jobs including itself by default. Child agents inside a job do not count toward that cap. There is no automatic scheduler.
+The direct starter defaults to an Astra lead in `Team · your-project`; once it reports ready, give it a task. Append `--leader claude` for a Fable lead. The lead creates worker and reviewer tabs through the CLI as work becomes ready, with four active jobs including itself by default. Child agents inside a job do not count toward that cap. There is no automatic scheduler.
+
+### Startup state and options
 
 Startup prints a coordinator path and lead job ID. State defaults to `~/.local/state/agent-team/cmux/<project-id>`; use `--coordinator /absolute/path` for another location. The coordinator must be separate from the target checkout. The starter gives it an isolated local Git root so the writable lead cannot claim an enclosing project by accident. Source implementation belongs in separate feature and worker worktrees.
 
@@ -169,5 +191,7 @@ A wait observes one attempt and leaves the job unchanged when it times out. Star
 Uncertain allocation, lost surface identity, unobservable descendants, stale results, and locked/corrupt state fail visibly. Never clear a writer claim solely because a pane disappeared. Inspect and stop the exact owned processes before repairing coordinator state or retrying a job. Native session IDs are recorded when provided by the runtime; cmux UUIDs, process identity, and attempts always govern addressing.
 
 ## Validation boundary
+
+Desktop activation through the team skill, including task handoff, is specified in the skill instructions but has not been tested live. Validation of the public starter does not establish that desktop flow.
 
 Hermetic tests cover routing, concurrent ownership, attempt fencing, addressed MCP messages, launch failures, source-bound review/check evidence, and CLI behavior. Live proof must separately establish model availability, native readiness, the two-way semantic exchange, direct steering, child-agent behavior inside a job, and shutdown on the installed CLIs. Successful unit tests do not establish those live properties.

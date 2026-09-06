@@ -2,9 +2,23 @@
 
 Use this path for one bounded implementation, investigation, or independent review. Work in the target repository with your normal native CLI. You do not need to clone or install Agent Team Harness. cmux is optional for arranging terminals.
 
+## Optional team skill
+
+For a reusable workflow, [install the standalone team skill once](../README.md#invoke-the-team-skill) from a stable clone, then invoke it in your target project:
+
+| App | Invocation |
+| --- | --- |
+| Claude Code | `/team <task>` |
+| Codex desktop | Type `@team`, select the skill suggestion, then enter your task |
+| Codex CLI | `$team <task>` |
+
+Your current session remains the lead. The skill uses native agents for useful independent work, runs relevant checks, and gets a fresh read-only review of the candidate. It preserves your scope, model, effort, and native permissions. Start a new session if the installed skill is not visible.
+
+A leading `cmux` selects [experimental coordination](cmux-team.md#start-a-team): `/team cmux` opens a team ready for a task; `/team cmux <task>` also hands off the task after readiness. In Codex desktop, select `@team` first, then enter `cmux` and an optional task; in Codex CLI, use `$team cmux`. Mentioning cmux elsewhere in an ordinary task keeps the native workflow.
+
 ## Implement
 
-Start a native session in the intended checkout:
+The following commands and prompts work directly without the skill. Start a native session in the intended checkout:
 
 ```sh
 cd /absolute/path/to/your/repo
