@@ -6,6 +6,7 @@ const { spawnSync } = require("node:child_process");
 const { PassThrough } = require("node:stream");
 const { tempRoot } = require("./helpers");
 const jobs = require("../src/team/jobs");
+const mailbox = require("../src/mailbox");
 const mcp = require("../src/mcp/teamServer");
 const { encodeFrame, decodeFrames } = require("../src/mcp/claudeServer");
 
@@ -144,6 +145,81 @@ test("terminal reports retry without duplicate messages or premature wakes and c
   const inbox = mcp.dispatchTool(context("lead"), "team_inbox").messages;
   assert.equal(inbox.length, 2);
   assert.equal(JSON.parse(inbox[1].body).result_message_id, first.message.id);
+});
+
+for (const status of ["completed", "failed", "cancelled"]) {
+  test(`${status} report recovers a job write failure with one message and no wake before process stop`, (t) => {
+    const { root, context } = fixture(t);
+    const request = mcp.dispatchTool(context("lead"), "team_send", { to_job: "worker", body: "Review" }).message;
+    jobs.bindJob(root, "worker", 1, { workspace_id: "workspace", surface_id: "surface", pid: process.pid, ready: true });
+    if (status === "cancelled") jobs.cancelJob(root, "worker", 1);
+    let wakes = 0;
+    const worker = () => mcp.createContext({ root, job_id: "worker", attempt: 1, onMessage() { wakes++; } });
+    const input = { status, result: "Verified result with evidence. ".repeat(150),
+      ...(status === "completed" ? { to_job: "lead" } : { in_reply_to: request.request_id }) };
+    const record = path.join(root, ".agent-team", "state", "jobs", "worker.json");
+    const rename = fs.renameSync;
+    const failure = t.mock.method(fs, "renameSync", (from, to) => {
+      if (to === record) {
+        assert.ok(fs.existsSync(path.join(root, ".agent-team", "state", "jobs.lock")));
+        assert.equal(mailbox.listMessages(root).filter((row) => row.metadata?.from_job === "worker").length, 1);
+        throw Object.assign(new Error("simulated result write EIO"), { code: "EIO" });
+      }
+      return rename(from, to);
+    });
+    for (let retry = 0; retry < 2; retry++) {
+      const failed = mcp.callTool(worker(), "team_report", input);
+      assert.equal(failed.isError, true);
+      assert.match(JSON.parse(failed.content[0].text).error, /simulated result write EIO/);
+      assert.equal(JSON.parse(failed.content[0].text).ok, false);
+      assert.equal(wakes, 0);
+    }
+    assert.equal(jobs.getJob(root, "worker").reported_result, undefined);
+    assert.equal(jobs.getJob(root, "worker").process_stopped, false);
+    assert.equal(jobs.getJob(root, "worker").status, status === "cancelled" ? "cancelling" : "running");
+    assert.doesNotThrow(() => process.kill(jobs.getJob(root, "worker").pid, 0));
+    assert.throws(() => jobs.jobFinishedMessage(root, "worker", 1), /must have stopped/);
+    const committed = jobs.jobInbox(root, "lead", 1);
+    assert.equal(committed.length, 1);
+    assert.equal(committed[0].body, `${input.result}\n`);
+    assert.throws(() => mcp.dispatchTool(worker(), "team_report", { ...input, result: "Different" }), /different terminal result/);
+    assert.throws(() => mcp.dispatchTool(worker(), "team_report", { ...input, result: `${input.result}\n` }), /different terminal result/);
+    assert.throws(() => mcp.dispatchTool(worker(), "team_report", { ...input, status: status === "failed" ? "completed" : "failed" }), /different terminal result/);
+    failure.mock.restore();
+    const retried = mcp.dispatchTool(worker(), "team_report", input);
+    assert.deepEqual(retried.delivery, { status: "pending", reason: "waiting_for_process_stop" });
+    assert.equal(retried.message.id, committed[0].id);
+    assert.equal(retried.job.reported_result.message_id, committed[0].id);
+    assert.equal(retried.job.reported_result.result, input.result);
+    assert.equal(retried.job.reported_result.status, status);
+    assert.equal(retried.job.process_stopped, false);
+    assert.equal(jobs.jobInbox(root, "lead", 1).length, 1);
+    assert.equal(wakes, 0);
+    jobs.finishJob(root, "worker", 1, { status, process_stopped: true });
+    const stopped = jobs.jobFinishedMessage(root, "worker", 1).message;
+    assert.equal(JSON.parse(stopped.body_inline).result_message_id, committed[0].id);
+  });
+}
+
+test("terminal direct and reply reports cannot cross the assigned parent attempt, including retries", (t) => {
+  const { root, context } = fixture(t);
+  let wakes = 0;
+  const worker = mcp.createContext({ root, job_id: "worker", attempt: 1, onMessage() { wakes++; } });
+  const oldRequest = mcp.dispatchTool(context("lead"), "team_send", { to_job: "worker", body: "Old assignment" }).message;
+  const input = { status: "completed", result: "Old result", to_job: "lead" };
+  mcp.dispatchTool(worker, "team_report", input);
+  jobs.finishJob(root, "lead", 1, { status: "failed", process_stopped: true });
+  jobs.claimJob(root, "lead", { max_active: 8 });
+  const lead = mcp.createContext({ root, job_id: "lead", attempt: 2 });
+  const newRequest = mcp.dispatchTool(lead, "team_send", { to_job: "worker", body: "New assignment" }).message;
+  for (const args of [input, { status: "completed", result: input.result, in_reply_to: oldRequest.id },
+    { status: "completed", result: input.result, in_reply_to: newRequest.id }]) {
+    assert.throws(() => mcp.dispatchTool(worker, "team_report", args), /stale or invalid job attempt: lead\/1/);
+  }
+  assert.throws(() => mcp.dispatchTool(context("sibling"), "team_report", input), /stale or invalid job attempt: lead\/1/);
+  assert.deepEqual(mcp.dispatchTool(lead, "team_inbox").messages, []);
+  assert.equal(mailbox.listMessages(root).filter((row) => row.metadata?.from_job === "worker").length, 1);
+  assert.equal(wakes, 0);
 });
 
 test("standalone stdio server is self-gated and serves handshake, tools and errors without runtimes", (t) => {
