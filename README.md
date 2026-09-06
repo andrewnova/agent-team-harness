@@ -51,6 +51,16 @@ Keep the clone available: the installer links one shared skill into both apps. I
 
 The current session leads, uses native agents for useful independent work, and gets a fresh read-only review. Start a new session if the skill is not visible. The [team skill](plugins/agent-team-harness/skills/team/SKILL.md) keeps cmux coordination optional. See [Codex skill invocation](https://learn.chatgpt.com/docs/build-skills#how-codex-uses-skills) and [Claude skill naming](https://code.claude.com/docs/en/skills#how-a-skill-gets-its-command-name).
 
+For a coordinated workspace, add `cmux` after the skill name:
+
+| App | Open a team ready for a task |
+| --- | --- |
+| Claude Code | `/team cmux` |
+| Codex desktop | Select `@team`, then type `cmux` |
+| Codex CLI | `$team cmux` |
+
+Append your task to hand it to the ready lead, for example `/team cmux Build the settings page`. The skill starts or reuses the current project's team. Startup must execute in a cmux terminal: a desktop agent can open one through available native computer control; otherwise the skill gives you the exact command to run there. Native login and trust prompts still apply.
+
 ## Why this is the default
 
 In the September 6 trial, neither coordinated small-task run reached feature acceptance during a twenty-minute observation window. Native prompts required repeated operator handling. Startup, addressed communication, and individual worker completion worked, but that did not establish a useful complete workflow.
