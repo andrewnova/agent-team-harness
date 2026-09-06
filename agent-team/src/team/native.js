@@ -254,4 +254,20 @@ function acceptanceStatus(root, featureId) {
   return { ...result, eligible: result.reasons.length === 0 };
 }
 
-module.exports = { attemptDirectory, buildNativeCommand, launchJob, jobHealth, waitForJob, wakeMessage, importReview, acceptanceStatus };
+function collectFeature(root, featureId) {
+  const feature = require("./features").getFeature(root, featureId);
+  const reviews = [];
+  const pending = [];
+  const errors = [];
+  for (const id of feature.review_jobs) {
+    try {
+      const job = jobs.getJob(root, id);
+      if (job.status === "completed" && job.process_stopped === true) reviews.push(importReview(root, featureId, id));
+      else if (["failed", "cancelled"].includes(job.status)) errors.push({ job_id: id, attempt: job.attempt, error: `Required review ${job.status}: ${job.result || "no accepted result"}` });
+      else pending.push({ job_id: id, attempt: job.attempt, status: job.status, result_reported: Boolean(job.reported_result) });
+    } catch (error) { errors.push({ job_id: id, error: error.message }); }
+  }
+  return { ...acceptanceStatus(root, featureId), reviews, pending, errors };
+}
+
+module.exports = { attemptDirectory, buildNativeCommand, launchJob, jobHealth, waitForJob, wakeMessage, importReview, acceptanceStatus, collectFeature };
