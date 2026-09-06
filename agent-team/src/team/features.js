@@ -184,7 +184,9 @@ function createFeature(root, input) {
     if (!branch.startsWith("codex/")) throw new Error("feature branch must use codex/ prefix");
     git(identity.repo, ["check-ref-format", `refs/heads/${branch}`]);
     const coordinator = fs.realpathSync(absolute(root, "root"));
-    const destination = input.cwd ? absolute(input.cwd, "cwd") : path.join(paths.worktreesDir(coordinator), "features", input.id);
+    // The writable lead owns the coordinator checkout. Keep new source writers
+    // beside it so their checkout claims do not overlap that ancestor.
+    const destination = input.cwd ? absolute(input.cwd, "cwd") : path.join(path.dirname(coordinator), `${path.basename(coordinator)}-worktrees`, "features", input.id);
     // No existing path (even an empty directory or dangling symlink) is reused.
     try { fs.lstatSync(destination); throw new Error("feature cwd already exists"); } catch (error) { if (error.code !== "ENOENT") throw error; }
     const cwd = prospectivePath(destination);

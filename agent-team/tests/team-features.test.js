@@ -5,6 +5,7 @@ const path = require("node:path");
 const { spawnSync, spawn } = require("node:child_process");
 const { tempRoot } = require("./helpers");
 const features = require("../src/team/features");
+const jobs = require("../src/team/jobs");
 
 function git(cwd, ...args) {
   const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
@@ -64,6 +65,38 @@ function review(f, reviewer, overrides = {}) {
 function approveAll(f) {
   for (const job of f.input.review_jobs) review(f, job);
 }
+
+test("default feature workers can claim a checkout beside an active writable coordinator lead", (t) => {
+  const f = fixture(t);
+  git(f.root, "init", "-b", "main");
+  git(f.root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Keep the coordinator independent from source");
+  const assignment = { leader: "codex", model: "gpt-6-astra", writable: true, prompt: "Work in the assigned checkout." };
+  jobs.createJob(f.root, { ...assignment, id: "lead", role: "lead", cwd: f.root });
+  const lead = jobs.claimJob(f.root, "lead", { max_active: 3 });
+  jobs.bindJob(f.root, lead.id, lead.attempt, { workspace_id: "fixture-workspace", surface_id: "fixture-lead", ready: true });
+  const alias = path.join(f.temporary, "coordinator-alias");
+  fs.symlinkSync(f.root, alias);
+  const feature = features.createFeature(alias, { ...f.input, id: "default-worker" });
+  jobs.createJob(f.root, { ...assignment, id: "worker", role: "backend", cwd: feature.cwd, feature_id: feature.id });
+  const worker = jobs.claimJob(f.root, "worker", { max_active: 3 });
+  assert.equal(worker.status, "launching");
+  assert.equal(worker.checkout, feature.cwd);
+  assert.equal(jobs.getJob(f.root, lead.id).status, "running");
+  assert.equal(feature.cwd, path.join(f.temporary, "coordinator-worktrees", "features", feature.id));
+  assert.equal(features.snapshotFeature(f.root, feature.id).candidate.commit, feature.base);
+  jobs.createJob(f.root, { ...assignment, id: "duplicate-writer", role: "backend", cwd: feature.cwd });
+  assert.throws(() => jobs.claimJob(f.root, "duplicate-writer", { max_active: 3 }), /already has a writer: worker/);
+});
+
+test("explicit legacy feature paths and their persisted candidates stay usable", (t) => {
+  const f = fixture(t);
+  const cwd = path.join(f.root, ".agent-team", "worktrees", "features", "legacy");
+  const feature = features.createFeature(f.root, { ...f.input, id: "legacy", cwd });
+  assert.equal(feature.cwd, cwd);
+  const snapshot = features.snapshotFeature(f.root, feature.id);
+  assert.equal(features.getFeature(f.root, feature.id).cwd, cwd);
+  assert.deepEqual(features.currentCandidate(features.getFeature(f.root, feature.id)), snapshot.candidate);
+});
 
 test("feature assembly freezes committed source and requires every review and check", (t) => {
   const f = fixture(t);
