@@ -253,3 +253,98 @@ test("same-runtime jobs communicate and unreadable durable messages fail visibly
   assert.throws(() => jobs.jobInbox(root, "a", 1), /malformed/);
   assert.throws(() => jobs.sendJobMessage(root, { from_job: "a", to_job: "b", body: "new" }), /malformed/);
 });
+
+test("terminal report recovers an append error after mailbox commit and fences its retry receipt", (t) => {
+  const { root, start } = fixture(t);
+  start("lead", { role: "lead" });
+  start("worker", { role: "review" });
+  const request = jobs.sendJobMessage(root, { from_job: "lead", to_job: "worker", body: "Review" });
+  const input = { status: "completed", result: "Evidence", in_reply_to: request.id };
+  const append = mailbox.appendMessage;
+  const failure = t.mock.method(mailbox, "appendMessage", (...args) => {
+    assert.ok(fs.existsSync(path.join(root, ".agent-team", "state", "jobs.lock")));
+    append(...args);
+    throw new Error("simulated post-commit mailbox failure");
+  });
+  assert.throws(() => jobs.reportJobResult(root, "worker", 1, input), /post-commit mailbox failure/);
+  failure.mock.restore();
+  const receipt = jobs.jobInbox(root, "lead", 1)[0];
+  assert.equal(jobs.getJob(root, "worker").reported_result, undefined);
+  assert.equal(receipt.body, input.result);
+  assert.throws(() => jobs.reportJobResult(root, "worker", 1, { ...input, result: "Different" }), /different terminal result/);
+  assert.throws(() => jobs.reportJobResult(root, "worker", 1, { ...input, status: "failed" }), /different terminal result/);
+  assert.throws(() => jobs.reportJobResult(root, "worker", 1, { status: input.status, result: input.result, to_job: "lead" }), /original addressed result/);
+  const retry = jobs.reportJobResult(root, "worker", 1, { ...input, in_reply_to: request.request_id });
+  assert.equal(retry.job.reported_result.message_id, receipt.id);
+  assert.equal(retry.message.id, receipt.id);
+  assert.equal(jobs.jobInbox(root, "lead", 1).length, 1);
+  assert.equal(retry.job.process_stopped, false);
+  jobs.finishJob(root, "worker", 1, { status: "completed", process_stopped: true });
+  jobs.claimJob(root, "worker", { max_active: 8 });
+  assert.throws(() => jobs.reportJobResult(root, "worker", 1, input), /stale/);
+  const next = jobs.reportJobResult(root, "worker", 2, { status: "completed", result: "Next review", to_job: "lead" });
+  assert.notEqual(next.message.id, receipt.id);
+  assert.equal(next.job.reported_result.message_id, next.message.id);
+});
+
+test("an incomplete terminal report cannot retry into a replacement parent attempt", (t) => {
+  const { root, start } = fixture(t);
+  start("lead", { role: "lead" });
+  start("worker", { role: "review" });
+  const input = { status: "completed", result: "Old assignment result", to_job: "lead" };
+  const record = path.join(root, ".agent-team", "state", "jobs", "worker.json");
+  const rename = fs.renameSync;
+  const failure = t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === record) throw new Error("simulated result write failure");
+    return rename(from, to);
+  });
+  assert.throws(() => jobs.reportJobResult(root, "worker", 1, input), /result write failure/);
+  failure.mock.restore();
+  jobs.finishJob(root, "lead", 1, { status: "failed", process_stopped: true });
+  jobs.claimJob(root, "lead", { max_active: 8 });
+  assert.throws(() => jobs.reportJobResult(root, "worker", 1, input), /stale or invalid job attempt: lead\/1/);
+  assert.deepEqual(jobs.jobInbox(root, "lead", 2), []);
+  assert.equal(mailbox.listMessages(root).length, 1);
+  assert.equal(jobs.getJob(root, "worker").reported_result, undefined);
+});
+
+test("concurrent terminal reports serialize one semantic result and matching job metadata", { timeout: 10000 }, async (t) => {
+  const { root, start } = fixture(t);
+  start("lead", { role: "lead" });
+  start("worker", { role: "review" });
+  const script = `
+    const jobs = require(process.argv[1]);
+    process.send('ready');
+    process.once('message', ({root, status}) => {
+      try {
+        const result = jobs.reportJobResult(root, 'worker', 1, {status, result: 'Evidence', to_job: 'lead'});
+        process.send({ok: true, id: result.message.id, status});
+      } catch (error) { process.send({ok: false, error: error.message}); }
+      process.disconnect();
+    });
+  `;
+  const children = ["completed", "failed"].map(() => spawn(process.execPath, ["-e", script, require.resolve("../src/team/jobs")], {
+    stdio: ["ignore", "ignore", "pipe", "ipc"]
+  }));
+  t.after(() => children.forEach((child) => { if (child.exitCode === null) child.kill(); }));
+  const nextMessage = (child) => new Promise((resolve, reject) => {
+    child.once("message", resolve);
+    child.once("error", reject);
+    child.once("exit", (code) => { if (code) reject(new Error(`report helper exited ${code}`)); });
+  });
+  await Promise.all(children.map(nextMessage));
+  const pending = children.map(nextMessage);
+  children.forEach((child, index) => child.send({ root, status: index ? "failed" : "completed" }));
+  const results = await Promise.all(pending);
+  assert.equal(results.filter((result) => result.ok).length, 1);
+  assert.match(results.find((result) => !result.ok).error, /different terminal result/);
+  const winner = results.find((result) => result.ok);
+  const inbox = jobs.jobInbox(root, "lead", 1);
+  assert.equal(inbox.length, 1);
+  assert.equal(inbox[0].id, winner.id);
+  const job = jobs.getJob(root, "worker");
+  assert.equal(job.reported_result.message_id, winner.id);
+  assert.equal(job.reported_result.status, winner.status);
+  assert.equal(job.reported_result.result, inbox[0].body);
+  assert.equal(job.process_stopped, false);
+});
