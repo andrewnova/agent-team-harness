@@ -193,6 +193,60 @@ test("mismatched workspace/surface pairs cannot read, send or close", () => {
   }
 });
 
+test("only a valid inventory proving terminal absence identifies a recoverable missing anchor", () => {
+  for (const [result, missing] of [
+    [ok(inventory([{ id: OTHER, type: "terminal", pane_id: P }])), true],
+    [ok(inventory([])), true],
+    [ok(inventory([{ id: S, type: "browser" }])), false],
+    [ok({ workspace_id: OTHER, surfaces: [] }), false],
+    [ok({ workspace_id: W }), false],
+    [{ status: 1, stderr: "workspace not found", stdout: "" }, false]
+  ]) {
+    const { transport, done } = mock({ method: "surface.list", result });
+    assert.throws(() => transport.readSession(target), (error) => {
+      assert.equal(error.code === "CMUX_SURFACE_NOT_FOUND", missing);
+      assert.equal(error.launch_uncertain, undefined);
+      return true;
+    });
+    done();
+  }
+  const { transport, done } = mock(
+    { method: "surface.list", result: ok(inventory()) },
+    { method: "surface.read_text", result: { status: 1, stderr: "terminal not ready", stdout: "" } }
+  );
+  assert.throws(() => transport.readSession(target), (error) => error.code !== "CMUX_SURFACE_NOT_FOUND");
+  done();
+});
+
+test("a disappeared project controller is recreated through the existing grouped transport without touching worker tabs", (t) => {
+  const cwd = fixture(t);
+  const { ensureProject } = require("../src/team/project");
+  const workerOnly = inventory([{ id: OTHER, type: "terminal", pane_id: P }]);
+  const recovered = inventory([{ id: OTHER, type: "terminal", pane_id: P }, { id: NEW, type: "terminal", pane_id: P }]);
+  const { transport, calls, done } = mock(
+    { method: "workspace.create", result: ok({ ...target, pane_id: P }) },
+    { method: "surface.list", result: ok(workerOnly) },
+    { method: "surface.list", result: ok(workerOnly) },
+    { method: "surface.list", result: ok(workerOnly) },
+    { method: "surface.create", result: ok(allocated) },
+    { method: "tab.action", result: ok(allocated) },
+    { method: "surface.list", result: ok(recovered) },
+    { method: "surface.read_text", result: ok({ ...allocated, text: "controller" }) }
+  );
+  ensureProject(cwd, { transport, title: "Harness" });
+  const project = ensureProject(cwd, { transport });
+  assert.deepEqual(project, { ...allocated, title: "Harness" });
+  assert.deepEqual(ensureProject(cwd, { transport }), project);
+  const allocations = calls.filter((call) => call.method.endsWith(".create"));
+  assert.equal(allocations.length, 2);
+  assert.deepEqual(allocations[1], { method: "surface.create", params: {
+    workspace_id: W, pane_id: P, type: "terminal", working_directory: fs.realpathSync(cwd), focus: false,
+    initial_command: buildShellCommand({ cwd: fs.realpathSync(cwd), argv: ["/bin/sh"], exec_prefix: false })
+  } });
+  assert.equal(calls.some((call) => call.params.surface_id === OTHER), false);
+  done();
+});
+
 test("malformed, ambiguous, nonterminal or wrongly routed inventories fail closed", () => {
   for (const payload of [
     { workspace_id: OTHER, surfaces: [{ id: S, type: "terminal" }] },

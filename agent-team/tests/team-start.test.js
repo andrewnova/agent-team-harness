@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { start } = require("../src/team/start");
 const jobs = require("../src/team/jobs");
+const { getProject } = require("../src/team/project");
 
 function fixture(t) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "team-start-")));
@@ -19,6 +20,7 @@ function fixture(t) {
   const calls = { project: 0, session: 0 };
   const workspace_id = crypto.randomUUID();
   const transport = {
+    readSession(input) { return { ...input, text: "native terminal" }; },
     createProject() { calls.project++; return { workspace_id, surface_id: crypto.randomUUID() }; },
     createSession(input) { calls.session++; assert.equal(input.workspace_id, workspace_id); return { workspace_id, surface_id: crypto.randomUUID() }; }
   };
@@ -34,6 +36,8 @@ test("public starter creates an isolated coordinator and preserves paths with sp
   const result = start(f.values, f.context);
   assert.equal(result.job.status, "launching");
   assert.equal(result.job.ready_at, undefined);
+  assert.equal(result.ready, false);
+  assert.equal(result.state, "starting");
   assert.equal(result.job.checkout, result.coordinator);
   assert.equal(result.job.runtime, "codex");
   assert.equal(result.job.model, "gpt-6-astra");
@@ -56,6 +60,8 @@ test("repeated startup and changed configuration cannot allocate a second active
   const second = start(f.values, f.context);
   assert.equal(second.reused, true);
   assert.equal(second.job.id, first.job.id);
+  assert.equal(second.ready, false);
+  assert.equal(second.state, "starting");
   assert.throws(() => start({ ...f.values, "max-active": "8" }, f.context), /different startup configuration/);
   assert.deepEqual(f.calls, { project: 1, session: 1 });
 });
@@ -75,12 +81,91 @@ test("a stopped lead gets a new identity, but active workers prevent replacement
 
 test("uncertain native allocation preserves the claim and prevents duplicate launch", (t) => {
   const f = fixture(t);
-  f.transport.createSession = () => { f.calls.session++; throw new Error("allocation response lost"); };
+  f.transport.createSession = () => { f.calls.session++; throw Object.assign(new Error("allocation response lost"), { launch_uncertain: true }); };
   assert.throws(() => start(f.values, f.context), /allocation response lost/);
   const result = start(f.values, f.context);
   assert.equal(result.reused, true);
   assert.equal(result.job.status, "launching");
   assert.equal(result.job.process_stopped, false);
+  assert.equal(result.ready, false);
+  assert.equal(result.state, "blocked");
+  assert.match(result.note, /allocation|binding/i);
+  assert.deepEqual(f.calls, { project: 1, session: 1 });
+});
+
+test("reused startup requires semantic readiness and a reachable lead, without replacing missing sessions", (t) => {
+  const f = fixture(t);
+  const first = start(f.values, f.context);
+  jobs.reportJob(first.coordinator, first.job.id, 1, { status: "ready" });
+  assert.equal(start(f.values, f.context).ready, true);
+  f.transport.readSession = (input) => {
+    if (input.surface_id === first.job.surface_id) throw new Error("lead terminal unavailable");
+    return { ...input, text: "controller" };
+  };
+  const blocked = start(f.values, f.context);
+  assert.equal(blocked.ready, false);
+  assert.equal(blocked.state, "blocked");
+  assert.match(blocked.note, /lead terminal unavailable/);
+  assert.equal(blocked.job.process_stopped, false);
+  assert.deepEqual(f.calls, { project: 1, session: 1 });
+  f.transport.readSession = (input) => ({ ...input, text: "reconnected" });
+  assert.equal(start(f.values, f.context).ready, true);
+  jobs.reportJob(first.coordinator, first.job.id, 1, { status: "completed", result: "done" });
+  assert.equal(start(f.values, f.context).state, "stopping");
+  jobs.cancelJob(first.coordinator, first.job.id, 1);
+  assert.equal(start(f.values, f.context).ready, false);
+});
+
+test("repeated startup repairs a disappeared controller while preserving the active lead and its readiness", (t) => {
+  const f = fixture(t);
+  const first = start(f.values, f.context);
+  const anchor = getProject(first.coordinator);
+  f.transport.readSession = (input) => {
+    if (input.surface_id === anchor.surface_id) throw Object.assign(new Error("controller gone"), { code: "CMUX_SURFACE_NOT_FOUND" });
+    return { ...input, text: "owned terminal" };
+  };
+  const createSession = f.transport.createSession;
+  f.transport.createSession = (input) => {
+    assert.deepEqual(input.command.argv, ["/bin/sh"]);
+    return createSession(input);
+  };
+  const second = start(f.values, f.context);
+  assert.equal(second.job.id, first.job.id);
+  assert.equal(second.state, "starting");
+  assert.equal(second.ready, false);
+  assert.notEqual(getProject(first.coordinator).surface_id, anchor.surface_id);
+  assert.equal(start(f.values, f.context).job.id, first.job.id);
+  assert.equal(jobs.listJobs(first.coordinator).length, 1);
+  assert.deepEqual(f.calls, { project: 1, session: 2 });
+});
+
+test("startup retries a definite preflight failure after native ownership is released", (t) => {
+  const f = fixture(t);
+  const createSession = f.transport.createSession;
+  f.transport.createSession = () => { throw new Error("pane unavailable before allocation"); };
+  assert.throws(() => start(f.values, f.context), /pane unavailable/);
+  f.transport.createSession = createSession;
+  const next = start(f.values, f.context);
+  assert.equal(next.reused, false);
+  assert.equal(next.state, "starting");
+  const failed = jobs.listJobs(next.coordinator).find((job) => job.id !== next.job.id);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.process_stopped, true);
+  assert.deepEqual(f.calls, { project: 1, session: 1 });
+});
+
+test("startup recovers a known uncertain project allocation before launching one native lead", (t) => {
+  const f = fixture(t);
+  const createProject = f.transport.createProject;
+  f.transport.createProject = () => {
+    throw Object.assign(new Error("project response incomplete"), { launch_uncertain: true, session: createProject() });
+  };
+  assert.throws(() => start(f.values, f.context), /project response incomplete/);
+  assert.deepEqual(f.calls, { project: 1, session: 0 });
+  const next = start(f.values, f.context);
+  assert.equal(next.reused, false);
+  assert.equal(next.state, "starting");
+  assert.equal(start(f.values, f.context).job.id, next.job.id);
   assert.deepEqual(f.calls, { project: 1, session: 1 });
 });
 

@@ -6,6 +6,7 @@ const { spawnSync } = require("node:child_process");
 const { parseArgs } = require("node:util");
 const jobs = require("./jobs");
 const native = require("./native");
+const { getProject, ensureProject } = require("./project");
 const { createTransport } = require("./cmux");
 const { shellQuote } = require("../bridge/claudeChannel/utils");
 const runtimePolicy = require("../../native-team.config.json");
@@ -22,7 +23,7 @@ const usage = `Start a native coding team from a terminal inside cmux.
   --claude-model claude-fable-5-1[1m]  Explicit Claude model
   --help                     Show this help without changing anything
 
-Repeated startup reports an existing active lead; it never opens a duplicate.
+Repeated startup reports the existing lead's health and repairs a missing owned controller; it never opens a duplicate lead.
 Native agents are enabled: Astra uses xhigh; Fable uses medium with Claude Code Agent Teams.
 Model access, native trust, login and approval prompts remain with the native CLIs.
 `;
@@ -114,13 +115,28 @@ function start(values, { platform = process.platform, env = process.env, home = 
       if (JSON.stringify(saved) !== JSON.stringify(config)) throw new Error("Active jobs use a different startup configuration. Finish or cancel those jobs before changing it.");
       const lead = active.find((job) => job.role === "lead");
       if (!lead) throw new Error("Jobs from the previous lead are still active. Finish or cancel them before starting a new lead.");
-      return { coordinator: directory, project, reused: true, job: lead, note: "An existing lead is active. Inspect its tab and job state; no new session was launched." };
+      let controllerError;
+      if (lead.workspace_id && lead.status !== "cancelling") {
+        try {
+          const anchor = getProject(directory);
+          if (!anchor || anchor.workspace_id !== lead.workspace_id) throw new Error("The active lead has no matching persisted cmux project.");
+          ensureProject(directory, { transport });
+        } catch (error) {
+          controllerError = error;
+        }
+      }
+      let health = native.jobHealth(directory, lead, { transport });
+      if (controllerError && ["ready", "starting", "blocked"].includes(health.state)) {
+        health = { ...health, ready: false, state: "blocked", note: `Controller unavailable: ${controllerError.message}. ${health.note}` };
+      }
+      return { coordinator: directory, project, reused: true, job: jobs.getJob(directory, lead.id), ...health };
     }
     fs.writeFileSync(path.join(state, "start.json"), JSON.stringify(config, null, 2), { mode: 0o600 });
     const id = `lead-${crypto.randomUUID().slice(0, 8)}`;
     jobs.createJob(directory, { id, leader, role: "lead", model: config[`${leader}_model`], cwd: directory, writable: true, prompt: leadPrompt(config, id), dependencies: [] });
     const job = native.launchJob(directory, id, { max_active, codex_bin: config.codex_bin, claude_bin: config.claude_bin, transport, project_title: `Team · ${path.basename(project)}` });
-    return { coordinator: directory, project, reused: false, job, note: "Lead launch requested. Open its tab, complete any native prompts, and give it a task after it reports ready." };
+    const health = native.jobHealth(directory, job, { transport });
+    return { coordinator: directory, project, reused: false, job: jobs.getJob(directory, job.id), ...health };
   } finally { fs.rmdirSync(lock); }
 }
 
@@ -132,6 +148,7 @@ function main(args) {
     const [major, minor] = process.versions.node.split(".").map(Number);
     if (major < 22 || (major === 22 && minor < 13)) throw new Error("Node.js >=22.13.0 is required.");
     const result = start(values);
+    if (result.state === "blocked") process.exitCode = 1;
     process.stdout.write(`${JSON.stringify({ ...result, job: { id: result.job.id, runtime: result.job.runtime, model: result.job.model, status: result.job.status, ready_at: result.job.ready_at, workspace_id: result.job.workspace_id, surface_id: result.job.surface_id } }, null, 2)}\n`);
   } catch (error) { process.stderr.write(`Startup failed: ${error.message}\n`); process.exitCode = 1; }
 }
