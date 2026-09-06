@@ -44,6 +44,9 @@ async function nativeFixture() {
     held.unref();
   }
   const server = spawn(process.execPath, [config.mcp, "--cwd", config.root, "--job", "worker", "--attempt", String(config.attempt)], { stdio: ["pipe", "pipe", "inherit"] });
+  // The supervisor may stop MCP before signalling this fixture. Capture close
+  // now so that shutdown still returns the configured native exit code.
+  const serverClosed = new Promise((resolve) => server.once("close", resolve));
   const pending = new Map();
   let sequence = 0;
   readline.createInterface({ input: server.stdout }).on("line", (line) => {
@@ -75,6 +78,11 @@ async function nativeFixture() {
     if (action.report) {
       const response = await tool("team_report", action.report);
       fs.writeFileSync(`${config.control}.${next}.response.json`, JSON.stringify(response));
+      if (config.closeMcpBeforeStop) {
+        server.stdin.end();
+        await serverClosed;
+        fs.writeFileSync(`${config.ready}.closed`, "true");
+      }
     }
     // Arm proof failures only after the real MCP has accepted the report, so
     // startup and semantic reporting are still exercised without faults.
@@ -83,10 +91,13 @@ async function nativeFixture() {
     next++;
     busy = false;
   }, 10);
+  let stopping = false;
   process.on("SIGTERM", () => {
+    if (stopping) return;
+    stopping = true;
     clearInterval(timer);
     server.stdin.end();
-    server.once("close", () => process.exit(config.stopExitCode ?? 0));
+    serverClosed.then(() => process.exit(config.stopExitCode ?? 0));
   });
   setTimeout(() => process.exit(124), 30000).unref();
 }
@@ -396,7 +407,9 @@ test("runner recovery: missing binary fails, notifies its parent, and releases o
 
 test("runner recovery: a PID binding persistence failure after spawn cleans the child before releasing", { timeout: 15000 }, async (t) => {
   const f = fixture(t);
-  const packet = f.packet(f.claim());
+  // Isolate the binding write failure: this child stays alive without starting
+  // a competing MCP state write before the runner can record its PID.
+  const packet = f.packet(f.claim(), [process.execPath, "-e", "setInterval(() => {}, 1000)"]);
   const child = f.launch(packet, { TEAM_RECOVERY_FAIL_BIND: "1" });
   await f.end(child);
   const receipt = f.stopped(packet, "failed");
@@ -447,7 +460,7 @@ for (const [label, status, exit, expected] of [
 for (const [stopExitCode, expected] of [[0, "completed"], [143, "completed"], [23, "failed"]]) {
   test(`runner recovery: report-driven shutdown with native exit ${stopExitCode} finishes as ${expected}`, { timeout: 15000 }, async (t) => {
     const f = fixture(t);
-    const packet = f.packet(f.claim(), undefined, { stopExitCode });
+    const packet = f.packet(f.claim(), undefined, { stopExitCode, closeMcpBeforeStop: true });
     const child = f.launch(packet);
     await f.ready(packet);
     await f.action(packet, { report: { status: "completed", result: "Semantic completion before supervisor shutdown", to_job: "parent" } });
@@ -455,6 +468,7 @@ for (const [stopExitCode, expected] of [[0, "completed"], [143, "completed"], [2
     // Only the real runner initiates shutdown after its report grace period.
     await f.end(child);
     const receipt = f.stopped(packet, expected);
+    assert.equal(f.read(`${packet.ready}.closed`), true, "MCP must close before native supervisor shutdown");
     assert.equal(receipt.code, stopExitCode);
     assert.equal(receipt.stopped_for_report, true);
     assert.equal(receipt.signal, null);
