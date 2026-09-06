@@ -230,3 +230,47 @@ test("public CLI feature status returns a failing exit code until review and che
   assert.equal(tampered.eligible, false);
   assert.match(tampered.reasons.join("\n"), /check evidence changed/);
 });
+
+test("public collection imports a complete round idempotently and exposes pending, failed and stale reviews", (t) => {
+  const f = fixture(t);
+  for (const args of [["init", "-b", "main"], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Keep collection proof isolated"]]) {
+    const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args], { cwd: f.cwd, env: f.env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const feature = features.createFeature(f.root, { id: "round", repo: f.cwd, leader: "codex", brief: "Both required reviewers must finish",
+    review_jobs: ["first", "second"], checks: [{ id: "unit", command: [process.execPath, "--version"] }] });
+  const { candidate } = features.snapshotFeature(f.root, feature.id);
+  const verdict = { candidate, brief_hash: candidate.brief_hash, verdict: "approve", findings: [] };
+  for (const id of feature.review_jobs) f.start(id, { role: "review", feature_id: feature.id, cwd: feature.cwd });
+  const complete = (id, attempt = 1) => {
+    jobs.reportJob(f.root, id, attempt, { status: "completed", result: JSON.stringify(verdict) });
+    jobs.finishJob(f.root, id, attempt, { status: "completed", process_stopped: true });
+  };
+  complete("first");
+  jobs.reportJob(f.root, "second", 1, { status: "completed", result: JSON.stringify(verdict) });
+  const partial = output(f.run(["feature", "collect", feature.id]), 1);
+  assert.deepEqual(partial.reviews.map((review) => review.reviewer_job_id), ["first"]);
+  assert.equal(partial.pending[0].job_id, "second");
+  assert.equal(partial.pending[0].result_reported, true);
+  assert.equal(partial.eligible, false);
+  assert.equal(features.getFeature(f.root, feature.id).check_runs.length, 0, "collection must not silently rerun checks");
+  jobs.finishJob(f.root, "second", 1, { status: "completed", process_stopped: true });
+  features.runFeatureChecks(f.root, feature.id);
+  assert.equal(output(f.run(["feature", "collect", feature.id])).eligible, true);
+  const saved = features.getFeature(f.root, feature.id);
+  assert.equal(output(f.run(["feature", "collect", feature.id])).eligible, true);
+  assert.deepEqual(features.getFeature(f.root, feature.id), saved, "unchanged evidence is not rewritten");
+  jobs.claimJob(f.root, "second", { max_active: 2 });
+  assert.equal(output(f.run(["feature", "collect", feature.id]), 1).pending[0].attempt, 2);
+  jobs.cancelJob(f.root, "second", 2);
+  jobs.finishJob(f.root, "second", 2, { status: "cancelled", process_stopped: true });
+  assert.match(output(f.run(["feature", "collect", feature.id]), 1).errors[0].error, /cancelled/);
+  jobs.claimJob(f.root, "second", { max_active: 2 });
+  complete("second", 3);
+  assert.equal(output(f.run(["feature", "collect", feature.id])).eligible, true);
+  fs.writeFileSync(path.join(feature.cwd, "unreviewed.txt"), "changed source");
+  const stale = output(f.run(["feature", "collect", feature.id]), 1);
+  assert.equal(stale.eligible, false);
+  assert.equal(stale.errors.length, 2);
+  assert.ok(stale.errors.every((error) => /clean/.test(error.error)));
+});
