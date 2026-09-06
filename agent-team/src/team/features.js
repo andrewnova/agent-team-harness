@@ -384,4 +384,4 @@ function featureStatus(root, id) {
   return { id: feature.id, eligible: reasons.length === 0, candidate: feature.candidate, reasons };
 }
 
-module.exports = { createFeature, getFeature, assembleFeature, snapshotFeature, recordFeatureReview, runFeatureChecks, featureStatus };
+module.exports = { createFeature, getFeature, assembleFeature, snapshotFeature, currentCandidate, recordFeatureReview, runFeatureChecks, featureStatus };
