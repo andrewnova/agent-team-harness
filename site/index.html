@@ -4,187 +4,344 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Agent Team Harness</title>
-    <meta name="description" content="A local CLI for coordinating Codex and Claude Code as visible coding teammates with durable mailbox state, first-party MCP wake adapters, review gates, and proof.">
+    <meta name="description" content="Run native Codex and Claude Code sessions as one visible team inside cmux: a lead tab, worker and reviewer tabs, a private checkout for every writer, and review by the opposite model before a feature counts as ready.">
     <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
     <header class="site-header">
       <a class="brand" href="#top" aria-label="Agent Team Harness home">
         <img src="assets/logo.svg" alt="" width="36" height="36">
         <span>Agent Team Harness</span>
       </a>
       <nav aria-label="Primary">
-        <a href="#architecture">Architecture</a>
-        <a href="#flow">Flow</a>
-        <a href="#install">Install</a>
-        <a href="#proof">Proof</a>
-        <a href="#reliability">Reliability</a>
+        <a href="#layout">Layout</a>
+        <a href="#roles">Roles</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#messaging">Messaging</a>
+        <a href="#quickstart">Quickstart</a>
         <a class="nav-button" href="https://github.com/andrewnova/agent-team-harness">GitHub</a>
       </nav>
     </header>
 
-    <main id="top">
-      <section class="hero" aria-labelledby="hero-title">
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow">Alpha 0.1.0-alpha</p>
-          <h1 id="hero-title">Run Codex and Claude Code like a real agent team.</h1>
+          <p class="eyebrow">Native teams in cmux &middot; 0.1.0-alpha</p>
+          <h1 id="hero-title">Codex and Claude. One visible team.</h1>
           <p class="lede">
-            A local harness that keeps Claude visible, wakes both teammates through
-            first-party MCP adapters, and refuses to call work done without review plus proof.
+            Give a lead your task. Watch native Codex and Claude Code workers build and review
+            it in separate tabs, all inside one cmux project.
           </p>
           <div class="hero-actions">
-            <a class="button primary" href="#install">Install</a>
-            <a class="button secondary" href="https://github.com/andrewnova/agent-team-harness">View Source</a>
+            <a class="button primary" href="#quickstart">Start a team</a>
+            <a class="button secondary" href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/cmux-team.md">Read the docs</a>
           </div>
-          <p class="credit">Created and maintained by Andrew Guzman.</p>
+          <p class="credit">Created and maintained by Andrew Guzman. Source on GitHub.</p>
         </div>
 
-        <div class="terminal-card" aria-label="Agent Team Harness terminal preview">
-          <div class="terminal-top">
-            <span></span><span></span><span></span>
-            <strong>agent-team</strong>
-          </div>
-          <pre><code>$ agent-team start --name my-project --daemon
-✓ mailbox receiver active
-✓ first-party Claude MCP ready
-✓ first-party Codex MCP wake ready
-✓ visible Claude teammate ready
-✓ Codex proof owner ready
-
-$ agent-team review request T-000001
-→ sent without blocking Codex
-
-$ agent-team verify final
-✓ reviews approved
-✓ browser proof attached
-✓ ready to close out</code></pre>
-        </div>
-      </section>
-
-      <section class="band intro" aria-label="Core promise">
-        <div>
-          <span class="stat">First-party MCP</span>
-          <p>Claude and Codex get local wake/read/reply adapters built into the harness.</p>
-        </div>
-        <div>
-          <span class="stat">Visible Claude</span>
-          <p>Claude-owned work blocks when the visible teammate or semantic reply is missing.</p>
-        </div>
-        <div>
-          <span class="stat">Proof gated</span>
-          <p>Done means reviewed, merged, verified, and recorded.</p>
-        </div>
-      </section>
-
-      <section class="section architecture" id="architecture">
-        <div class="architecture-copy">
-          <p class="eyebrow">Updated Architecture</p>
-          <h2>Mailbox state is the record. MCP is the live local transport.</h2>
-          <p>
-            The receiver daemon queues Claude-bound notifications into the first-party
-            Claude MCP outbox and sends Claude-to-Codex wake payloads through the Codex MCP
-            adapter. Claude-owned work stays visible-or-blocking until a semantic mailbox
-            reply lands.
-          </p>
-        </div>
-        <figure class="architecture-figure">
-          <img src="assets/agent-team-flow.png" alt="Agent Team Harness architecture: Codex plans and owns proof, a durable mailbox is the source of truth, a daemon routes locally, and two first-party MCP lanes (Claude MCP wake outbox and Codex MCP wake adapter) connect the visible Claude teammate.">
+        <figure class="hero-figure">
+          <img src="assets/cmux-team-hero.png" width="1672" height="941" alt="Conceptual artwork: four terminal panels connected to a central message tray inside one dark frame.">
+          <figcaption>Conceptual illustration of a team sharing one mailbox. This is artwork, not a live product screenshot.</figcaption>
         </figure>
       </section>
 
-      <section class="section split" id="flow">
+      <section class="band intro" aria-label="At a glance">
         <div>
-          <p class="eyebrow">How It Works</p>
-          <h2>One harness. Two teammates. One source of truth.</h2>
-          <p>
-            Agent Team Harness keeps goals, tasks, leases, reviews, mailbox messages,
-            browser proof, computer proof, and closeout records in local project state.
-            First-party MCP adapters make the collaboration feel live without making chat
-            history or raw channel replies the system of record.
+          <span class="stat">One project, many tabs</span>
+          <p>The lead and every worker or reviewer are native tabs in a single cmux project. Every agent has a tab you can open.</p>
+        </div>
+        <div>
+          <span class="stat">Private checkouts</span>
+          <p>Each job that writes code works in its own separate checkout. The lead assembles the reported commits into one feature worktree.</p>
+        </div>
+        <div>
+          <span class="stat">Review by the other model</span>
+          <p>Whichever model leads, fresh sessions of the opposite model review the assembled feature before it can be called ready.</p>
+        </div>
+      </section>
+
+      <section class="section layout" id="layout" aria-labelledby="layout-title">
+        <div class="section-head">
+          <p class="eyebrow">What you see</p>
+          <h2 id="layout-title">A lead, its workers, and its reviewers, all as tabs you can watch and steer.</h2>
+          <p class="section-lede">
+            The launcher creates one cmux project in the sidebar and opens the lead in the first
+            tab. When you give the lead a task, it creates a worker or reviewer tab for each job
+            it dispatches. Each tab is a real native Codex or Claude Code session with its own
+            login, workspace-trust, and approval prompts, and you can type into any of them.
           </p>
         </div>
-        <div class="flow-grid" aria-label="Workflow stages">
+
+        <figure class="cmux-mock" aria-labelledby="mock-caption">
+          <div class="mock-window">
+            <div class="mock-sidebar">
+              <span class="mock-label">Projects</span>
+              <ul role="list">
+                <li class="is-active">Agent Team Harness</li>
+              </ul>
+            </div>
+            <div class="mock-main">
+              <ul class="mock-tabs" role="list" aria-label="Team tabs">
+                <li class="is-active">
+                  <span class="tab-name">lead-1</span>
+                  <span class="tab-meta">Codex &middot; Astra</span>
+                </li>
+                <li>
+                  <span class="tab-name">backend-1</span>
+                  <span class="tab-meta">Codex &middot; Astra</span>
+                </li>
+                <li>
+                  <span class="tab-name">frontend-1</span>
+                  <span class="tab-meta">Claude Code &middot; Fable</span>
+                </li>
+                <li>
+                  <span class="tab-name">reviewer-1</span>
+                  <span class="tab-meta">Claude Code &middot; Fable &middot; read-only</span>
+                </li>
+              </ul>
+              <dl class="mock-pane">
+                <div>
+                  <dt>Lead owns</dt>
+                  <dd>The brief, job assignments, repair decisions, and final acceptance.</dd>
+                </div>
+                <div>
+                  <dt>Lead dispatches</dt>
+                  <dd>Worker and reviewer jobs from the command line, up to the active-job cap. There is no background scheduler.</dd>
+                </div>
+                <div>
+                  <dt>Lead waits for</dt>
+                  <dd>Each job's own report in the mailbox, not terminal activity.</dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+          <figcaption id="mock-caption">
+            Example layout with an Astra lead. Job names and the number of tabs depend on the task.
+            With a Fable lead, the reviewer tabs are fresh Astra sessions instead.
+          </figcaption>
+        </figure>
+
+        <div class="cards three tab-types">
           <article>
-            <span>01</span>
-            <h3>Plan</h3>
-            <p>Codex and Claude both weigh in before tasks are created.</p>
+            <h3>Lead tab</h3>
+            <p>Opens first. Holds the brief, creates the feature worktree, dispatches jobs, and decides what gets repaired and accepted.</p>
           </article>
           <article>
-            <span>02</span>
-            <h3>Wake</h3>
-            <p>The daemon wakes Claude through first-party MCP and Codex through the wake adapter.</p>
+            <h3>Worker tabs</h3>
+            <p>One per implementation job. Each has a private, writable checkout and a scoped prompt, and reports its commit back to the lead.</p>
           </article>
           <article>
-            <span>03</span>
-            <h3>Review</h3>
-            <p>Each model checks the other before merge gates open.</p>
-          </article>
-          <article>
-            <span>04</span>
-            <h3>Verify</h3>
-            <p>Browser, computer-use, and command proof attach to task state.</p>
+            <h3>Reviewer tabs</h3>
+            <p>Fresh, read-only sessions of the opposite model. They see the brief, the exact candidate, and the full integrated diff, and return a verdict with findings.</p>
           </article>
         </div>
       </section>
 
-      <section class="section proof" id="proof">
-        <p class="eyebrow">Built For Real Work</p>
-        <h2>Designed to avoid the expensive failure mode: invisible handoffs that look done.</h2>
-        <div class="proof-list">
-          <div>
-            <h3>Visible-or-blocking Claude</h3>
-            <p>Claude-owned work requires a visible teammate and semantic mailbox reply, or the harness reports the blocker.</p>
-          </div>
-          <div>
-            <h3>Semantic acknowledgements</h3>
-            <p>Requests require meaningful replies: what was received, what happens next, and what is blocked.</p>
-          </div>
-          <div>
-            <h3>Closeout reports</h3>
-            <p>Completion can include tasks, approvals, proof artifacts, warnings, screenshots, and self-heal notes.</p>
-          </div>
+      <section class="section roles" id="roles" aria-labelledby="roles-title">
+        <div class="section-head">
+          <p class="eyebrow">Who does what</p>
+          <h2 id="roles-title">Astra builds the backend. Fable builds the frontend. The other model reviews.</h2>
+          <p class="section-lede">
+            Either model can lead. Whichever one does, review comes from fresh sessions of the
+            opposite model, started as separate read-only jobs even when that model also
+            implemented part of the feature.
+          </p>
+        </div>
+
+        <div class="table-wrap">
+          <table class="routing">
+            <caption>Default routing for a native team</caption>
+            <thead>
+              <tr>
+                <th scope="col">Assignment</th>
+                <th scope="col">Runtime</th>
+                <th scope="col">Model</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Lead</th>
+                <td data-label="Runtime">Codex by default, or Claude Code with <code>--leader claude</code></td>
+                <td data-label="Model">Astra or Fable</td>
+              </tr>
+              <tr>
+                <th scope="row">Backend implementation and repairs</th>
+                <td data-label="Runtime">Codex, private writable checkout</td>
+                <td data-label="Model">Astra</td>
+              </tr>
+              <tr>
+                <th scope="row">Frontend implementation and repairs</th>
+                <td data-label="Runtime">Claude Code, private writable checkout</td>
+                <td data-label="Model">Fable</td>
+              </tr>
+              <tr>
+                <th scope="row">Review when Astra leads</th>
+                <td data-label="Runtime">Fresh Claude Code sessions, read-only</td>
+                <td data-label="Model">Fable</td>
+              </tr>
+              <tr>
+                <th scope="row">Review when Fable leads</th>
+                <td data-label="Runtime">Fresh Codex sessions, read-only</td>
+                <td data-label="Model">Astra</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <ul class="notes">
+          <li>Every job names its model explicitly. The harness never swaps in a different model on its own.</li>
+          <li>If a reviewer's native session pauses or switches models, that review is not finished. Its result stays unaccepted until the assigned review completes and a valid verdict is imported.</li>
+          <li>Model availability depends on your own Codex and Claude accounts.</li>
+        </ul>
+      </section>
+
+      <section class="section workflow" id="workflow" aria-labelledby="workflow-title">
+        <div class="section-head">
+          <p class="eyebrow">Feature workflow</p>
+          <h2 id="workflow-title">Assemble the whole feature first. Then freeze it, review it, and repair it.</h2>
+          <p class="section-lede">
+            Reviewers always see one complete, committed candidate, never a moving target.
+            Every step below is something the lead does deliberately from the command line.
+            There is no automatic scheduler.
+          </p>
+        </div>
+
+        <ol class="steps" role="list">
+          <li>
+            <span class="step-num" aria-hidden="true">01</span>
+            <div>
+              <h3>Brief</h3>
+              <p>You give the lead a task. It writes the feature brief with acceptance criteria and creates one feature worktree on its own branch.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num" aria-hidden="true">02</span>
+            <div>
+              <h3>Dispatch</h3>
+              <p>The lead creates worker jobs, each with a private checkout and a scoped prompt, and launches the ones whose dependencies are finished, up to the active-job cap.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num" aria-hidden="true">03</span>
+            <div>
+              <h3>Assemble</h3>
+              <p>Workers report their commits. The lead imports each one into the feature worktree, with the allowed paths stated up front. Importing a commit does not approve it.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num" aria-hidden="true">04</span>
+            <div>
+              <h3>Freeze</h3>
+              <p>Once the complete feature is committed, the lead takes a snapshot. That exact candidate is what reviewers and checks are measured against.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num" aria-hidden="true">05</span>
+            <div>
+              <h3>Review and check</h3>
+              <p>Fresh reviewer sessions from the opposite model receive the brief, the candidate, and the full integrated diff. Declared checks run on an isolated checkout of the same candidate at the same time. Every finding points at source.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num" aria-hidden="true">06</span>
+            <div>
+              <h3>Repair</h3>
+              <p>The lead collects the whole review round, batches the fixes, commits, and snapshots again. Every required reviewer and check runs again on the new candidate. Earlier approvals do not carry over.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-num" aria-hidden="true">07</span>
+            <div>
+              <h3>Eligible</h3>
+              <p>The feature is eligible once every required current reviewer verdict and check passes and all required findings are resolved with evidence. Eligible means ready for integration. It does not merge, publish, or deploy anything by itself.</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section class="section messaging" id="messaging" aria-labelledby="messaging-title">
+        <div class="section-head">
+          <p class="eyebrow">How the tabs talk</p>
+          <h2 id="messaging-title">Messages live in a local mailbox. A wake only says "go read it."</h2>
+        </div>
+
+        <div class="cards three">
+          <article>
+            <h3>One mailbox, on disk</h3>
+            <p>Every message between jobs is appended to the harness's existing local mailbox, addressed to a specific job and attempt. The record survives a closed tab, and you can read any job's inbox yourself.</p>
+          </article>
+          <article>
+            <h3>The same tools in both CLIs</h3>
+            <p>Codex and Claude Code each get the same small local MCP server, bound to their own job: report ready or a result, send a message, read the inbox, reply. Your global Codex and Claude settings are left alone.</p>
+          </article>
+          <article>
+            <h3>Wakes are not replies</h3>
+            <p>After a send, cmux delivers a short wake to the recipient's tab asking it to read its inbox. The mailbox holds the real message. Text appearing in a terminal is not a reply, and a job is ready only when it reports ready itself.</p>
+          </article>
         </div>
       </section>
 
-      <section class="section proof" id="reliability">
-        <p class="eyebrow">Reliability &amp; Self-Healing</p>
-        <h2>Built to survive partial failure and repair itself instead of stalling.</h2>
-        <div class="proof-list">
-          <div>
-            <h3>Adopt-first reuse</h3>
-            <p>Resumes reattach to a still-alive visible Claude through a process-liveness probe — never a duplicate window or a dead endpoint. Auth reads as logged-in, logged-out, or unverifiable, so sandbox-hidden auth never looks broken.</p>
-          </div>
-          <div>
-            <h3>Self-repairing state</h3>
-            <p>Readers skip malformed mailbox rows instead of crashing, <code>agent-team state repair</code> rebuilds projections from canonical truth, and a single-daemon guard keeps two routers from fighting one mailbox.</p>
-          </div>
-          <div>
-            <h3>In-session self-heal</h3>
-            <p>An <code>agent_team_self_heal</code> MCP tool lets Claude propose a harness change from inside a live session — recorded for review, never applied silently.</p>
-          </div>
+      <section class="section quickstart" id="quickstart" aria-labelledby="quickstart-title">
+        <div class="quickstart-copy">
+          <p class="eyebrow">Quickstart</p>
+          <h2 id="quickstart-title">Three commands from a terminal inside cmux.</h2>
+          <h3>Before you start</h3>
+          <ul class="checklist">
+            <li>macOS with <a href="https://cmux.com/">cmux</a> installed</li>
+            <li>Git, plus an existing Git repository for the team to work on</li>
+            <li>Node.js 22.13.0 or newer</li>
+            <li><a href="https://learn.chatgpt.com/docs/codex/cli">Codex</a> and <a href="https://code.claude.com/docs/en/setup">Claude Code</a> installed and signed in</li>
+            <li>Account access to the configured models, Astra and Fable by default</li>
+          </ul>
+          <p class="quickstart-note">
+            Run the commands from a terminal inside cmux so the launcher can create the project
+            and tabs. Replace the last path with the absolute path to your existing Git repository.
+            <code>--project</code> requires one.
+          </p>
         </div>
-        <p class="reliability-note">Every push and pull request runs an ESLint <code>no-undef</code> gate and the full test suite in CI.</p>
-      </section>
 
-      <section class="section install" id="install">
-        <div>
-          <p class="eyebrow">Install</p>
-          <h2>Clone, install, and start from any project.</h2>
-        </div>
-        <pre><code>git clone https://github.com/andrewnova/agent-team-harness.git
+        <div class="quickstart-main">
+          <div class="code-block" data-copy>
+            <div class="code-top">
+              <span class="code-title">Terminal inside cmux</span>
+            </div>
+            <pre><code>git clone https://github.com/andrewnova/agent-team-harness.git
 cd agent-team-harness
-./scripts/install-codex.sh
+node scripts/start-team.js --project /absolute/path/to/your/repo</code></pre>
+            <p class="code-status" role="status" aria-live="polite"></p>
+          </div>
 
-cd /path/to/your/project
-agent-team doctor --fix --target my-project
-agent-team start --name my-project --project-dir "$PWD" --daemon</code></pre>
+          <h3>What happens next</h3>
+          <ol class="next-steps">
+            <li>The launcher creates the cmux project and opens the lead tab first. By default the lead is a Codex session with Astra, and up to four jobs run at once, including the lead.</li>
+            <li>Complete the native login and workspace-trust prompts in the lead tab so the lead is ready.</li>
+            <li>Give the ready lead a task. It creates worker and reviewer tabs as it needs them.</li>
+            <li>Native login, workspace-trust, and approval prompts stay visible; the native permission policy remains in force.</li>
+          </ol>
+          <p>
+            Prefer a Claude Code lead with Fable? Add <code>--leader claude</code> to the last
+            command. Reviewers then come from fresh Astra sessions.
+          </p>
+          <p>
+            The <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/cmux-team.md">native teams documentation</a>
+            covers job and feature definitions, assembly, checks, review results, and how to stop or diagnose a job.
+          </p>
+        </div>
       </section>
     </main>
 
     <footer>
       <span>Agent Team Harness</span>
       <span>Created by Andrew Guzman</span>
+      <span class="footer-links">
+        <a href="https://github.com/andrewnova/agent-team-harness">GitHub</a>
+        <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/cmux-team.md">Docs</a>
+      </span>
     </footer>
+
+    <script src="script.js" defer></script>
   </body>
 </html>
