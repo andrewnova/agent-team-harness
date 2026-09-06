@@ -222,6 +222,41 @@ test("reviews reject missing identity, wrong reviewer, stale brief and malformed
   const finding = { id: "F", required: false, evidence: "source" };
   assert.throws(() => review(f, "review-security", { findings: [finding, finding] }), /unique/);
   assert.throws(() => review(f, "review-security", { attempt: 0 }), /positive/);
+  assert.throws(() => review(f, "review-security", { attempt: Number.MAX_SAFE_INTEGER + 1 }), /positive/);
+});
+
+test("numbered review imports are idempotent and cannot be replaced by stale or conflicting attempts", (t) => {
+  const f = fixture(t);
+  features.snapshotFeature(f.root, f.feature.id);
+  features.runFeatureChecks(f.root, f.feature.id);
+  review(f, "review-correctness", { attempt: 1 });
+  const first = review(f, "review-security", { attempt: 1 });
+  const recorded = features.getFeature(f.root, f.feature.id);
+  assert.deepEqual(review(f, "review-security", { attempt: 1 }), first);
+  assert.deepEqual(features.getFeature(f.root, f.feature.id), recorded, "collecting the same result again does not rewrite evidence");
+  assert.throws(() => review(f, "review-security", { attempt: 1, verdict: "block_merge" }), /already recorded/);
+  assert.throws(() => review(f, "review-security"), /attempt/);
+  const finding = { id: "missing-guard", required: true, evidence: "src/api.js:1 needs a guard" };
+  review(f, "review-security", { attempt: 2, verdict: "changes_requested", findings: [finding] });
+  assert.equal(features.featureStatus(f.root, f.feature.id).eligible, false);
+  assert.throws(() => review(f, "review-security", { attempt: 1 }), /stale.*attempt/);
+  assert.equal(features.getFeature(f.root, f.feature.id).reviews.length, 3);
+  review(f, "review-security", { attempt: 3 });
+  assert.match(features.featureStatus(f.root, f.feature.id).reasons.join("\n"), /unresolved finding/);
+  const resolved = { ...finding, status: "rejected", resolution_evidence: "The guard is enforced by the caller." };
+  const resolution = review(f, "review-security", { attempt: 4, findings: [resolved] });
+  assert.deepEqual(review(f, "review-security", { attempt: 4, findings: [resolved] }), resolution);
+  assert.equal(features.featureStatus(f.root, f.feature.id).eligible, true);
+  writeCommit(f.feature.cwd, "src/fix.js", "fix\n");
+  features.snapshotFeature(f.root, f.feature.id);
+  assert.throws(() => review(f, "review-security", { attempt: 4, findings: [resolved] }), /already recorded/);
+  assert.throws(() => review(f, "review-security", { attempt: 3 }), /stale.*attempt/);
+  review(f, "review-security", { attempt: 5 });
+  review(f, "review-correctness", { attempt: 2 });
+  features.runFeatureChecks(f.root, f.feature.id);
+  assert.match(features.featureStatus(f.root, f.feature.id).reasons.join("\n"), /unresolved finding/);
+  review(f, "review-security", { attempt: 6, findings: [resolved] });
+  assert.equal(features.featureStatus(f.root, f.feature.id).eligible, true);
 });
 
 test("checks capture failures, spawn errors and timeouts without accepting evidence", (t) => {
@@ -297,7 +332,8 @@ test("timed-out checks retain a scratch checkout while a descendant still writes
 
 for (const [name, script] of [
   ["tracked", "require('fs').writeFileSync('src/api.js', 'mutated')"],
-  ["untracked", "require('fs').writeFileSync('unexpected.txt', 'mutated')"]
+  ["untracked", "require('fs').writeFileSync('unexpected.txt', 'mutated')"],
+  ["unfinished Git operation", "require('node:child_process').spawnSync('git', ['-c', 'core.hooksPath=/dev/null', 'cherry-pick', 'HEAD'])"]
 ]) test(`check ${name} source mutation invalidates evidence and leaves feature untouched`, (t) => {
   const f = fixture(t, { checks: [{ id: "mutation", command: [process.execPath, "-e", script] }, { id: "later", command: "exit 0" }] });
   features.snapshotFeature(f.root, f.feature.id);
@@ -388,6 +424,26 @@ test("scope includes deleted rename source, and conflicts are left visible witho
   assert.equal(git(f.feature.cwd, "rev-parse", "HEAD"), before);
   assert.match(git(f.feature.cwd, "status", "--porcelain"), /UU/);
   assert.throws(() => features.snapshotFeature(f.root, f.feature.id), /clean/);
+});
+
+test("an empty cherry-pick cannot freeze, check, accept or assemble until the pending operation is resolved", (t) => {
+  const f = fixture(t);
+  const content = "module.exports = 'same patch';\n";
+  const commit = writeCommit(f.worker, "src/api.js", content);
+  writeCommit(f.feature.cwd, "src/api.js", content);
+  features.snapshotFeature(f.root, f.feature.id);
+  approveAll(f);
+  features.runFeatureChecks(f.root, f.feature.id);
+  assert.equal(features.featureStatus(f.root, f.feature.id).eligible, true);
+  assert.throws(() => features.assembleFeature(f.root, f.feature.id, { commit, worker_cwd: f.worker, allowed_paths: ["src/**"] }), /cherry-pick/);
+  assert.equal(git(f.feature.cwd, "status", "--porcelain"), "", "an empty cherry-pick looks clean despite the pending operation");
+  assert.throws(() => features.snapshotFeature(f.root, f.feature.id), /unfinished Git operation/);
+  assert.throws(() => features.runFeatureChecks(f.root, f.feature.id), /unfinished Git operation/);
+  assert.match(features.featureStatus(f.root, f.feature.id).reasons.join("\n"), /unfinished Git operation/);
+  const next = writeCommit(f.worker, "src/next.js", "next\n");
+  assert.throws(() => features.assembleFeature(f.root, f.feature.id, { commit: next, worker_cwd: f.worker, allowed_paths: ["src/**"] }), /unfinished Git operation/);
+  git(f.feature.cwd, "cherry-pick", "--abort");
+  assert.equal(features.featureStatus(f.root, f.feature.id).eligible, true);
 });
 
 test("creation rejects unsafe identifiers, refs, repos, metadata paths and reused destinations", (t) => {
