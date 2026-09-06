@@ -113,7 +113,8 @@ for (const leader of ["codex", "claude"]) {
         assert.equal(fs.statSync(childConfig).mode & 0o777, 0o600);
         assert.equal(launch.session_id, undefined, "Codex identity must come from the actual session");
       } else {
-        assert.equal(option(flags, "--permission-mode"), writable ? "acceptEdits" : "dontAsk");
+        if (writable) assert.equal(flags.includes("--permission-mode"), false);
+        else assert.equal(option(flags, "--permission-mode"), "dontAsk");
         const settings = JSON.parse(option(flags, "--settings"));
         assert.equal(option(flags, "--effort"), "medium");
         assert.equal(settings.switchModelsOnFlag, false);

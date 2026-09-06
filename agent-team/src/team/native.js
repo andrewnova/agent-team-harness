@@ -78,12 +78,14 @@ function buildNativeCommand(root, job, options = {}) {
     // including in read-only sessions without the general ToolSearch tool.
     fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { agent_team: { command: process.execPath, args: serverArgs, alwaysLoad: true } } }), { mode: 0o600, flag: "wx" });
     argv = [options.claude_bin || "claude", "--model", job.model, "--effort", config.claude.effort, "--name", job.id, "--session-id", session_id,
-      "--mcp-config", configPath, "--strict-mcp-config", "--permission-mode", job.writable ? "acceptEdits" : "dontAsk",
+      "--mcp-config", configPath, "--strict-mcp-config",
       // Preserve the assigned model: native safeguards must pause the job,
       // rather than silently fulfilling its assignment on another model.
       "--settings", JSON.stringify(settings),
       "--allowedTools", "Agent", "SendMessage", "mcp__agent_team__*", "mcp__agent_team__team_inbox", "mcp__agent_team__team_send", "mcp__agent_team__team_reply", "mcp__agent_team__team_report"];
-    if (!job.writable) argv.push("--tools", [...readTools].join(","));
+    // Coding jobs inherit the user's native approval policy (including auto).
+    // Reviewers retain an explicit read-only tool and permission boundary.
+    if (!job.writable) argv.push("--permission-mode", "dontAsk", "--tools", [...readTools].join(","));
     if (reviewContext) argv.push("--add-dir", directory, "--add-dir", reviewSource);
     argv.push("--", instructions);
   } else if (job.runtime === "codex") {
