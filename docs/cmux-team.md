@@ -4,13 +4,13 @@
 
 ## Start a team
 
-Install cmux, Git, Node.js >=22.13.0, and the native Codex and Claude Code CLIs on macOS. Sign in to both coding CLIs and confirm account access to the chosen models. From a terminal inside cmux, in this harness clone:
+Install cmux, Git, Node.js >=22.13.0, Codex CLI >=0.153.4, and Claude Code >=2.1.263 on macOS; those are the native CLI versions verified with this workflow. Sign in to both coding CLIs and confirm account access to the chosen models. From a terminal inside cmux, in this harness clone:
 
 ```sh
 node scripts/start-team.js --project /absolute/path/to/your/repo
 ```
 
-The target must be an existing Git repository. The starter opens `Team · your-project` with an Astra lead; once it reports ready, give it a task. Append `--leader claude` for a Fable lead. The lead creates worker and reviewer tabs through the CLI as work becomes ready, with four active jobs including itself by default. There is no automatic scheduler.
+The target must be an existing Git repository. The starter opens `Team · your-project` with an Astra lead; once it reports ready, give it a task. Append `--leader claude` for a Fable lead. The lead creates worker and reviewer tabs through the CLI as work becomes ready, with four active jobs including itself by default. Child agents inside a job do not count toward that cap. There is no automatic scheduler.
 
 Startup prints a coordinator path and lead job ID. State defaults to `~/.local/state/agent-team/cmux/<project-id>`; use `--coordinator /absolute/path` for another location. The coordinator must be separate from the target checkout. The starter gives it an isolated local Git root so the writable lead cannot claim an enclosing project by accident. Source implementation belongs in separate feature and worker worktrees.
 
@@ -34,6 +34,17 @@ This startup path does not install global skills or MCP configuration. Each nati
 | Review when Fable leads | Fresh Astra reviewer sessions |
 
 Model IDs are explicit in job JSON. The runtime never silently substitutes a model. Claude launches set `switchModelsOnFlag: false` through per-session `--settings` (verified against Claude Code 2.1.263), preserving native safeguard pauses instead of automatic model switching. A paused or switched reviewer has not completed the assigned review; keep the result unaccepted and inspect the native session. Global settings are unchanged. See [Claude's model-switch behavior](https://support.claude.com/en/articles/15363606-why-claude-switched-models-in-your-conversation-with-fable-5-or-fable-5-1). A reviewer is a separate job from implementation, even when the reviewer model also implemented another part of the feature.
+
+## Child agents inside a job
+
+Each job may run child agents through its native CLI. The defaults are versioned in `agent-team/native-team.config.json` and applied per launch; global Codex and Claude settings are not edited.
+
+- Codex jobs launch Astra at `xhigh` effort with native `multi_agent_v2` enabled; `xhigh` is applied to the parent and as the default for child and role agents.
+- Claude Code jobs launch Fable at medium effort with [Agent Teams](https://code.claude.com/docs/en/agent-teams) enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`), teammates in-process, and [every descendant pinned to the parent's explicit model](https://code.claude.com/docs/en/sub-agents#run-every-subagent-on-one-model) (`CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`). Agent Teams need Claude Code 2.1.263, the verified version; the pinned child model itself needs 2.1.257 or later.
+
+These are configured launch settings. The harness does not detect or undo manual changes made inside a running session.
+
+Coding and review jobs should launch as many child agents as the independent work justifies, within native CLI and account limits. Workers split independent responsibilities, refill useful capacity, and avoid duplicate work. Reviewers fan out across independent risk areas of the frozen candidate, collect every child result, synthesize one verdict, and stop their children. The parent job owns child scopes, private worktrees for simultaneous writers, the permission boundary, results, and shutdown. Children return results to their parent by native messages; only the parent uses the harness team tools and reports one result. Read-only reviewers can use child agents and messages, but their children cannot edit source. The harness neither schedules nor caps native children; `--max-active` counts harness jobs only, lead included.
 
 ## Start jobs
 
@@ -66,9 +77,9 @@ Example assignment:
 
 Create a `lead` job with the same `leader`, its chosen model, and a coordinator assignment. Keep it active while workers and reviewers return results. For a Fable reviewer use `role: "review"`, `leader: "codex"`, `writable: false`, its explicit Fable model ID, the feature worktree, and the required reviewer ID. For an Astra reviewer use `leader: "claude"` and its Astra model ID. Model availability is account-specific.
 
-The lead launches ready independent jobs up to its configured `--max-active` cap and refills slots as jobs finish. Dependencies must already exist and finish successfully. Each simultaneous writer needs a private checkout; aliases and subdirectories of one checkout share the same writer claim. This command does not create a scheduler or nested agent teams.
+The lead launches ready independent jobs up to its configured `--max-active` cap and refills slots as jobs finish. Dependencies must already exist and finish successfully. Each simultaneous writer needs a private checkout; aliases and subdirectories of one checkout share the same writer claim. This command does not create a scheduler; child agents inside a job are governed by the native CLI, not by this cap.
 
-Use absolute executable overrides when a shell or cmux wrapper shadows the intended CLI. All launches remain interactive. Codex uses its requested sandbox and normal approval policy. Read-only Claude jobs expose file-reading tools and the launch-bound team MCP tools; source-editing and nested-agent tools are unavailable. Unapproved operations are denied.
+Use absolute executable overrides when a shell or cmux wrapper shadows the intended CLI. All launches remain interactive. Codex uses its requested sandbox and normal approval policy. Read-only Claude jobs expose file-reading tools, native agent and messaging tools, and the launch-bound team MCP tools; source-editing tools are unavailable, and child agents inherit the same boundary. Unapproved operations are denied.
 
 ## How the agents talk
 
@@ -140,4 +151,4 @@ Uncertain allocation, lost surface identity, unobservable descendants, stale res
 
 ## Validation boundary
 
-Hermetic tests cover routing, concurrent ownership, attempt fencing, addressed MCP messages, launch failures, source-bound review/check evidence, and CLI behavior. Live proof must separately establish model availability, native readiness, the two-way semantic exchange, direct steering, and shutdown on the installed CLIs. Successful unit tests do not establish those live properties.
+Hermetic tests cover routing, concurrent ownership, attempt fencing, addressed MCP messages, launch failures, source-bound review/check evidence, and CLI behavior. Live proof must separately establish model availability, native readiness, the two-way semantic exchange, direct steering, child-agent behavior inside a job, and shutdown on the installed CLIs. Successful unit tests do not establish those live properties.

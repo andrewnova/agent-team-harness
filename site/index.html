@@ -68,10 +68,11 @@
           <p class="eyebrow">What you see</p>
           <h2 id="layout-title">A lead, its workers, and its reviewers, all as tabs you can watch and steer.</h2>
           <p class="section-lede">
-            The launcher creates one cmux project in the sidebar and opens the lead in the first
-            tab. When you give the lead a task, it creates a worker or reviewer tab for each job
-            it dispatches. Each tab is a real native Codex or Claude Code session with its own
-            login, workspace-trust, and approval prompts, and you can type into any of them.
+            The launcher creates one cmux project in the sidebar and opens the lead as the first
+            agent tab. When you give the lead a task, it creates a worker or reviewer tab for each
+            job it dispatches. Each tab is a real native Codex or Claude Code session with its own
+            login, workspace-trust, and approval prompts, and you can type into any of them. Inside
+            a tab, the session can fan out into its own child agents.
           </p>
         </div>
 
@@ -80,7 +81,7 @@
             <div class="mock-sidebar">
               <span class="mock-label">Projects</span>
               <ul role="list">
-                <li class="is-active">Agent Team Harness</li>
+                <li class="is-active">Team &middot; your-project</li>
               </ul>
             </div>
             <div class="mock-main">
@@ -109,7 +110,7 @@
                 </div>
                 <div>
                   <dt>Lead dispatches</dt>
-                  <dd>Worker and reviewer jobs from the command line, up to the active-job cap. There is no background scheduler.</dd>
+                  <dd>Worker and reviewer jobs from the command line, up to the active-job cap. Child agents inside a job are not counted. There is no background scheduler.</dd>
                 </div>
                 <div>
                   <dt>Lead waits for</dt>
@@ -127,15 +128,15 @@
         <div class="cards three tab-types">
           <article>
             <h3>Lead tab</h3>
-            <p>Opens first. Holds the brief, creates the feature worktree, dispatches jobs, and decides what gets repaired and accepted.</p>
+            <p>The first agent tab. Holds the brief, creates the feature worktree, dispatches jobs, and decides what gets repaired and accepted.</p>
           </article>
           <article>
             <h3>Worker tabs</h3>
-            <p>One per implementation job. Each has a private, writable checkout and a scoped prompt, and reports its commit back to the lead.</p>
+            <p>One per implementation job. Each has a private, writable checkout and a scoped prompt, can split independent pieces across its own child agents, and reports its commit back to the lead.</p>
           </article>
           <article>
             <h3>Reviewer tabs</h3>
-            <p>Fresh, read-only sessions of the opposite model. They see the brief, the exact candidate, and the full integrated diff, and return a verdict with findings.</p>
+            <p>Fresh, read-only sessions of the opposite model. They see the brief, the exact candidate, and the full integrated diff, fan out child agents across independent risk areas, and return one verdict with findings.</p>
           </article>
         </div>
       </section>
@@ -193,7 +194,8 @@
 
         <ul class="notes">
           <li>Every job names its model explicitly. The harness never swaps in a different model on its own.</li>
-          <li>If a reviewer's native session pauses or switches models, that review is not finished. Its result stays unaccepted until the assigned review completes and a valid verdict is imported.</li>
+          <li>Each job can run child agents inside its native session, using Codex multi-agent or Claude Code Agent Teams, with every child kept on the parent's model. Children report to their own job, not to the harness, and the job owns their scope, checkouts, permissions, and shutdown.</li>
+          <li>If a reviewer's native session pauses or switches models, that review is not finished. Treat its result as unaccepted until the assigned review completes and a valid verdict is imported.</li>
           <li>Model availability depends on your own Codex and Claude accounts.</li>
         </ul>
       </section>
@@ -242,7 +244,7 @@
             <span class="step-num" aria-hidden="true">05</span>
             <div>
               <h3>Review and check</h3>
-              <p>Fresh reviewer sessions from the opposite model receive the brief, the candidate, and the full integrated diff. Declared checks run on an isolated checkout of the same candidate at the same time. Every finding points at source.</p>
+              <p>Fresh reviewer sessions from the opposite model receive the brief, the candidate, and the full integrated diff. Each reviewer can fan out child agents across independent risk areas and returns one verdict. Declared checks run on an isolated checkout of the same candidate at the same time. Every finding points at source.</p>
             </div>
           </li>
           <li>
@@ -293,7 +295,7 @@
             <li>macOS with <a href="https://cmux.com/">cmux</a> installed</li>
             <li>Git, plus an existing Git repository for the team to work on</li>
             <li>Node.js 22.13.0 or newer</li>
-            <li><a href="https://learn.chatgpt.com/docs/codex/cli">Codex</a> and <a href="https://code.claude.com/docs/en/setup">Claude Code</a> installed and signed in</li>
+            <li><a href="https://learn.chatgpt.com/docs/codex/cli">Codex</a> 0.153.4 or newer and <a href="https://code.claude.com/docs/en/setup">Claude Code</a> 2.1.263 or newer, installed and signed in</li>
             <li>Account access to the configured models, Astra and Fable by default</li>
           </ul>
           <p class="quickstart-note">
@@ -316,7 +318,7 @@ node scripts/start-team.js --project /absolute/path/to/your/repo</code></pre>
 
           <h3>What happens next</h3>
           <ol class="next-steps">
-            <li>The launcher creates the cmux project and opens the lead tab first. By default the lead is a Codex session with Astra, and up to four jobs run at once, including the lead.</li>
+            <li>The launcher creates the cmux project and opens the lead as the first agent tab. By default the lead is a Codex session with Astra, and up to four jobs run at once, including the lead. Child agents inside a job are not counted.</li>
             <li>Complete the native login and workspace-trust prompts in the lead tab so the lead is ready.</li>
             <li>Give the ready lead a task. It creates worker and reviewer tabs as it needs them.</li>
             <li>Native login, workspace-trust, and approval prompts stay visible; the native permission policy remains in force.</li>
