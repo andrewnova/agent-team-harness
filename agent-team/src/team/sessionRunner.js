@@ -88,7 +88,7 @@ function retainTerminal() {
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(false);
     process.stdin.resume();
-    process.stdout.write("This owned terminal is retained for inspection. Close its workspace when finished.\n");
+    process.stdout.write("This owned terminal is retained for inspection. Close this tab when finished.\n");
   }
 }
 if (require.main === module) runSession(process.argv[2]).then(retainTerminal).catch((error) => {

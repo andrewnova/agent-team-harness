@@ -9,7 +9,7 @@
 | Review when Astra leads | Fresh Fable reviewer sessions |
 | Review when Fable leads | Fresh Astra reviewer sessions |
 
-Model IDs are explicit in job JSON. The runtime never silently substitutes a model. A reviewer is a separate job from implementation, even when the reviewer model also implemented another part of the feature.
+Model IDs are explicit in job JSON. The runtime never silently substitutes a model. Claude launches set `switchModelsOnFlag: false` through per-session `--settings` (verified against Claude Code 2.1.263), preserving native safeguard pauses instead of automatic model switching. A paused or switched reviewer has not completed the assigned review; keep the result unaccepted and inspect the native session. Global settings are unchanged. See [Claude's model-switch behavior](https://support.claude.com/en/articles/15363606-why-claude-switched-models-in-your-conversation-with-fable-5-or-fable-5-1). A reviewer is a separate job from implementation, even when the reviewer model also implemented another part of the feature.
 
 ## Start jobs
 

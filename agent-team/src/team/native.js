@@ -52,6 +52,9 @@ function buildNativeCommand(root, job, options = {}) {
     fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { agent_team: { command: process.execPath, args: serverArgs } } }), { mode: 0o600, flag: "wx" });
     argv = [options.claude_bin || "claude", "--model", job.model, "--name", job.id, "--session-id", session_id,
       "--mcp-config", configPath, "--strict-mcp-config", "--permission-mode", job.writable ? "acceptEdits" : "dontAsk",
+      // Preserve the assigned model: native safeguards must pause the job,
+      // rather than silently fulfilling its assignment on another model.
+      "--settings", JSON.stringify({ switchModelsOnFlag: false }),
       "--disallowedTools", "Agent",
       "--allowedTools", "mcp__agent_team__*", "mcp__agent_team__team_inbox", "mcp__agent_team__team_send", "mcp__agent_team__team_reply", "mcp__agent_team__team_report"];
     if (!job.writable) argv.push("--tools", "Read,Glob,Grep");

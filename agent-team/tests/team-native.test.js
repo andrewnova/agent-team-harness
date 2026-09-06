@@ -99,6 +99,7 @@ for (const leader of ["codex", "claude"]) {
         assert.equal(launch.session_id, undefined, "Codex identity must come from the actual session");
       } else {
         assert.equal(option(flags, "--permission-mode"), writable ? "acceptEdits" : "dontAsk");
+        assert.deepEqual(JSON.parse(option(flags, "--settings")), { switchModelsOnFlag: false });
         assert.ok(flags.includes("--strict-mcp-config"));
         assert.match(launch.session_id, /^[0-9a-f-]{36}$/);
         assert.equal(option(flags, "--session-id"), launch.session_id);
