@@ -84,7 +84,7 @@ Create a `lead` job with the same `leader`, its chosen model, and a coordinator 
 
 The lead launches ready independent jobs up to its configured `--max-active` cap and refills slots as jobs finish. Dependencies must already exist and finish successfully. Each simultaneous writer needs a private checkout; aliases and subdirectories of one checkout share the same writer claim. This command does not create a scheduler; child agents inside a job are governed by the native CLI, not by this cap.
 
-Use absolute executable overrides when a shell or cmux wrapper shadows the intended CLI. All launches remain interactive. Codex uses its requested sandbox and normal approval policy. Read-only Claude jobs expose file-reading tools, native agent and messaging tools, and the launch-bound team MCP tools; source-editing tools are unavailable, and child agents inherit the same boundary. Unapproved operations are denied.
+Use absolute executable overrides when a shell or cmux wrapper shadows the intended CLI. All launches remain interactive. Coding jobs inherit Claude Code's configured native approval mode instead of overriding it; read-only jobs keep the explicit restrictions below. Codex uses its requested sandbox and normal approval policy. Read-only Claude jobs expose file-reading tools, native agent and messaging tools, and the launch-bound team MCP tools; source-editing tools are unavailable, and child agents inherit the same boundary. Unapproved operations are denied.
 
 ## How the agents talk
 

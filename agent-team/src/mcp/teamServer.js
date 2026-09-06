@@ -2,8 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { encodeFrame, decodeFrames } = require("./claudeServer");
-const { getJob, bindJob, jobInbox, sendJobMessage, reportJob } = require("../team/jobs");
-const { loadMessage } = require("../mailbox");
+const { getJob, bindJob, jobInbox, sendJobMessage, reportJob, reportJobResult } = require("../team/jobs");
 
 const string = { type: "string", minLength: 1 };
 const jobId = { ...string, pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$" };
@@ -115,15 +114,11 @@ function dispatchTool(context, name, args = {}, requestMeta) {
   if (args.to_job && args.in_reply_to) throw new Error("report accepts either to_job or in_reply_to, not both");
   if (args.status === "ready" && boundJob.status === "cancelling") throw new Error("cancelling job cannot report readiness");
   if (args.status !== "ready" && (!args.result || (!args.to_job && !args.in_reply_to))) throw new Error("terminal report requires result and to_job or in_reply_to");
-  if (args.status !== "ready" && boundJob.parent_job && (args.to_job || replyTarget(context, args.in_reply_to)) !== boundJob.parent_job) throw new Error("terminal result must address the assigned parent lead");
-  if (args.status !== "ready" && boundJob.reported_result) {
-    const previous = boundJob.reported_result;
-    if (previous.status !== args.status || previous.result !== args.result) throw new Error("native attempt already reported a different terminal result");
-    const message = previous.message_id && loadMessage(context.root, previous.message_id, { include_body: true });
-    const target = args.to_job || replyTarget(context, args.in_reply_to);
-    if (!message || message.metadata?.to_job !== target || Boolean(message.in_reply_to) !== Boolean(args.in_reply_to) ||
-        (args.in_reply_to && message.in_reply_to !== args.in_reply_to && message.request_id !== args.in_reply_to)) throw new Error("terminal report retry does not match the original addressed result");
-    return { ok: true, job: boundJob, message, delivery: { status: "pending", reason: "waiting_for_process_stop" } };
+  if (args.status !== "ready") {
+    // Errors remain retryable tool errors. Even a partially committed report
+    // must never invoke afterSend while the worker process still owns its job.
+    const result = reportJobResult(context.root, context.job_id, context.attempt, args);
+    return { ok: true, ...result, delivery: { status: "pending", reason: "waiting_for_process_stop" } };
   }
   let message;
   if (args.to_job || args.in_reply_to) {
@@ -140,9 +135,6 @@ function dispatchTool(context, name, args = {}, requestMeta) {
     if (!message) throw error;
     return { ok: true, report_error: error.message, ...afterSend(context, message) };
   }
-  // The result is durable now, but cannot be accepted until the runner proves
-  // every owned process stopped. That owner delivers the completion wake.
-  if (message && args.status !== "ready") return { ok: true, job, message, delivery: { status: "pending", reason: "waiting_for_process_stop" } };
   return { ok: true, job, ...(message ? afterSend(context, message) : {}) };
 }
 

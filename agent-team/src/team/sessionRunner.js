@@ -30,14 +30,18 @@ async function runSession(file, { onResult = notifyResult } = {}) {
   let stoppedForReport = false;
   let runnerError;
   let descendants;
+  const cleanupWarnings = [];
+  const signalOwnedProcess = (pid, signal, operation) => {
+    try { process.kill(pid, signal); } catch (cause) {
+      if (cause.code !== "ESRCH") cleanupWarnings.push({ operation, pid, signal, code: cause.code, message: cause.message, at: new Date().toISOString() });
+    }
+  };
   const stop = () => {
     if (!child?.pid) return;
     if (!stopAt) stopAt = Date.now();
     const signal = Date.now() - stopAt > 5000 ? "SIGKILL" : "SIGTERM";
     try { descendants?.stop(signal); } catch (cause) { runnerError = cause; }
-    try { process.kill(-child.pid, signal); } catch (cause) {
-      if (cause.code !== "ESRCH") runnerError = cause;
-    }
+    signalOwnedProcess(-child.pid, signal, "process_group_signal");
   };
   const timer = setInterval(() => {
     try {
@@ -72,7 +76,9 @@ async function runSession(file, { onResult = notifyResult } = {}) {
       child.on("error", (cause) => { error = cause; });
       exited = new Promise((resolve) => child.on("close", (code, signal) => resolve({ code, signal })));
       if (child.pid) {
-        descendants = trackProcesses(child.pid);
+        // Signal failures may recover, but inventory failures remain fatal.
+        // Completion still requires both the final inventory and group proof.
+        descendants = trackProcesses(child.pid, { signal: (pid, signal) => signalOwnedProcess(pid, signal, "descendant_signal") });
         descendants.scan();
         jobs.bindJob(root, job_id, attempt, { workspace_id, surface_id, pid: child.pid });
       }
@@ -104,12 +110,16 @@ async function runSession(file, { onResult = notifyResult } = {}) {
     stop();
   }
   const receipt = { job_id, attempt, runner_pid: process.pid, pid: child?.pid, ...exit, process_stopped, observed_processes: descendants?.identities() || [], remaining,
+    stopped_for_report: stoppedForReport, cleanup_warnings: cleanupWarnings,
     error: error?.message || runnerError?.message, stopped_at: new Date().toISOString() };
   fs.writeFileSync(path.join(directory, "exit.json"), JSON.stringify(receipt, null, 2), { mode: 0o600 });
   if (!process_stopped) throw new Error("native descendants still alive; checkout claim retained");
   const current = jobs.getJob(root, job_id);
-  const expectedReportSignal = stoppedForReport && exit.code === null && ["SIGTERM", "SIGKILL"].includes(exit.signal);
-  const unexpectedExit = exit.code !== 0 && !expectedReportSignal;
+  // Native Claude handles supervisor SIGTERM and exits with 128 + SIGTERM.
+  // Accept that observed convention only after report-driven supervisor stop.
+  const expectedReportStop = stoppedForReport && ((exit.code === null && ["SIGTERM", "SIGKILL"].includes(exit.signal)) ||
+    (exit.code === 143 && exit.signal === null));
+  const unexpectedExit = exit.code !== 0 && !expectedReportStop;
   const status = current.status === "cancelling" ? "cancelled" : error || runnerError || unexpectedExit ? "failed" : current.reported_result?.status || "failed";
   receipt.status = status;
   if (status === "failed" && unexpectedExit) receipt.error ||= `Native session exited unexpectedly (${exit.code ?? exit.signal ?? "no process"}); its result is not accepted.`;

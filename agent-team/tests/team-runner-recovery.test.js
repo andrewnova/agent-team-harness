@@ -38,6 +38,11 @@ async function nativeFixture() {
   const config = JSON.parse(process.argv[2]);
   const atSpawn = JSON.parse(fs.readFileSync(path.join(config.root, ".agent-team", "state", "jobs", "worker.json")));
   fs.appendFileSync(config.starts, JSON.stringify({ pid: process.pid, runner_identity: atSpawn.runner_identity }) + "\n");
+  if (config.holdDescendant) {
+    const held = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000); setTimeout(() => process.exit(124), 30000)"], { detached: true, stdio: "ignore" });
+    fs.writeFileSync(config.heldPid, JSON.stringify({ pid: held.pid }));
+    held.unref();
+  }
   const server = spawn(process.execPath, [config.mcp, "--cwd", config.root, "--job", "worker", "--attempt", String(config.attempt)], { stdio: ["pipe", "pipe", "inherit"] });
   const pending = new Map();
   let sequence = 0;
@@ -71,6 +76,9 @@ async function nativeFixture() {
       const response = await tool("team_report", action.report);
       fs.writeFileSync(`${config.control}.${next}.response.json`, JSON.stringify(response));
     }
+    // Arm proof failures only after the real MCP has accepted the report, so
+    // startup and semantic reporting are still exercised without faults.
+    if (action.proofFault) fs.writeFileSync(config.proofFault, action.proofFault);
     if (action.exit !== undefined) process.exit(action.exit);
     next++;
     busy = false;
@@ -91,6 +99,9 @@ function fixture(t) {
   const wakeLog = path.join(root, "wakes.jsonl");
   const wakeFailure = path.join(root, "wake-failure");
   const bindingFailure = path.join(root, "binding-failure.json");
+  const proofFault = path.join(root, "proof-fault");
+  const signalLog = path.join(root, "signals.jsonl");
+  const heldPid = path.join(root, "held-pid.json");
   const workerFile = path.join(root, ".agent-team", "state", "jobs", "worker.json");
   const handles = [];
   fs.writeFileSync(model, `(${nativeFixture.toString()})().catch(error => { console.error(error); process.exit(1); });\n`);
@@ -99,11 +110,16 @@ function fixture(t) {
     const path = require('node:path');
     const cp = require('node:child_process');
     const root = ${JSON.stringify(root)};
+    const isRunner = process.argv[1] === ${JSON.stringify(runner)};
+    const proofFault = () => fs.existsSync(${JSON.stringify(proofFault)}) ? fs.readFileSync(${JSON.stringify(proofFault)}, 'utf8') : null;
     const jobDirectory = path.join(root, '.agent-team', 'state', 'jobs');
     const readJobs = () => fs.readdirSync(jobDirectory).filter(name => name.endsWith('.json')).map(name => JSON.parse(fs.readFileSync(path.join(jobDirectory, name))));
     for (const method of ['spawnSync', 'spawn', 'execFileSync', 'execFile', 'execSync', 'exec']) {
       const original = cp[method];
       cp[method] = (file, ...args) => {
+        if (isRunner && file === 'ps' && method === 'spawnSync' && proofFault() === 'inventory') {
+          return { status: 1, stdout: '', stderr: 'fixture process inventory denied' };
+        }
         if (path.basename(file) === 'cmux' && method === 'spawnSync') {
           const argv = args[0];
           if (argv.slice(0, 4).join(' ') !== '--json --id-format uuids rpc') throw new Error('Unexpected cmux command');
@@ -124,6 +140,33 @@ function fixture(t) {
         }
         if (![process.execPath, 'ps', path.join(root, 'missing-native')].includes(file)) throw new Error('Unexpected external execution: ' + file);
         return original(file, ...args);
+      };
+    }
+    if (isRunner) {
+      const kill = process.kill.bind(process);
+      let deniedOnce = false;
+      process.kill = (pid, signal) => {
+        if (pid < 0 && signal === 0 && proofFault() === 'group_probe') {
+          throw Object.assign(new Error('fixture process group probe denied'), { code: 'EPERM' });
+        }
+        if (!['SIGTERM', 'SIGKILL'].includes(signal)) return kill(pid, signal);
+        const row = { pid, signal, at: new Date().toISOString() };
+        try {
+          if (pid > 0 && signal === 'SIGTERM' && process.env.TEAM_RECOVERY_FAIL_SIGNAL === '1' && !deniedOnce) {
+            deniedOnce = true;
+            throw Object.assign(new Error('fixture transient descendant signal denied'), { code: 'EPERM' });
+          }
+          if (fs.existsSync(${JSON.stringify(heldPid)}) && pid === JSON.parse(fs.readFileSync(${JSON.stringify(heldPid)})).pid) {
+            throw Object.assign(new Error('fixture surviving descendant signal denied'), { code: 'EPERM' });
+          }
+          return kill(pid, signal);
+        } catch (error) {
+          row.code = error.code;
+          row.message = error.message;
+          throw error;
+        } finally {
+          fs.appendFileSync(${JSON.stringify(signalLog)}, JSON.stringify(row) + '\\n');
+        }
       };
     }
     // Inject a real persistence error at the PID-binding write after spawn,
@@ -169,7 +212,7 @@ function fixture(t) {
     const ready = path.join(dir, "ready.json");
     const file = path.join(dir, "launch.json");
     fs.writeFileSync(file, JSON.stringify({ root, job_id: job.id, attempt: job.attempt, cwd: root,
-      argv: argv || [process.execPath, model, JSON.stringify({ root, attempt: job.attempt, starts: started, ready, control, mcp, ...nativeOptions })] }));
+      argv: argv || [process.execPath, model, JSON.stringify({ root, attempt: job.attempt, starts: started, ready, control, mcp, proofFault, heldPid, ...nativeOptions })] }));
     return { file, control, ready, receipt: path.join(dir, "exit.json"), attempt: job.attempt, sequence: 0 };
   }
   function launch(packet, options = {}) {
@@ -232,6 +275,24 @@ function fixture(t) {
     }
     return receipt;
   }
+  function retained(packet) {
+    const job = show();
+    const receipt = read(packet.receipt);
+    assert.equal(job.process_stopped, false);
+    assert.equal(receipt.process_stopped, false);
+    assert.equal(receipt.attempt, packet.attempt);
+    assert.equal(job.status, "running");
+    assert.equal(job.reported_result.status, "completed");
+    assert.equal(receipt.status, undefined, "unproved cleanup must not finalize the job");
+    assert.equal(receipt.delivery, undefined);
+    assert.deepEqual(notices(), []);
+    assert.deepEqual(rows(wakeLog), []);
+    assert.throws(() => jobs.jobFinishedMessage(root, "worker", packet.attempt), /must have stopped/);
+    assert.throws(claim, /cannot be claimed/);
+    create("contending-writer", "backend", { parent_job: "parent" });
+    assert.throws(() => jobs.claimJob(root, "contending-writer", { max_active: 4 }), /checkout already has a writer: worker/);
+    return receipt;
+  }
   const notices = (parent = "parent", attempt = 1) => jobs.jobInbox(root, parent, attempt).filter((message) => message.metadata.event === "job_stopped");
   t.after(async () => {
     try {
@@ -245,11 +306,16 @@ function fixture(t) {
       if (job.pid && !job.process_stopped) {
         try { process.kill(-job.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
       }
+      const held = read(heldPid);
+      if (held?.pid) {
+        try { process.kill(held.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+        await until(() => inventory().some((row) => row.pid === held.pid), (live) => !live, "held descendant teardown");
+      }
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
-  return { root, env, claim, show, packet, launch, end, ready, action, notify, stopped, notices, read,
-    starts: () => rows(started), wakes: () => rows(wakeLog), wakeFailure, bindingFailure };
+  return { root, env, claim, show, packet, launch, end, ready, action, notify, stopped, retained, notices, read,
+    starts: () => rows(started), wakes: () => rows(wakeLog), signals: () => rows(signalLog), wakeFailure, bindingFailure, heldPid };
 }
 
 test("runner recovery: simultaneous duplicate runners admit one native child and retain the winner", { timeout: 20000 }, async (t) => {
@@ -378,7 +444,7 @@ for (const [label, status, exit, expected] of [
   });
 }
 
-for (const [stopExitCode, expected] of [[0, "completed"], [23, "failed"]]) {
+for (const [stopExitCode, expected] of [[0, "completed"], [143, "completed"], [23, "failed"]]) {
   test(`runner recovery: report-driven shutdown with native exit ${stopExitCode} finishes as ${expected}`, { timeout: 15000 }, async (t) => {
     const f = fixture(t);
     const packet = f.packet(f.claim(), undefined, { stopExitCode });
@@ -390,9 +456,106 @@ for (const [stopExitCode, expected] of [[0, "completed"], [23, "failed"]]) {
     await f.end(child);
     const receipt = f.stopped(packet, expected);
     assert.equal(receipt.code, stopExitCode);
+    assert.equal(receipt.stopped_for_report, true);
+    assert.equal(receipt.signal, null);
+    if (expected === "completed") assert.equal(receipt.error, undefined);
+    else assert.match(receipt.error, /23/);
     assert.equal(JSON.parse(f.notices()[0].body).status, expected);
   });
 }
+
+for (const hasReport of [false, true]) {
+  test(`runner recovery: native exit 143 ${hasReport ? "with" : "without"} a semantic report fails without supervisor shutdown`, { timeout: 15000 }, async (t) => {
+    const f = fixture(t);
+    const packet = f.packet(f.claim());
+    const child = f.launch(packet);
+    await f.ready(packet);
+    // Report and exit happen in the same native action, before the runner's
+    // one-second report grace period can request supervisor shutdown.
+    const response = await f.action(packet, { ...(hasReport ? { report: { status: "completed", result: "Report before unrequested exit", to_job: "parent" } } : {}), exit: 143 });
+    await f.end(child);
+    const receipt = f.stopped(packet, "failed");
+    assert.equal(receipt.code, 143);
+    assert.equal(receipt.signal, null);
+    assert.equal(receipt.stopped_for_report, false);
+    assert.match(receipt.error, /143/);
+    if (hasReport) assert.equal(f.show().reported_result.message_id, response.message.id);
+    else assert.equal(f.show().reported_result, undefined);
+    assert.equal(JSON.parse(f.notices()[0].body).status, "failed");
+  });
+}
+
+test("runner recovery: one transient descendant SIGTERM error remains an actionable warning after proven semantic completion", { timeout: 15000 }, async (t) => {
+  const f = fixture(t);
+  const packet = f.packet(f.claim(), undefined, { stopExitCode: 143 });
+  const child = f.launch(packet, { TEAM_RECOVERY_FAIL_SIGNAL: "1" });
+  const boot = await f.ready(packet);
+  const response = await f.action(packet, { report: { status: "completed", result: "Complete despite a transient signal error", to_job: "parent" } });
+  await f.end(child);
+  const receipt = f.stopped(packet, "completed");
+  assert.equal(receipt.code, 143);
+  assert.equal(receipt.stopped_for_report, true);
+  assert.equal(receipt.error, undefined);
+  assert.equal(f.show().result, response.job.reported_result.result);
+  assert.ok(Array.isArray(receipt.cleanup_warnings));
+  assert.equal(receipt.cleanup_warnings.length, 1);
+  const [warning] = receipt.cleanup_warnings;
+  assert.deepEqual(Object.keys(warning).sort(), ["at", "code", "message", "operation", "pid", "signal"]);
+  assert.equal(warning.operation, "descendant_signal");
+  assert.equal(warning.signal, "SIGTERM");
+  assert.equal(warning.code, "EPERM");
+  assert.match(warning.message, /fixture transient descendant signal denied/);
+  assert.ok(Number.isSafeInteger(warning.pid) && warning.pid > 0);
+  assert.ok(Number.isFinite(Date.parse(warning.at)));
+  assert.ok(Date.parse(warning.at) <= Date.parse(receipt.stopped_at));
+  assert.ok(receipt.observed_processes.some((row) => row.pid === warning.pid));
+  const signals = f.signals();
+  const denied = signals.findIndex((row) => row.code === "EPERM");
+  assert.ok(denied >= 0, "the real signal boundary must have rejected a kill");
+  assert.equal(signals.filter((row) => row.code === "EPERM").length, 1);
+  assert.equal(signals[denied].pid, warning.pid);
+  assert.ok(signals.slice(denied + 1).some((row) => row.pid > 0 && !row.code), "tracker must continue actually signaling other owned PIDs after the transient failure");
+  assert.equal(inventory().some((row) => [receipt.pid, boot.mcp_pid].includes(row.pid)), false);
+  assert.equal(JSON.parse(f.notices()[0].body).status, "completed");
+});
+
+for (const [proofFault, errorPattern] of [["inventory", /cannot observe native descendants/], ["group_probe", /fixture process group probe denied/]]) {
+  test(`runner recovery: ${proofFault} rejection retains ownership despite a completion report and native exit`, { timeout: 15000 }, async (t) => {
+    const f = fixture(t);
+    const packet = f.packet(f.claim());
+    const child = f.launch(packet);
+    await f.ready(packet);
+    await f.action(packet, { report: { status: "completed", result: "Semantic report cannot replace stopped proof", to_job: "parent" }, proofFault, exit: 0 });
+    await f.end(child, 1);
+    const receipt = f.retained(packet);
+    assert.equal(receipt.code, 0);
+    assert.match(receipt.error, errorPattern);
+    assert.match(child.output, /checkout claim retained/);
+    assert.deepEqual(receipt.cleanup_warnings, [], "inventory and signal-zero proof failures are fatal, not recovered signal warnings");
+  });
+}
+
+test("runner recovery: an actual surviving descendant exceeds the cleanup deadline and retains the writer claim", { timeout: 20000 }, async (t) => {
+  const f = fixture(t);
+  const packet = f.packet(f.claim(), undefined, { stopExitCode: 143, holdDescendant: true });
+  const child = f.launch(packet);
+  await f.ready(packet);
+  const held = f.read(f.heldPid);
+  assert.ok(held.pid > 0);
+  const live = inventory().find((row) => row.pid === held.pid);
+  assert.equal(live.group, held.pid, "the real helper must escape the native process group");
+  await f.action(packet, { report: { status: "completed", result: "Semantic completion with an unkillable owned helper", to_job: "parent" } });
+  await f.end(child, 1);
+  const receipt = f.retained(packet);
+  assert.equal(receipt.code, 143);
+  assert.equal(receipt.stopped_for_report, true);
+  assert.ok(receipt.observed_processes.some((row) => row.pid === held.pid && row.started === live.started));
+  assert.ok(receipt.remaining.some((row) => row.pid === held.pid && row.started === live.started));
+  assert.ok(inventory().some((row) => row.pid === held.pid && row.started === live.started), "remaining evidence must describe a process that is actually alive");
+  assert.match(child.output, /native descendants still alive; checkout claim retained/);
+  assert.ok(receipt.cleanup_warnings.some((warning) => warning.operation === "descendant_signal" && warning.pid === held.pid && warning.code === "EPERM" && warning.signal === "SIGKILL"), "cleanup must try escalation before rejecting final stopped proof");
+  // The runner-only fault leaves teardown free to send a real SIGKILL.
+});
 
 test("runner recovery: failed notification retries reuse one durable ID and cannot leak across either job attempt", { timeout: 20000 }, async (t) => {
   const f = fixture(t);
