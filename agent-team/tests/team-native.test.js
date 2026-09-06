@@ -408,12 +408,15 @@ function reviewFixture(t, leader = "codex") {
 
 test("review launch includes the frozen integrated diff and prior findings, and refuses changed source", (t) => {
   const f = reviewFixture(t);
-  const job = f.startReview();
+  const job = f.startReview({ cwd: f.cwd });
   const command = native.buildNativeCommand(f.root, job, { claude_bin: "claude-fixture-only" });
   const launch = launchData(command);
   assert.match(launch.argv.at(-1), /Frozen candidate:/);
   assert.ok(launch.argv.at(-1).includes(f.result.candidate.commit));
   assert.ok(fs.existsSync(path.join(command.directory, "candidate.diff")));
+  assert.deepEqual(launch.argv.flatMap((flag, index) => flag === "--add-dir" ? [launch.argv[index + 1]] : []), [command.directory, f.feature.cwd]);
+  assert.equal(option(launch.argv, "--permission-mode"), "dontAsk");
+  assert.equal(option(launch.argv, "--tools").split(",").includes("Write"), false);
   jobs.finishJob(f.root, job.id, 1, { status: "failed", process_stopped: true });
   const retry = jobs.claimJob(f.root, job.id, { max_active: 1 });
   fs.writeFileSync(path.join(f.feature.cwd, "unreviewed.txt"), "new source");

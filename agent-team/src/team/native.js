@@ -19,10 +19,12 @@ function buildNativeCommand(root, job, options = {}) {
   const server = path.join(__dirname, "sessionMcp.js");
   const serverArgs = [server, "--cwd", root, "--job", job.id, "--attempt", String(job.attempt)];
   let reviewContext = "";
+  let reviewSource;
   if (job.role === "review" && job.feature_id) {
     const features = require("./features");
     const feature = features.getFeature(root, job.feature_id);
     features.currentCandidate(feature);
+    reviewSource = feature.cwd;
     if (job.writable || job.leader !== feature.leader || !feature.review_jobs.includes(job.id)) throw new Error("review assignment does not match the feature requirements");
     const diff = spawnSync("git", ["-C", feature.cwd, "diff", "--no-ext-diff", "--no-textconv", feature.base, feature.candidate.commit, "--"], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
     if (diff.error || diff.status !== 0) throw new Error("cannot prepare the integrated review diff");
@@ -82,7 +84,7 @@ function buildNativeCommand(root, job, options = {}) {
       "--settings", JSON.stringify(settings),
       "--allowedTools", "Agent", "SendMessage", "mcp__agent_team__*", "mcp__agent_team__team_inbox", "mcp__agent_team__team_send", "mcp__agent_team__team_reply", "mcp__agent_team__team_report"];
     if (!job.writable) argv.push("--tools", [...readTools].join(","));
-    if (reviewContext) argv.push("--add-dir", directory);
+    if (reviewContext) argv.push("--add-dir", directory, "--add-dir", reviewSource);
     argv.push("--", instructions);
   } else if (job.runtime === "codex") {
     const childConfig = path.join(directory, "codex-child.toml");
