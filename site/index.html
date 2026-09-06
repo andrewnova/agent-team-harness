@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Agent Team Harness</title>
-    <meta name="description" content="Start bounded coding work in a direct native Codex or Claude Code session. Explore experimental cmux teams when substantial independent work justifies coordination.">
+    <meta name="description" content="Use the team skill in Claude Code or Codex for native agents and a fresh review. Add cmux to open an experimental coordinated team workspace.">
     <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
     <link rel="stylesheet" href="styles.css">
   </head>
@@ -17,11 +17,11 @@
         <span>Agent Team Harness</span>
       </a>
       <nav aria-label="Primary">
-        <a href="#layout">Experimental teams</a>
+        <a href="#quickstart">Get started</a>
+        <a href="#team-start">cmux</a>
         <a href="#roles">Roles</a>
         <a href="#workflow">Workflow</a>
         <a href="#messaging">Messaging</a>
-        <a href="#quickstart">Quickstart</a>
         <a class="nav-button" href="https://github.com/andrewnova/agent-team-harness">GitHub</a>
       </nav>
     </header>
@@ -29,15 +29,16 @@
     <main id="main">
       <section class="hero" id="top" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow">Direct sessions first &middot; teams experimental</p>
-          <h1 id="hero-title">Start with a native session.</h1>
+          <p class="eyebrow">Native agents &middot; optional cmux coordination</p>
+          <h1 id="hero-title">Your task. A native team.</h1>
           <p class="lede">
-            Open your repository in Codex or Claude Code, give it a bounded task, and verify the result.
-            Try a coordinated cmux team when substantial independent work earns the extra steps.
+            Use <code>/team</code> in Claude Code or select <code>@team</code> in Codex.
+            Your session leads, delegates useful independent work, and gets a fresh review.
+            Add <code>cmux</code> when you want a coordinated workspace with visible agent tabs.
           </p>
           <div class="hero-actions">
-            <a class="button primary" href="#quickstart">Start directly</a>
-            <a class="button secondary" href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/direct-sessions.md">Read the guide</a>
+            <a class="button primary" href="#quickstart">Install the skill</a>
+            <a class="button secondary" href="#team-start">Use cmux</a>
           </div>
           <p class="credit">Created and maintained by Andrew Guzman. Source on GitHub.</p>
         </div>
@@ -48,41 +49,56 @@
         </figure>
       </section>
 
-      <section class="section quickstart" id="quickstart" aria-labelledby="direct-title">
+      <section class="section quickstart" id="quickstart" aria-labelledby="skill-title">
         <div class="quickstart-copy">
-          <p class="eyebrow">The default for bounded work</p>
-          <h2 id="direct-title">Your repo. One native session.</h2>
-          <p>Use your installed, signed-in CLI and a model available to your account. Native trust and permission settings stay in force.</p>
-          <p>No harness installation or coordinator is needed. cmux is optional for arranging your terminals.</p>
-          <p><a href="#team-start">Experimental team setup</a></p>
+          <p class="eyebrow">Start here</p>
+          <h2 id="skill-title">Install once. Call your team.</h2>
+          <p>One shared skill works in Claude Code, Codex desktop, and Codex CLI. Start with your signed-in native app and open the repository you want to work on.</p>
+          <p>The installer adds skill links. Your native model, trust, and permission settings stay in force.</p>
+          <p>Prefer to work without the skill? Use the <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/direct-sessions.md">direct-session guide</a>.</p>
         </div>
         <div class="quickstart-main">
           <div class="code-block" data-copy>
-            <div class="code-top"><span class="code-title">Codex &middot; Astra at xhigh</span></div>
-            <pre><code>cd /absolute/path/to/your/repo
-codex --model gpt-6-astra -c 'model_reasoning_effort="xhigh"'</code></pre>
+            <div class="code-top"><span class="code-title">One-time skill setup</span></div>
+            <pre><code>git clone https://github.com/andrewnova/agent-team-harness.git
+cd agent-team-harness
+./scripts/install-team-skill.sh</code></pre>
             <p class="code-status" role="status" aria-live="polite"></p>
           </div>
-          <div class="code-block" data-copy>
-            <div class="code-top"><span class="code-title">Claude Code &middot; Fable at medium</span></div>
-            <pre><code>cd /absolute/path/to/your/repo
-claude --model 'claude-fable-5-1[1m]' --effort medium \
-  --settings '{"switchModelsOnFlag":false}'</code></pre>
-            <p class="code-status" role="status" aria-live="polite"></p>
+          <p>Keep this clone available: both apps read the same skill source. If you already have the clone, update it and run the installer there. Existing different skills are preserved. Start a new native session if <code>team</code> is not visible.</p>
+          <div class="table-wrap">
+            <table class="routing invocation">
+              <caption>Choose your app and give it a task</caption>
+              <thead>
+                <tr><th scope="col">App</th><th scope="col">Native work</th><th scope="col">cmux team</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Claude Code</th>
+                  <td data-label="Native work"><code>/team &lt;task&gt;</code></td>
+                  <td data-label="cmux team"><code>/team cmux</code></td>
+                </tr>
+                <tr>
+                  <th scope="row">Codex desktop</th>
+                  <td data-label="Native work">Select <code>@team</code>, then enter your task</td>
+                  <td data-label="cmux team">Select <code>@team</code>, then type <code>cmux</code></td>
+                </tr>
+                <tr>
+                  <th scope="row">Codex CLI</th>
+                  <td data-label="Native work"><code>$team &lt;task&gt;</code></td>
+                  <td data-label="cmux team"><code>$team cmux</code></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <ol class="next-steps">
-            <li>Give the session a concrete task and observable acceptance criteria.</li>
-            <li>Let native child agents handle useful independent work. Keep simultaneous writers in separate checkouts.</li>
-            <li>Verify the result, commit the candidate, and use a fresh session for focused independent review.</li>
-          </ol>
-          <p><a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/direct-sessions.md">Implementation and review prompts</a></p>
-          <p>The coordinated September 6 trial did not reach small-task acceptance within twenty minutes. Teams remain experimental; passing component tests does not establish a speed advantage. <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/native-workflow-findings.md">Trial findings</a>.</p>
+          <p><code>team cmux</code> opens a team ready for work. Append a task to hand it to the ready lead, such as <code>/team cmux Build the settings page</code>. <a href="#team-start">See cmux requirements and startup</a>.</p>
+          <p>Native work stays in your current session, with useful child agents and a fresh read-only review. Simultaneous writers use separate checkouts. Coordinated cmux teams remain experimental. <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/native-workflow-findings.md">Trial findings</a>.</p>
         </div>
       </section>
 
-      <section class="band intro" aria-label="At a glance">
+      <section class="band intro" aria-label="Coordinated cmux teams at a glance">
         <div>
-          <span class="stat">One project, many tabs</span>
+          <span class="stat">cmux: one project, many tabs</span>
           <p>The lead and every worker or reviewer are native tabs in a single cmux project. Every agent has a tab you can open.</p>
         </div>
         <div>
@@ -320,8 +336,10 @@ claude --model 'claude-fable-5-1[1m]' --effort medium \
 
       <section class="section quickstart" id="team-start" aria-labelledby="quickstart-title">
         <div class="quickstart-copy">
-          <p class="eyebrow">Quickstart</p>
-          <h2 id="quickstart-title">Try an experimental team.</h2>
+          <p class="eyebrow">Experimental cmux teams</p>
+          <h2 id="quickstart-title">Add cmux to your team command.</h2>
+          <p>After <a href="#quickstart">installing the skill</a>, use <code>/team cmux</code> in Claude Code, select <code>@team</code> and type <code>cmux</code> in Codex desktop, or use <code>$team cmux</code> in Codex CLI.</p>
+          <p>The skill starts or reuses the current project's team. You can append a task for the lead, or leave it ready for your next instruction.</p>
           <h3>Before you start</h3>
           <ul class="checklist">
             <li>macOS with <a href="https://cmux.com/">cmux</a> installed</li>
@@ -331,28 +349,28 @@ claude --model 'claude-fable-5-1[1m]' --effort medium \
             <li>Account access to the configured models, Astra and Fable by default</li>
           </ul>
           <p class="quickstart-note">
-            Run the commands from a terminal inside cmux so the launcher can create the project
-            and tabs. Replace the last path with the absolute path to your existing Git repository.
-            <code>--project</code> requires one.
+            Startup must run in a cmux terminal. From a desktop session, the skill uses available
+            native computer control to open one; otherwise it gives you the command to run there.
+            Native login and trust prompts may still need your attention.
           </p>
         </div>
 
         <div class="quickstart-main">
           <div class="code-block" data-copy>
             <div class="code-top">
-              <span class="code-title">Terminal inside cmux</span>
+              <span class="code-title">Manual startup &middot; inside cmux</span>
             </div>
-            <pre><code>git clone https://github.com/andrewnova/agent-team-harness.git
-cd agent-team-harness
+            <pre><code>cd /absolute/path/to/agent-team-harness
 node scripts/start-team.js --project /absolute/path/to/your/repo</code></pre>
             <p class="code-status" role="status" aria-live="polite"></p>
           </div>
 
+          <p>Use your harness clone and the absolute path to the Git repository you want the team to work on. Manual startup is also available without installing the skill.</p>
           <h3>What happens next</h3>
           <ol class="next-steps">
-            <li>The launcher creates the cmux project and opens the lead as the first agent tab. By default the lead is a Codex session with Astra, and up to four jobs run at once, including the lead. Child agents inside a job are not counted.</li>
+            <li>The launcher creates the cmux project and opens the lead as the first agent tab. The skill uses your current native app as lead; manual startup defaults to Codex with Astra. Up to four jobs run at once, including the lead. Child agents inside a job are not counted.</li>
             <li>Complete the native login and workspace-trust prompts in the lead tab so the lead is ready.</li>
-            <li>Give the ready lead a task. It creates worker and reviewer tabs as it needs them.</li>
+            <li>The skill hands off any task you supplied after the lead is ready. With manual startup, give the ready lead your task. It creates worker and reviewer tabs as it needs them.</li>
             <li>Native login, workspace-trust, and approval prompts stay visible; the native permission policy remains in force.</li>
           </ol>
           <p>

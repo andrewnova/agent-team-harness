@@ -4,13 +4,13 @@
 
 **Start with a direct native Codex or Claude Code session.**
 
-For a bounded coding task or review, open your repository in the native CLI, give it the task, and check the result. Native child agents can handle useful independent work. The coordinated cmux workflow is experimental.
+For a bounded coding task or review, open your repository in the native CLI, give it the task, and check the result. The optional [team skill](#invoke-the-team-skill) adds useful native agents and a fresh review while keeping your current session as lead. The coordinated cmux workflow is experimental.
 
-[Website](https://andrewnova.github.io/agent-team-harness/) · [Direct-session guide](docs/direct-sessions.md) · [Experimental teams](docs/cmux-team.md)
+[Website](https://andrewnova.github.io/agent-team-harness/) · [Team skill](#invoke-the-team-skill) · [Direct-session guide](docs/direct-sessions.md) · [Experimental teams](docs/cmux-team.md)
 
 ## Quickstart
 
-Use your installed, signed-in CLI in the target repository:
+Use your installed, signed-in CLI in the target repository. These commands work without a skill; for the reusable workflow, [install the team skill once](#invoke-the-team-skill).
 
 ```sh
 cd /absolute/path/to/your/repo
@@ -32,6 +32,40 @@ Give the session a concrete task:
 > Add a settings page with saved notification preferences. Inspect the existing app, make the change, and verify saving and reloading. Use independent child agents where useful. Report the changed files, checks, and remaining issues.
 
 Keep one writer per checkout. For parallel writing, use separate worktrees. Once the candidate is committed, use a fresh session for an independent review of that exact commit and its requirements. [Implementation and review prompts](docs/direct-sessions.md).
+
+## Invoke the team skill
+
+Install the standalone skill once from a clone you will keep available:
+
+```sh
+git clone https://github.com/andrewnova/agent-team-harness.git
+cd agent-team-harness
+./scripts/install-team-skill.sh
+```
+
+For an existing clone, run the installer there; update first with `git pull --ff-only` only if `git status --short` is empty. The installer links one shared skill into Codex and Claude Code, so keep the clone at that location. It preserves any existing different `team` skill and installs no CLI wrapper, daemon, or MCP configuration.
+
+Then open your target project and invoke the skill:
+
+| App | Invocation |
+| --- | --- |
+| Claude Code | `/team Add a settings page and verify saving preferences` |
+| Codex desktop | Type `@team`, select the skill suggestion, then enter your task |
+| Codex CLI | `$team Add a settings page and verify saving preferences` |
+
+The current session leads, uses native agents for useful independent work, and gets a fresh read-only review. It preserves your task scope, model, effort, and native permissions. Start a new session if the skill is not visible. See the [direct-session guide](docs/direct-sessions.md), [shipped skill](plugins/agent-team-harness/skills/team/SKILL.md), [Codex skill invocation](https://learn.chatgpt.com/docs/build-skills#how-codex-uses-skills), and [Claude skill naming](https://code.claude.com/docs/en/skills#how-a-skill-gets-its-command-name).
+
+For the experimental coordinated workflow, put `cmux` first after the skill name. Mentioning cmux elsewhere in a task keeps the native workflow.
+
+| App | Open a team ready for a task |
+| --- | --- |
+| Claude Code | `/team cmux` |
+| Codex desktop | Select `@team`, then type `cmux` |
+| Codex CLI | `$team cmux` |
+
+The skill starts or reuses the current project's team, selecting your current native runtime as lead unless you choose another. `/team cmux` waits for readiness and leaves the lead ready for your task. Append a task, such as `/team cmux Build the settings page`, to enter it once in that lead's native terminal after readiness and confirm its acknowledgment.
+
+Startup must execute in a cmux terminal. A desktop agent uses available authorized native computer control to open one and run the starter; if that control is unavailable, it gives you the exact command to run there. Native authentication, trust, and permissions still apply. See the [cmux guide](docs/cmux-team.md) for prerequisites, direct startup, and the current validation boundary.
 
 ## Why this is the default
 

@@ -518,6 +518,16 @@ footer {
   white-space: nowrap;
 }
 
+.invocation tbody th {
+  width: 24%;
+}
+
+.invocation td:last-child {
+  font-family: inherit;
+  font-weight: inherit;
+  white-space: normal;
+}
+
 .notes {
   max-width: 780px;
   margin: 24px 0 0;
@@ -594,6 +604,10 @@ footer {
 
 .quickstart-main .code-block {
   margin-bottom: 20px;
+}
+
+.quickstart-main .table-wrap {
+  margin-bottom: 18px;
 }
 
 .checklist,
