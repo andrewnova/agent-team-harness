@@ -31,3 +31,9 @@ The trial predates those final fixes. Passing deterministic regressions for the 
 Retain the small ownership, addressing, and shutdown primitives. Do not add another scheduler, approval layer, or reporting protocol to rescue this trial. Use direct native sessions for ordinary bounded work and a separate focused review when needed.
 
 Before promoting coordinated teams as the default, compare an actual parallel workload against the equivalent direct-session workflow using the same task, models, quality checks, and native permission policy. Record total elapsed time and operator interventions. Keep the coordinated path only where it reduces both meaningful completion time and operator effort. Otherwise simplify or remove that path.
+
+## Direct-session follow-up
+
+A direct native Claude Code Fable session at medium effort implemented the same counter requirements from the same fixture base (`8797f6c`) in 32.22 seconds. Candidate `04c9e14` passed five Node tests, a fresh Codex source review with no required findings, and browser checks for increment, decrement, reset, the zero floor, and Enter/Space activation. No browser console errors were observed.
+
+The 32.22 seconds covers the Claude invocation only; independent review and browser verification happened separately. This used the native CLI in print mode with the user's existing permission policy, rather than interactive coordinated tabs. It proves the direct path completed this task, but is not a controlled speedup ratio or a benchmark of the repaired coordinator.
