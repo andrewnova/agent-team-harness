@@ -33,6 +33,24 @@ Give the session a concrete task:
 
 Keep one writer per checkout. For parallel writing, use separate worktrees. Once the candidate is committed, use a fresh session for an independent review of that exact commit and its requirements. [Implementation and review prompts](docs/direct-sessions.md).
 
+## Invoke the team skill
+
+For a reusable task prompt in either app, run this from a local clone of this repository:
+
+```sh
+./scripts/install-team-skill.sh
+```
+
+Keep the clone available: the installer links one shared skill into both apps. It preserves any existing different `team` skill and installs no daemon or MCP configuration.
+
+| App | Invocation |
+| --- | --- |
+| Claude Code | `/team Add a settings page and verify saving preferences` |
+| Codex desktop | Type `@team`, select the skill suggestion, then enter your task |
+| Codex CLI | `$team Add a settings page and verify saving preferences` |
+
+The current session leads, uses native agents for useful independent work, and gets a fresh read-only review. Start a new session if the skill is not visible. The [team skill](plugins/agent-team-harness/skills/team/SKILL.md) keeps cmux coordination optional. See [Codex skill invocation](https://learn.chatgpt.com/docs/build-skills#how-codex-uses-skills) and [Claude skill naming](https://code.claude.com/docs/en/skills#how-a-skill-gets-its-command-name).
+
 ## Why this is the default
 
 In the September 6 trial, neither coordinated small-task run reached feature acceptance during a twenty-minute observation window. Native prompts required repeated operator handling. Startup, addressed communication, and individual worker completion worked, but that did not establish a useful complete workflow.
