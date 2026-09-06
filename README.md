@@ -6,6 +6,8 @@
 
 One project in the sidebar. A lead and separate worker and reviewer tabs inside it. Give the lead a task, watch the agents work, and steer any session directly.
 
+For one bounded task, start with a direct native Codex or Claude Code session. The coordinated workflow below is experimental: [the small-task trial did not meet its efficiency target](docs/native-workflow-findings.md).
+
 [Website](https://andrewnova.github.io/agent-team-harness/) · [Quickstart](#quickstart) · [Workflow and commands](docs/cmux-team.md)
 
 ![Conceptual illustration of four coding sessions connected through a shared mailbox inside one workspace](site/assets/cmux-team-hero.png)
