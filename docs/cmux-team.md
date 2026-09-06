@@ -107,6 +107,8 @@ Operators can use `job read`, `job inbox`, and `job show` to inspect an exact jo
 
 Create one feature worktree before dispatching implementation. Example feature JSON:
 
+Omitting `cwd` creates it at `<coordinator-parent>/<coordinator-name>-worktrees/features/<feature-id>`, outside the lead's writable coordinator. Explicit paths and existing feature records are preserved. Parallel workers still need their own private checkouts.
+
 ```json
 {
   "id": "example-feature",
@@ -133,16 +135,16 @@ A snapshot requires a clean committed feature, including untracked files. Launch
 
 ```sh
 node /absolute/harness/agent-team/src/cli.js --cwd /absolute/coordinator team feature check example-feature
-node /absolute/harness/agent-team/src/cli.js --cwd /absolute/coordinator team feature import-review example-feature --job reviewer-1
-node /absolute/harness/agent-team/src/cli.js --cwd /absolute/coordinator team feature import-review example-feature --job reviewer-2
-node /absolute/harness/agent-team/src/cli.js --cwd /absolute/coordinator team feature status example-feature
+node /absolute/harness/agent-team/src/cli.js --cwd /absolute/coordinator team feature collect example-feature
 ```
 
 Checks run on an isolated detached checkout of the candidate and retain logs outside source. Declared commands must prepare their own dependencies and isolated ports, databases, and profiles. A timeout retains the scratch directory for inspection because children may still be writing. This implementation runs a feature's declared checks serially inside that isolated run; run the check command alongside the independent reviewers.
 
 Reviewers return `team_report` with a terminal status, an addressed recipient, and a JSON string in `result`: `candidate`, `brief_hash`, `verdict`, and `findings`. Each finding has a stable `id`, explicit `required`, source `evidence`, and `status`. Resolving or rejecting a finding requires `resolution_evidence`.
 
-Collect the complete review round, then batch independent repairs. Commit and snapshot the repairs, relaunch each required review job, rerun checks, and import current results. Relaunching a stopped reviewer starts a new native session and attempt; its startup packet retains prior findings. Old approvals do not satisfy a new candidate or a pending replacement attempt. `feature status` exits unsuccessfully unless every required current reviewer and check passes and all required findings are resolved.
+`feature collect` imports every stopped required review, lists pending or failed reviewers and findings, and returns current acceptance in one call. Repeating it preserves identical review receipts and does not rerun checks. `feature import-review` remains available for one reviewer, and `feature status` is read-only. Both collection and status exit unsuccessfully until all required current reviews and checks pass.
+
+Collect the complete review round, then batch independent repairs. Commit and snapshot the repairs, relaunch each required review job, rerun checks, and collect current results. Relaunching a stopped reviewer starts a new native session and attempt; its startup packet retains prior findings. Old approvals do not satisfy a new candidate or a pending replacement attempt. A numbered review cannot be overwritten or reused for a different candidate, and unresolved required findings cannot disappear on retry. Unfinished Git operations block freezing and acceptance even if the working tree otherwise appears clean.
 
 Eligibility means ready for target integration. It does not merge, publish, or deploy anything.
 

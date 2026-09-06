@@ -126,6 +126,12 @@ function requirements(feature) {
 function assertClean(cwd) {
   if (git(cwd, ["ls-files", "-v", "-z"]).split("\0").some((entry) => entry && (entry[0] === "S" || /[a-z]/.test(entry[0])))) throw new Error("source has hidden index entries (skip-worktree or assume-unchanged)");
   if (git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"])) throw new Error("feature must be clean, including untracked files");
+  // Empty cherry-picks and paused sequencers can look clean while still owning
+  // the next commit. Use this checkout's metadata, not the shared Git directory.
+  const metadata = git(cwd, ["rev-parse", "--absolute-git-dir"]);
+  for (const operation of ["CHERRY_PICK_HEAD", "MERGE_HEAD", "REVERT_HEAD", "rebase-apply", "rebase-merge", "sequencer"]) {
+    if (fs.existsSync(path.join(metadata, operation))) throw new Error(`unfinished Git operation: ${operation}`);
+  }
 }
 
 function source(feature) {
@@ -178,7 +184,9 @@ function createFeature(root, input) {
     if (!branch.startsWith("codex/")) throw new Error("feature branch must use codex/ prefix");
     git(identity.repo, ["check-ref-format", `refs/heads/${branch}`]);
     const coordinator = fs.realpathSync(absolute(root, "root"));
-    const destination = input.cwd ? absolute(input.cwd, "cwd") : path.join(paths.worktreesDir(coordinator), "features", input.id);
+    // The writable lead owns the coordinator checkout. Keep new source writers
+    // beside it so their checkout claims do not overlap that ancestor.
+    const destination = input.cwd ? absolute(input.cwd, "cwd") : path.join(path.dirname(coordinator), `${path.basename(coordinator)}-worktrees`, "features", input.id);
     // No existing path (even an empty directory or dangling symlink) is reused.
     try { fs.lstatSync(destination); throw new Error("feature cwd already exists"); } catch (error) { if (error.code !== "ENOENT") throw error; }
     const cwd = prospectivePath(destination);
@@ -249,7 +257,9 @@ function recordFeatureReview(root, id, input) {
     if (!sameCandidate(input.candidate, candidate) || input.brief_hash !== candidate.brief_hash) throw new Error("review candidate or brief is stale");
     if (!["approve", "changes_requested", "block_merge"].includes(input.verdict)) throw new Error("invalid review verdict");
     if (!Array.isArray(input.findings)) throw new Error("findings must explicitly be an array");
-    if (input.attempt !== undefined && (!Number.isInteger(input.attempt) || input.attempt < 1)) throw new Error("attempt must be positive");
+    if (input.attempt !== undefined && (!Number.isSafeInteger(input.attempt) || input.attempt < 1)) throw new Error("attempt must be a positive safe integer");
+    const attempts = feature.reviews.filter((review) => review.reviewer_job_id === input.reviewer_job_id && review.attempt !== undefined);
+    if (attempts.some((review) => input.attempt === undefined || review.attempt > input.attempt)) throw new Error("stale review attempt");
     const findings = input.findings.map((finding) => {
       safeId(finding.id);
       if (typeof finding.required !== "boolean") throw new Error("finding must explicitly be required or optional");
@@ -260,6 +270,13 @@ function recordFeatureReview(root, id, input) {
       return { id: finding.id, required: finding.required, status, evidence, resolution_evidence };
     });
     if (new Set(findings.map((finding) => finding.id)).size !== findings.length) throw new Error("finding ids must be unique per reviewer");
+    // Collection may retry a terminal report, but a numbered attempt has only
+    // one result. Corrections or a new candidate require a fresh native attempt.
+    const previous = attempts.filter((review) => review.attempt === input.attempt).at(-1);
+    if (previous) {
+      if (sameCandidate(previous.candidate, candidate) && previous.brief_hash === candidate.brief_hash && previous.verdict === input.verdict && JSON.stringify(previous.findings) === JSON.stringify(findings)) return previous;
+      throw new Error("review attempt already recorded with different evidence");
+    }
     const review = { reviewer_job_id: input.reviewer_job_id, candidate, brief_hash: candidate.brief_hash, verdict: input.verdict, findings, attempt: input.attempt, recorded_at: timestamp() };
     feature.reviews.push(review);
     saveFeature(file, feature);

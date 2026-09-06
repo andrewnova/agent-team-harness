@@ -16,7 +16,7 @@ const usage = `agent-team --cwd <coordinator-root> team <command>
   job send <id> --json <file> | wake <id> --message <message-id>
   feature create --json <file>
   feature assemble <id> --json <file>
-  feature snapshot <id> | check <id> | status <id>
+  feature snapshot <id> | check <id> | collect <id> | status <id>
   feature import-review <id> --job <review-job-id>
 Run launch/wake from a terminal inside cmux. JSON assignments require explicit model IDs.
 `;
@@ -68,12 +68,13 @@ async function main(args, root) {
     else if (operation === "snapshot") result = features.snapshotFeature(root, id);
     else if (operation === "check") result = features.runFeatureChecks(root, id);
     else if (operation === "status") result = native.acceptanceStatus(root, id);
+    else if (operation === "collect") result = native.collectFeature(root, id);
     else if (operation === "import-review") result = native.importReview(root, id, value("--job"));
     else throw new Error("unknown team feature operation");
   } else throw new Error("unknown team command");
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return (entity === "status" && result.jobs.some((job) => job.state === "blocked")) ||
-    (operation === "wait" && !result.reached) || (operation === "status" && result.eligible === false) || (operation === "check" && result.status !== "completed") ? 1 : 0;
+    (operation === "wait" && !result.reached) || (["status", "collect"].includes(operation) && result.eligible === false) || (operation === "check" && result.status !== "completed") ? 1 : 0;
 }
 
 module.exports = { main, usage };
