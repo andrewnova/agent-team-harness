@@ -27,10 +27,19 @@ function address(input) {
   };
 }
 
+function directory(cwd) {
+  string(cwd, "cwd");
+  if (!path.isAbsolute(cwd)) throw new Error("cwd must be absolute");
+  const canonical = fs.realpathSync.native(cwd);
+  if (!fs.statSync(canonical).isDirectory()) throw new Error("cwd must be an existing directory");
+  return canonical;
+}
+
 // Runtime/model/MCP configuration belongs to the caller. No raw shell input and
 // no default model, headless mode, or approval bypass is added here.
-function buildShellCommand({ cwd, argv, env = {} } = {}) {
+function buildShellCommand({ cwd, argv, env = {}, exec_prefix = true } = {}) {
   string(cwd, "cwd");
+  if (typeof exec_prefix !== "boolean") throw new Error("exec_prefix must be a boolean");
   if (!path.isAbsolute(cwd)) throw new Error("cwd must be absolute");
   if (!Array.isArray(argv) || !argv.length) throw new Error("argv must be a nonempty array");
   argv.forEach((arg, index) => string(arg, `argv[${index}]`, index > 0));
@@ -43,9 +52,10 @@ function buildShellCommand({ cwd, argv, env = {} } = {}) {
     return `${key}=${shellQuote(string(value, `env.${key}`, true))}`;
   });
   const launch = [...assignments, "exec", ...argv.map(shellQuote)].join(" ");
-  // cmux uses the user's login shell. Select POSIX sh explicitly so launch
-  // assignments and quoting do not depend on that shell's grammar.
-  return `exec /bin/sh -c ${shellQuote(`cd ${shellQuote(cwd)} && ${launch}`)}`;
+  // Select POSIX sh so assignments and quoting do not depend on the user's
+  // shell. workspace.create wraps shell text in a login shell; surface.create
+  // passes it straight to Ghostty, whose `exec -l` requires an executable first.
+  return `${exec_prefix ? "exec " : ""}/bin/sh -c ${shellQuote(`cd ${shellQuote(cwd)} && ${launch}`)}`;
 }
 
 /**
@@ -55,10 +65,14 @@ function buildShellCommand({ cwd, argv, env = {} } = {}) {
  * be able to operate the same durable session.
  *
  * Uses `cmux --json --id-format uuids rpc METHOD JSON`. Verified against cmux
- * v0.64.22 CLI/cmux.swift and Sources/TerminalController+WorkspaceCreate.swift:
- * rpc emits the result object; workspace.create supports initial_command and
- * returns workspace_id/surface_id. Legacy new-workspace suppresses JSON, and
- * send unescapes backslashes, so neither is a safe substitute.
+ * v0.64.22 (installed commit ddd4a01bc), CLI/cmux.swift and the surface
+ * coordinator in Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket:
+ * workspace.create uses cwd; surface.create uses working_directory + pane_id.
+ * Surface creation uses Workspace.newTerminalSurfaceOutcome's .immediate spawn
+ * policy; TerminalSurface.swift schedules a hidden bootstrap runtime whenever
+ * initial_command is present. eager_load_terminal is ONLY a workspace.create
+ * option. Tab titles use tab.action rename. Legacy new-workspace suppresses JSON,
+ * and send unescapes backslashes, so neither is a safe substitute.
  */
 function createTransport({ cmux_bin, run = spawnSync } = {}) {
   const binary = cmux_bin === undefined ? (fs.existsSync(APP_BINARY) ? APP_BINARY : "cmux") : cmux_bin;
@@ -97,41 +111,131 @@ function createTransport({ cmux_bin, run = spawnSync } = {}) {
     }
   }
 
-  function inspect(target) {
-    const payload = rpc("surface.list", { workspace_id: target.workspace_id });
-    matchResponse(payload, target, false);
+  function listSurfaces(workspace_id) {
+    const payload = rpc("surface.list", { workspace_id });
+    matchResponse(payload, { workspace_id }, false);
     if (!Array.isArray(payload.surfaces)) throw new Error("cmux surface.list returned no surface inventory");
-    const matches = payload.surfaces.filter((surface) => uuid(surface.id, "listed surface id") === target.surface_id);
+    const seen = new Set();
+    return payload.surfaces.map((surface) => {
+      const id = uuid(surface?.id, "listed surface id");
+      if (seen.has(id)) throw new Error("cmux surface.list returned duplicate surface IDs");
+      seen.add(id);
+      return { ...surface, id };
+    });
+  }
+
+  function terminal(surfaces, surface_id) {
+    const matches = surfaces.filter((surface) => surface.id === surface_id);
     if (matches.length !== 1 || matches[0].type !== "terminal") {
       throw new Error("Addressed terminal does not belong to this workspace");
     }
-    return payload.surfaces;
+    return matches[0];
   }
 
-  function createSession({ cwd, title, command } = {}) {
+  function inspect(target) {
+    const surfaces = listSurfaces(target.workspace_id);
+    terminal(surfaces, target.surface_id);
+    return surfaces;
+  }
+
+  function creationAddress(payload) {
+    const target = address(payload);
+    if (payload.pane_id != null) target.pane_id = uuid(payload.pane_id, "response pane_id");
+    return target;
+  }
+
+  function uncertain(error, payload, workspace_id, surfaces = []) {
+    // An allocation or rename may succeed before its response is lost. Preserve
+    // the writer claim and any safe recovery address; never retry or auto-close.
+    error.launch_uncertain = true;
+    const returnedWorkspace = typeof payload?.workspace_id === "string" && UUID.test(payload.workspace_id)
+      ? payload.workspace_id.toLowerCase() : undefined;
+    const knownWorkspace = workspace_id ?? returnedWorkspace;
+    if (knownWorkspace) {
+      error.session = { workspace_id: knownWorkspace };
+      if (returnedWorkspace === knownWorkspace && typeof payload?.surface_id === "string" && UUID.test(payload.surface_id)) {
+        const surface_id = payload.surface_id.toLowerCase();
+        // An echoed controller/other existing tab is not a newly launched job.
+        if (!surfaces.some((surface) => surface.id === surface_id)) {
+          error.session.surface_id = surface_id;
+          if (typeof payload.pane_id === "string" && UUID.test(payload.pane_id)) {
+            error.session.pane_id = payload.pane_id.toLowerCase();
+          }
+        }
+      }
+    }
+    return error;
+  }
+
+  function createProject({ cwd, title } = {}) {
+    string(title, "title");
+    const canonical = directory(cwd);
+    let payload;
+    try {
+      // A neutral initial shell keeps the project alive as job tabs come/go.
+      payload = rpc("workspace.create", { cwd: canonical, title, focus: false, eager_load_terminal: true });
+      return creationAddress(payload);
+    } catch (error) {
+      throw uncertain(error, payload);
+    }
+  }
+
+  function createSession({ workspace_id, anchor_surface_id, pane_id, cwd, title, command } = {}) {
     string(title, "title");
     if (!command || typeof command !== "object" || Array.isArray(command)) {
       throw new Error("command must contain argv and optional env; raw shell commands are forbidden");
     }
-    string(cwd, "cwd");
-    if (!path.isAbsolute(cwd)) throw new Error("cwd must be absolute");
-    const directory = fs.realpathSync.native(cwd);
-    if (!fs.statSync(directory).isDirectory()) throw new Error("cwd must be an existing directory");
-    const initial_command = buildShellCommand({ cwd: directory, argv: command.argv, env: command.env });
+    const canonical = directory(cwd);
+    const initial_command = buildShellCommand({
+      cwd: canonical, argv: command.argv, env: command.env, exec_prefix: workspace_id === undefined
+    });
+    if (workspace_id === undefined && (anchor_surface_id !== undefined || pane_id !== undefined)) {
+      throw new Error("workspace_id is required with anchor_surface_id or pane_id");
+    }
+    let surfaces = [];
+    if (workspace_id !== undefined) {
+      workspace_id = uuid(workspace_id, "workspace_id");
+      if (anchor_surface_id !== undefined) anchor_surface_id = uuid(anchor_surface_id, "anchor_surface_id");
+      if (pane_id !== undefined) pane_id = uuid(pane_id, "pane_id");
+      // Resolve against the persisted project, never the user's selected pane,
+      // a list index, a title, or the caller's CMUX_* defaults.
+      surfaces = listSurfaces(workspace_id);
+      const workspaceSurfaces = surfaces.filter((surface) => surface.dock_scope == null);
+      if (anchor_surface_id !== undefined) {
+        const anchor = terminal(workspaceSurfaces, anchor_surface_id);
+        const anchorPane = uuid(anchor.pane_id, "anchor pane_id");
+        if (pane_id !== undefined && pane_id !== anchorPane) throw new Error("pane_id does not match the anchor's pane");
+        pane_id = anchorPane;
+      } else {
+        const panes = new Set(workspaceSurfaces.map((surface) => uuid(surface.pane_id, "listed pane_id")));
+        if (pane_id !== undefined) {
+          if (!panes.has(pane_id)) throw new Error("Addressed pane does not belong to this workspace");
+        } else {
+          if (panes.size !== 1) throw new Error("An anchor_surface_id or explicit pane_id is required for an ambiguous project pane");
+          [pane_id] = panes;
+        }
+      }
+    }
     let payload;
     try {
-      payload = rpc("workspace.create", { cwd: directory, title, initial_command, focus: false, eager_load_terminal: true });
-      const target = address(payload);
+      if (workspace_id === undefined) {
+        // Compatibility for callers that still intentionally allocate one
+        // workspace per session. Native project launches always supply its UUID.
+        payload = rpc("workspace.create", { cwd: canonical, title, initial_command, focus: false, eager_load_terminal: true });
+        return { ...address(payload), status: "launching", ready: false };
+      }
+      payload = rpc("surface.create", {
+        workspace_id, pane_id, type: "terminal", working_directory: canonical, initial_command, focus: false
+      });
+      const target = creationAddress(payload);
+      matchResponse(payload, { workspace_id }, false);
+      if (target.pane_id !== pane_id) throw new Error("cmux returned a different or missing pane_id");
+      if (surfaces.some((surface) => surface.id === target.surface_id)) throw new Error("cmux returned an existing surface instead of a new session");
+      if (payload.type !== undefined && payload.type !== "terminal") throw new Error("cmux did not create a terminal");
+      matchResponse(rpc("tab.action", { ...address(target), action: "rename", title, focus: false }), target);
       return { ...target, status: "launching", ready: false };
     } catch (error) {
-      // A timeout or lost/malformed response can follow a successful allocation.
-      // Do not retry a launch, invent an address, or release a job's writer claim.
-      error.launch_uncertain = true;
-      if (payload && UUID.test(payload.workspace_id)) {
-        error.session = { workspace_id: payload.workspace_id.toLowerCase() };
-        if (UUID.test(payload.surface_id)) error.session.surface_id = payload.surface_id.toLowerCase();
-      }
-      throw error;
+      throw uncertain(error, payload, workspace_id, surfaces);
     }
   }
 
@@ -156,16 +260,25 @@ function createTransport({ cmux_bin, run = spawnSync } = {}) {
 
   function closeSession(input = {}) {
     const target = address(input);
-    // cmux refuses surface.close for the last surface. Each session owns one
-    // workspace; refuse workspace.close if the user has since added any panels.
-    if (inspect(target).length !== 1) throw new Error("Refusing to close a workspace containing other surfaces");
-    const payload = rpc("workspace.close", { workspace_id: target.workspace_id });
-    matchResponse(payload, target, false);
+    // v0.64.22 also checks this inside surface.close, covering a concurrent
+    // last-tab removal. Never fall back to closing the shared project workspace.
+    if (inspect(target).length <= 1) throw new Error("Refusing to close the last surface; use closeProject explicitly");
+    matchResponse(rpc("surface.close", target), target);
     // Closing the UI is not evidence that all descendant processes have stopped.
     return { ...target, status: "closed" };
   }
 
-  return { createSession, readSession, sendText, closeSession };
+  function closeProject(input = {}) {
+    const target = address(input);
+    // Explicit project teardown (also supports legacy ungrouped sessions) only
+    // after the controller is the sole surface. Never close other users' tabs.
+    if (inspect(target).length !== 1) throw new Error("Refusing to close a workspace containing other surfaces");
+    const payload = rpc("workspace.close", { workspace_id: target.workspace_id });
+    matchResponse(payload, target, false);
+    return { ...target, status: "closed" };
+  }
+
+  return { createProject, createSession, readSession, sendText, closeSession, closeProject };
 }
 
 module.exports = { createTransport, buildShellCommand };
