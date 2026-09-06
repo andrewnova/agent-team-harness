@@ -1,0 +1,12 @@
+{
+  "codex": {
+    "effort": "xhigh",
+    "multi_agent": true
+  },
+  "claude": {
+    "effort": "medium",
+    "agent_teams": true,
+    "teammate_mode": "in-process"
+  },
+  "parallelism": "maximum-useful"
+}

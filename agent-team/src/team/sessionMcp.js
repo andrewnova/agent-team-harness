@@ -15,10 +15,13 @@ if (require.main === module) {
     const job_id = values["--job"];
     const attempt = Number(values["--attempt"]);
     const job = getJob(root, job_id);
-    if (job.runtime === "codex" && process.env.CODEX_THREAD_ID) {
-      bindJob(root, job_id, attempt, { workspace_id: job.workspace_id, surface_id: job.surface_id, session_id: process.env.CODEX_THREAD_ID });
+    const nativeCaller = job.runtime === "codex" ? { runtime: "codex", thread_id: process.env.CODEX_THREAD_ID || null } : undefined;
+    if (nativeCaller?.thread_id && !job.session_id) {
+      bindJob(root, job_id, attempt, { workspace_id: job.workspace_id, surface_id: job.surface_id, session_id: nativeCaller.thread_id });
     }
-    runServer({ root, job_id, attempt, onMessage: (message) => wakeMessage(root, message) });
+    // Descendants inherit this required server. Keep their handshake healthy;
+    // teamServer exposes no tools and rejects calls from a different thread.
+    runServer({ root, job_id, attempt, nativeCaller, onMessage: (message) => wakeMessage(root, message) });
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;

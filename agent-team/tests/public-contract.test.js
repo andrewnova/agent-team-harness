@@ -44,42 +44,15 @@ test("public skill keeps Claude work mailbox-first and nonblocking", () => {
   assert.match(skill, /--allow-degraded-claude/);
 });
 
-test("README explains daemon-backed mailbox delegation", () => {
+test("README links to a runnable native starter and preserves legacy documentation", () => {
   const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
-
-  assert.match(readme, /The receiver daemon is the local router/);
-  assert.match(readme, /Do not delegate real Claude work through raw `ask_claude`/);
-  assert.match(readme, /queues first-party Claude MCP channel notifications/);
-  assert.match(readme, /agent-team channel mcp install/);
-  assert.match(readme, /agent-team-codex-mcp/);
-  assert.match(readme, /agent-team-codex-wake/);
-  assert.match(readme, /agent-team codex mcp install/);
-  assert.match(readme, /MCP-emitted counts/);
-  assert.match(readme, /Codex MCP adapter status/);
-  assert.match(readme, /per-message timeline/);
-  assert.match(readme, /stable machine stage keys/);
-  assert.match(readme, /Codex MCP saw it/);
-  assert.match(readme, /queues Codex wake payloads/);
-  assert.match(readme, /AGENT_TEAM_CODEX_WAKE_COMMAND/);
-  assert.match(readme, /cockpit` and `agent-team watch` show Claude MCP outbox totals/);
-  assert.match(readme, /CODEX_THREAD_ID/);
-  assert.match(readme, /--recover-visible/);
-  assert.match(readme, /remembered endpoint id/);
-  assert.match(readme, /Display names are human labels and fallback selectors, not the primary continuity proof/);
-  assert.match(readme, /per-launch Claude MCP config/);
-  assert.match(readme, /launch-scoped server name/);
-  assert.match(readme, /--mcp-config/);
-  assert.match(readme, /fresh_launch_probe/);
-  assert.match(readme, /endpoint_selection/);
-  assert.match(readme, /startup_proof/);
-  assert.match(readme, /duplicate-proof/);
-  assert.match(readme, /Claude startup:/);
-  assert.match(readme, /mcp_start/);
-  assert.match(readme, /mcp_init/);
-  assert.match(readme, /--use-development-channel/);
-  assert.match(readme, /agent-team channel startup-packet --launch-id/);
-  assert.match(readme, /agent-team channel startup-import --launch-id/);
-  assert.match(readme, /does not bypass mailbox, review, merge, proof, or done gates/);
-  assert.match(readme, /failed Claude startup as a blocking setup error by default/);
-  assert.match(readme, /--allow-degraded-claude/);
+  const entry = readme.match(/node (scripts\/[a-z-]+\.js) --project/);
+  assert.ok(entry, "quickstart must identify the shipped starter");
+  const result = require("node:child_process").spawnSync(process.execPath, [path.join(root, entry[1]), "--help"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  for (const option of ["--project", "--leader", "--max-active"]) assert.ok(result.stdout.includes(option));
+  for (const name of ["cmux-team.md", "legacy-workflow.md"]) {
+    assert.ok(readme.includes(`docs/${name}`));
+    assert.ok(fs.existsSync(path.join(root, "docs", name)));
+  }
 });
