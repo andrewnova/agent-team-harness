@@ -6,6 +6,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const { tempRoot } = require("./helpers");
 const jobs = require("../src/team/jobs");
 const mailbox = require("../src/mailbox");
+const { inventory } = require("../src/team/processes");
 
 const runner = require.resolve("../src/team/sessionRunner");
 const mcp = require.resolve("../src/team/sessionMcp");
@@ -31,10 +32,12 @@ async function until(read, predicate, label, timeout = 12000) {
 // real runner owns it and its real JSON-lines MCP subprocess; no model is used.
 async function nativeFixture() {
   const fs = require("node:fs");
+  const path = require("node:path");
   const readline = require("node:readline");
   const { spawn } = require("node:child_process");
   const config = JSON.parse(process.argv[2]);
-  fs.appendFileSync(config.starts, JSON.stringify({ pid: process.pid }) + "\n");
+  const atSpawn = JSON.parse(fs.readFileSync(path.join(config.root, ".agent-team", "state", "jobs", "worker.json")));
+  fs.appendFileSync(config.starts, JSON.stringify({ pid: process.pid, runner_identity: atSpawn.runner_identity }) + "\n");
   const server = spawn(process.execPath, [config.mcp, "--cwd", config.root, "--job", "worker", "--attempt", String(config.attempt)], { stdio: ["pipe", "pipe", "inherit"] });
   const pending = new Map();
   let sequence = 0;
@@ -279,6 +282,35 @@ test("runner recovery: cancellation before startup spawns no native process and 
   assert.deepEqual(f.starts(), []);
   assert.equal(JSON.parse(f.notices()[0].body).status, "cancelled");
   assert.equal(f.claim().attempt, 2);
+});
+
+test("runner recovery: SIGHUP cancels the owned native process and MCP child before notifying the parent", { timeout: 15000 }, async (t) => {
+  const f = fixture(t);
+  const packet = f.packet(f.claim());
+  const child = f.launch(packet);
+  const boot = await f.ready(packet);
+  const active = f.show();
+  const processes = inventory();
+  const owner = processes.find((row) => row.pid === child.child.pid);
+  assert.ok(owner);
+  assert.deepEqual(active.runner_identity, { pid: owner.pid, started: owner.started });
+  assert.deepEqual(f.starts()[0].runner_identity, active.runner_identity, "runner identity must be durable before native spawn");
+  assert.equal(processes.find((row) => row.pid === active.pid).group, active.pid, "native child uses a detached process group");
+  assert.equal(active.process_stopped, false);
+  assert.deepEqual(f.notices(), []);
+  // Simulate the signal delivered when a terminal closes. No real UI is used.
+  assert.equal(child.child.kill("SIGHUP"), true);
+  await f.end(child);
+  const receipt = f.stopped(packet, "cancelled");
+  assert.equal(receipt.pid, active.pid);
+  assert.equal(f.show().reported_result, undefined);
+  assert.equal(inventory().some((row) => [active.pid, boot.mcp_pid].includes(row.pid)), false, "SIGHUP must not orphan native or MCP processes");
+  assert.equal(JSON.parse(f.notices()[0].body).status, "cancelled");
+  assert.deepEqual(f.notices("other"), []);
+  const retry = f.claim();
+  assert.equal(retry.attempt, 2);
+  assert.equal(retry.runner_identity, undefined);
+  assert.deepEqual(retry.previous_attempts.at(-1).runner_identity, active.runner_identity);
 });
 
 test("runner recovery: missing binary fails, notifies its parent, and releases ownership", { timeout: 10000 }, async (t) => {
