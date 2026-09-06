@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const jobs = require("./jobs");
-const { trackProcesses } = require("./processes");
+const { trackProcesses, inventory } = require("./processes");
 
 function groupExists(pid) {
   try { process.kill(-pid, 0); return true; } catch (error) {
@@ -18,7 +18,10 @@ async function runSession(file, { onResult = notifyResult } = {}) {
   const launch = JSON.parse(fs.readFileSync(file, "utf8"));
   const { root, job_id, attempt } = launch;
   const directory = path.dirname(file);
-  jobs.claimRunner(root, job_id, attempt, process.pid);
+  let identity;
+  let inventoryError;
+  try { identity = inventory().find((row) => row.pid === process.pid); } catch (cause) { inventoryError = cause; }
+  jobs.claimRunner(root, job_id, attempt, process.pid, identity);
   let child;
   let exited;
   let exit = { code: null, signal: null };
@@ -51,7 +54,9 @@ async function runSession(file, { onResult = notifyResult } = {}) {
   const onSignal = () => { try { jobs.cancelJob(root, job_id, attempt); } catch (cause) { runnerError = cause; } finally { stop(); } };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
+  process.on("SIGHUP", onSignal);
   try {
+    if (inventoryError || !identity) throw inventoryError || new Error("cannot identify the native runner before launch");
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const workspace_id = process.env.CMUX_WORKSPACE_ID?.toLowerCase();
     const surface_id = process.env.CMUX_SURFACE_ID?.toLowerCase();
@@ -82,6 +87,7 @@ async function runSession(file, { onResult = notifyResult } = {}) {
     clearInterval(timer);
     process.removeListener("SIGTERM", onSignal);
     process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGHUP", onSignal);
   }
   let remaining = [];
   let process_stopped = !child?.pid;
@@ -102,7 +108,8 @@ async function runSession(file, { onResult = notifyResult } = {}) {
   fs.writeFileSync(path.join(directory, "exit.json"), JSON.stringify(receipt, null, 2), { mode: 0o600 });
   if (!process_stopped) throw new Error("native descendants still alive; checkout claim retained");
   const current = jobs.getJob(root, job_id);
-  const unexpectedExit = exit.code !== 0 && !stoppedForReport;
+  const expectedReportSignal = stoppedForReport && exit.code === null && ["SIGTERM", "SIGKILL"].includes(exit.signal);
+  const unexpectedExit = exit.code !== 0 && !expectedReportSignal;
   const status = current.status === "cancelling" ? "cancelled" : error || runnerError || unexpectedExit ? "failed" : current.reported_result?.status || "failed";
   receipt.status = status;
   if (status === "failed" && unexpectedExit) receipt.error ||= `Native session exited unexpectedly (${exit.code ?? exit.signal ?? "no process"}); its result is not accepted.`;

@@ -162,7 +162,7 @@ node /absolute/harness/agent-team/src/cli.js --cwd /absolute/coordinator team jo
 node /absolute/harness/agent-team/src/cli.js --cwd /absolute/coordinator team job wait backend-1 --until stopped --timeout-ms 30000
 ```
 
-A wait observes one attempt and leaves the job unchanged when it times out. Startup without readiness becomes visibly blocked after two minutes; inspect the native prompt or startup error before deciding to retry. Validation failures before native allocation release their unused claim. Uncertain native allocations retain it. The wrapper claims each attempt once, handles cancellation before spawn, and records failures during launch and cleanup.
+A wait observes one attempt and leaves the job unchanged when it times out. Startup without readiness becomes visibly blocked after two minutes; inspect the native prompt or startup error before deciding to retry. Validation failures before native allocation release their unused claim. Uncertain native allocations retain it. The wrapper claims each attempt once, handles cancellation before spawn and terminal hangup, and records failures during launch and cleanup. Status checks the supervising process's identity; a retained tab cannot hide a dead or replaced runner.
 
 Uncertain allocation, lost surface identity, unobservable descendants, stale results, and locked/corrupt state fail visibly. Never clear a writer claim solely because a pane disappeared. Inspect and stop the exact owned processes before repairing coordinator state or retrying a job. Native session IDs are recorded when provided by the runtime; cmux UUIDs, process identity, and attempts always govern addressing.
 

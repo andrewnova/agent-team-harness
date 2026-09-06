@@ -203,21 +203,22 @@ function claimJob(root, id, { max_active } = {}) {
       job.previous_attempts = [...(job.previous_attempts || []), {
         attempt: job.attempt, status: job.status, result: job.result, reported_result: job.reported_result,
         workspace_id: job.workspace_id, surface_id: job.surface_id, session_id: job.session_id,
-        pid: job.pid, runner_pid: job.runner_pid, parent_job: job.parent_job, parent_attempt: job.parent_attempt,
+        pid: job.pid, runner_pid: job.runner_pid, runner_identity: job.runner_identity, parent_job: job.parent_job, parent_attempt: job.parent_attempt,
         process_stopped: job.process_stopped, finished_at: job.finished_at
       }];
     }
-    for (const key of ["workspace_id", "surface_id", "session_id", "pid", "runner_pid", "runner_started_at", "result", "reported_result", "ready_at", "finished_at"]) delete job[key];
+    for (const key of ["workspace_id", "surface_id", "session_id", "pid", "runner_pid", "runner_identity", "runner_started_at", "result", "reported_result", "ready_at", "finished_at"]) delete job[key];
     return save(loc, { ...job, ...(parentAttempt ? { parent_attempt: parentAttempt } : {}), status: "launching", attempt: job.attempt + 1, process_stopped: false, updated_at: now() });
   });
 }
 
-function claimRunner(root, id, attempt, pid) {
+function claimRunner(root, id, attempt, pid, identity) {
   if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("runner pid must be a positive integer");
+  if (identity && (identity.pid !== pid || typeof identity.started !== "string" || !identity.started)) throw new Error("runner process identity does not match");
   return locked(root, (loc) => {
     const job = current(loc, id, attempt);
     if (job.runner_pid || job.pid || !["launching", "cancelling"].includes(job.status)) throw new Error("native attempt already has a runner");
-    return save(loc, { ...job, runner_pid: pid, runner_started_at: now(), updated_at: now() });
+    return save(loc, { ...job, runner_pid: pid, ...(identity ? { runner_identity: { pid, started: identity.started } } : {}), runner_started_at: now(), updated_at: now() });
   });
 }
 

@@ -139,11 +139,18 @@ function launchJob(root, id, { max_active, transport = createTransport(), ...opt
   }
 }
 
-function jobHealth(root, jobOrId, { transport = createTransport(), now_ms = Date.now(), startup_timeout_ms = 120000 } = {}) {
+function jobHealth(root, jobOrId, { transport = createTransport(), now_ms = Date.now(), startup_timeout_ms = 120000,
+  read_processes = require("./processes").inventory } = {}) {
   const job = jobs.getJob(root, typeof jobOrId === "string" ? jobOrId : jobOrId.id);
   const evidence_directory = path.join(fs.realpathSync(root), ".agent-team", "sessions", job.id, String(job.attempt));
   const result = (state, note) => ({ job_id: job.id, attempt: job.attempt, status: job.status, ready: state === "ready", state, note, evidence_directory });
   if (["queued", "completed", "failed", "cancelled"].includes(job.status)) return result(job.status, job.result || (job.status === "queued" ? "Job has not launched." : "Native process stopped."));
+  if (job.runner_pid) {
+    try {
+      const observed = read_processes().find((row) => row.pid === job.runner_pid);
+      if (!job.runner_identity || !observed || observed.started !== job.runner_identity.started) return result("blocked", "The owning runner is missing or its process identity changed. Native descendants may remain alive; inspect ownership before retrying.");
+    } catch (error) { return result("blocked", `Cannot observe the owning runner: ${error.message}. Ownership remains reserved.`); }
+  }
   if (job.status === "cancelling") return result("stopping", "Cancellation requested; ownership remains reserved until the native process stops.");
   if (job.reported_result) return result("stopping", "Native result reported; waiting for stopped-process evidence before acceptance.");
   if (job.surface_id && job.workspace_id) {
