@@ -9,6 +9,7 @@ const cli = require.resolve("../src/cli");
 const start = require.resolve("../src/team/start");
 const fixturePreload = require.resolve("./fixtures/workflow-cmux.cjs");
 const fixtureModel = require.resolve("./fixtures/workflow-model.cjs");
+const { publishJson } = require(fixtureModel);
 
 async function until(read, predicate, description, timeout = 12000) {
   const deadline = Date.now() + timeout;
@@ -19,6 +20,17 @@ async function until(read, predicate, description, timeout = 12000) {
     await new Promise((resolve) => setTimeout(resolve, 30));
   }
   assert.fail(`Timed out waiting for ${description}: ${JSON.stringify(value)}`);
+}
+
+async function publishedReceipt(file, timeout = 12000) {
+  return until(() => {
+    try { return JSON.parse(fs.readFileSync(file)); } catch (error) {
+      // The production runner publishes exit.json in place, twice. Only this
+      // bounded receipt poll tolerates missing or incomplete publication.
+      if (error.code === "ENOENT" || error instanceof SyntaxError) return null;
+      throw error;
+    }
+  }, (value) => value?.delivery, "lifecycle delivery receipt", timeout);
 }
 
 function fixture(t) {
@@ -60,13 +72,18 @@ function fixture(t) {
   let jsonId = 0;
   const json = (value) => {
     const file = path.join(directory, `input-${++jsonId}.json`);
-    fs.writeFileSync(file, JSON.stringify(value));
+    publishJson(file, value);
     return file;
   };
   const show = (id) => run(["job", "show", id]);
   const stateFile = (id) => path.join(root, ".agent-team", "state", "jobs", `${id}.json`);
-  const read = (file) => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file)) : null;
-  const wakes = (messageId) => fs.readFileSync(path.join(directory, "rpc.jsonl"), "utf8").trim().split("\n").map(JSON.parse)
+  const read = (file) => {
+    try { return JSON.parse(fs.readFileSync(file)); } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  const wakes = (messageId) => fs.readdirSync(directory).filter((name) => /^rpc-.*\.json$/.test(name)).map((name) => read(path.join(directory, name)))
     .filter((row) => row.method === "surface.send_text" && row.params.text.includes(messageId));
   const jobState = (id) => read(stateFile(id));
   const prefix = (job) => path.join(directory, `${job.id}-${job.attempt}`);
@@ -76,7 +93,7 @@ function fixture(t) {
     const key = prefix(job);
     const sequence = (counters.get(key) || 0) + 1;
     counters.set(key, sequence);
-    fs.writeFileSync(`${key}.${sequence}.request.json`, JSON.stringify(input));
+    publishJson(`${key}.${sequence}.request.json`, input);
     if (input.exit !== undefined) return;
     const response = await until(() => read(`${key}.${sequence}.response.json`), Boolean, `${job.id} ${input.name}`);
     assert.equal(response.error, undefined, JSON.stringify(response));
@@ -86,6 +103,22 @@ function fixture(t) {
     return result;
   }
   const mcp = (job, name, args) => command(job, { name, args });
+  async function holdRunner(job, observe) {
+    const current = show(job.id);
+    assert.equal(current.attempt, job.attempt);
+    assert.equal(current.status, "running");
+    assert.ok(Number.isSafeInteger(current.runner_pid) && current.runner_pid > 0);
+    const hold = path.join(directory, `hold-${current.runner_pid}.json`);
+    publishJson(hold, { job_id: job.id, attempt: job.attempt });
+    try {
+      const acknowledgement = await until(() => read(`${hold}.ack.json`), Boolean, `${job.id} runner inventory barrier`);
+      assert.equal(acknowledgement.pid, current.runner_pid);
+      return await observe();
+    } finally {
+      fs.rmSync(hold, { force: true });
+      fs.rmSync(`${hold}.ack.json`, { force: true });
+    }
+  }
   async function ready(job) {
     const handshake = await boot(job);
     assert.equal(handshake.initialized.result.serverInfo.name, "agent-team-job");
@@ -111,7 +144,7 @@ function fixture(t) {
     assert.equal(current.status, expected);
     // The wait proves release; delivery has its own subsequent durable receipt.
     const exitFile = path.join(root, ".agent-team", "sessions", job.id, String(job.attempt), "exit.json");
-    const receipt = await until(() => read(exitFile), (value) => value?.delivery, `${job.id} lifecycle delivery receipt`);
+    const receipt = await publishedReceipt(exitFile);
     assert.equal(receipt.process_stopped, true);
     assert.equal(receipt.attempt, job.attempt);
     assert.deepEqual(receipt.remaining, []);
@@ -161,15 +194,35 @@ function fixture(t) {
           try { process.kill(-job.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
         }
       }
-      const runners = path.join(directory, "runners.jsonl");
-      if (fs.existsSync(runners)) for (const row of fs.readFileSync(runners, "utf8").trim().split("\n")) {
-        try { process.kill(JSON.parse(row).pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+      for (const name of fs.readdirSync(directory).filter((name) => /^runner-\d+\.json$/.test(name))) {
+        try { process.kill(read(path.join(directory, name)).pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; }
       }
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
-  return { directory, root, repo, model, env, git, starter, raw, run, json, show, read, boot, command, mcp, ready, launch, create, stopped };
+  return { directory, root, repo, model, env, git, starter, raw, run, json, show, read, boot, command, mcp, holdRunner, ready, launch, create, stopped };
 }
+
+test("receipt publication retries incomplete JSON within a bounded deadline", async (t) => {
+  const directory = tempRoot();
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "exit.json");
+  fs.writeFileSync(file, "");
+  const expected = { process_stopped: true, delivery: { status: "submitted" } };
+  const publication = (async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    fs.writeFileSync(file, '{"process_stopped":');
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    publishJson(file, expected);
+  })();
+  assert.deepEqual(await publishedReceipt(file), expected);
+  await publication;
+  fs.writeFileSync(file, "{");
+  await assert.rejects(publishedReceipt(file, 60), /Timed out waiting for lifecycle delivery receipt/);
+  fs.unlinkSync(file);
+  await assert.rejects(publishedReceipt(file, 60), /Timed out waiting for lifecycle delivery receipt/);
+  await assert.rejects(publishedReceipt(path.join(file, "\0")), /null bytes/);
+});
 
 test("integration: startup, durable task/reply, stopped worker, candidate checks and independent review survive CLI restart", { timeout: 45000 }, async (t) => {
   const f = fixture(t);
@@ -221,14 +274,19 @@ test("integration: startup, durable task/reply, stopped worker, candidate checks
   f.git(workerCwd, "add", "answer.js");
   f.git(workerCwd, "commit", "-m", "Satisfy the isolated answer contract\n\nScope-risk: narrow\nNot-tested: native model reasoning");
   const commit = f.git(workerCwd, "rev-parse", "HEAD");
-  const report = await f.mcp(worker, "team_report", { status: "completed", result: JSON.stringify({ commit }), in_reply_to: sent.message.id });
-  assert.equal(report.job.status, "running");
-  assert.equal(report.job.process_stopped, false);
-  assert.equal(report.job.reported_result.message_id, report.message.id);
-  assert.equal(report.delivery.reason, "waiting_for_process_stop");
-  assert.equal(f.run(["status"]).jobs.find((job) => job.job_id === worker.id).state, "stopping");
-  f.create("next-writer", { cwd: workerCwd, writable: true });
-  assert.match(f.launch("next-writer", 1).stderr, /writer/);
+  await f.holdRunner(worker, async () => {
+    const report = await f.mcp(worker, "team_report", { status: "completed", result: JSON.stringify({ commit }), in_reply_to: sent.message.id });
+    assert.equal(report.job.status, "running");
+    assert.equal(report.job.process_stopped, false);
+    assert.equal(report.job.reported_result.message_id, report.message.id);
+    assert.equal(report.delivery.reason, "waiting_for_process_stop");
+    // Deliberately outlast the production report grace; the barrier, not a fast
+    // CI host, must preserve the live process for every assertion below.
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    assert.equal(f.run(["status"]).jobs.find((job) => job.job_id === worker.id).state, "stopping");
+    f.create("next-writer", { cwd: workerCwd, writable: true });
+    assert.match(f.launch("next-writer", 1).stderr, /writer/);
+  });
   const finished = await f.stopped(worker, "completed");
   assert.equal(finished.current.reported_result.result, JSON.stringify({ commit }));
   assert.equal(finished.receipt.observed_processes.some((row) => row.pid === finished.receipt.pid), true);
@@ -250,12 +308,15 @@ test("integration: startup, durable task/reply, stopped worker, candidate checks
   const reviewPacket = fs.readFileSync(path.join(f.root, ".agent-team", "sessions", review.id, "1", "candidate.diff"), "utf8");
   assert.match(reviewPacket, /\+module.exports = \(\) => 42/);
   const reviewResult = { candidate, brief_hash: candidate.brief_hash, verdict: "approve", findings: [] };
-  await f.mcp(review, "team_report", { status: "completed", result: JSON.stringify(reviewResult), to_job: lead.id });
-  const pending = f.run(["feature", "collect", feature.id], 1);
-  assert.equal(pending.eligible, false);
-  assert.deepEqual(pending.pending, [{ job_id: review.id, attempt: 1, status: "running", result_reported: true }]);
-  assert.deepEqual(pending.reviews, []);
-  assert.deepEqual(pending.errors, []);
+  await f.holdRunner(review, async () => {
+    await f.mcp(review, "team_report", { status: "completed", result: JSON.stringify(reviewResult), to_job: lead.id });
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    const pending = f.run(["feature", "collect", feature.id], 1);
+    assert.equal(pending.eligible, false);
+    assert.deepEqual(pending.pending, [{ job_id: review.id, attempt: 1, status: "running", result_reported: true }]);
+    assert.deepEqual(pending.reviews, []);
+    assert.deepEqual(pending.errors, []);
+  });
   await f.stopped(review, "completed");
   const collected = f.run(["feature", "collect", feature.id]);
   assert.equal(collected.eligible, true);

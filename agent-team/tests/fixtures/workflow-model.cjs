@@ -5,6 +5,12 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const readline = require("node:readline");
 
+function publishJson(file, value) {
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(value));
+  fs.renameSync(temporary, file);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const value = (flag) => argv[argv.indexOf(flag) + 1];
@@ -36,7 +42,7 @@ async function main() {
   const initialized = await request("initialize", { protocolVersion: "2024-11-05" });
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await request("tools/list", {});
-  fs.writeFileSync(`${prefix}.boot.json`, JSON.stringify({ argv, initialized, listed, pid: process.pid, mcp_pid: child.pid }));
+  publishJson(`${prefix}.boot.json`, { argv, initialized, listed, pid: process.pid, mcp_pid: child.pid });
   let next = 1;
   let busy = false;
   const timer = setInterval(async () => {
@@ -51,7 +57,7 @@ async function main() {
       name: command.name, arguments: command.args,
       _meta: { threadId: command.threadId || threadId }
     });
-    fs.writeFileSync(`${prefix}.${next}.response.json`, JSON.stringify(response));
+    publishJson(`${prefix}.${next}.response.json`, response);
     next++;
     busy = false;
   }, 20);
@@ -64,4 +70,4 @@ async function main() {
   setTimeout(() => process.exit(124), 45000).unref();
 }
 
-module.exports = { main };
+module.exports = { main, publishJson };

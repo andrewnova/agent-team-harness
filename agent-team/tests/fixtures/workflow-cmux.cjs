@@ -4,6 +4,12 @@ const path = require("node:path");
 const cp = require("node:child_process");
 const { randomUUID } = require("node:crypto");
 
+function publishJson(file, value) {
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(value));
+  fs.renameSync(temporary, file);
+}
+
 if (process.env.TEAM_WORKFLOW_FIXTURE) {
   const directory = process.env.TEAM_WORKFLOW_FIXTURE;
   const stateFile = path.join(directory, "cmux.json");
@@ -17,12 +23,12 @@ if (process.env.TEAM_WORKFLOW_FIXTURE) {
     const observedJobs = method === "surface.send_text"
       ? fs.readdirSync(jobDirectory).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(jobDirectory, name))))
       : undefined;
-    fs.appendFileSync(path.join(directory, "rpc.jsonl"), JSON.stringify({ method, params, observedJobs }) + "\n");
+    publishJson(path.join(directory, `rpc-${randomUUID()}.json`), { method, params, observedJobs });
     let result;
     if (method === "workspace.create") {
       if (state) throw new Error("Unexpected second workspace");
       result = { workspace_id: randomUUID(), pane_id: randomUUID(), surface_id: randomUUID() };
-      fs.writeFileSync(stateFile, JSON.stringify({ ...result, surfaces: [{ id: result.surface_id, pane_id: result.pane_id, type: "terminal" }] }));
+      publishJson(stateFile, { ...result, surfaces: [{ id: result.surface_id, pane_id: result.pane_id, type: "terminal" }] });
     } else {
       if (params.workspace_id !== state.workspace_id) throw new Error("Unknown fixture workspace");
       result = { workspace_id: state.workspace_id, surface_id: params.surface_id };
@@ -30,7 +36,7 @@ if (process.env.TEAM_WORKFLOW_FIXTURE) {
         if (params.pane_id !== state.pane_id) throw new Error("Unknown fixture pane");
         const surface_id = randomUUID();
         state.surfaces.push({ id: surface_id, pane_id: state.pane_id, type: "terminal" });
-        fs.writeFileSync(stateFile, JSON.stringify(state));
+        publishJson(stateFile, state);
         const log = fs.openSync(path.join(directory, `${surface_id}.log`), "a");
         // Execute the actual cmux initial_command, including its POSIX quoting,
         // validated Node executable, sessionRunner and generated launch packet.
@@ -40,7 +46,7 @@ if (process.env.TEAM_WORKFLOW_FIXTURE) {
         });
         child.unref();
         fs.closeSync(log);
-        fs.appendFileSync(path.join(directory, "runners.jsonl"), JSON.stringify({ pid: child.pid, surface_id }) + "\n");
+        publishJson(path.join(directory, `runner-${child.pid}.json`), { pid: child.pid, surface_id });
         result = { ...result, surface_id, pane_id: state.pane_id, type: "terminal" };
       } else if (method === "surface.list") {
         result.surfaces = state.surfaces;
@@ -65,6 +71,20 @@ if (process.env.TEAM_WORKFLOW_FIXTURE) {
       }
       if (![process.execPath, "git", "ps", "/bin/sh", path.join(directory, "native-model")].includes(file)) {
         throw new Error(`Unexpected external execution in workflow fixture: ${file}`);
+      }
+      if (file === "ps" && path.basename(process.argv[1] || "") === "sessionRunner.js") {
+        // Inventory is outside the runner's state-write critical sections. Hold
+        // this external boundary while the test observes a reported/live job;
+        // then run the real ps command with the production grace unchanged.
+        const hold = path.join(directory, `hold-${process.pid}.json`);
+        if (fs.existsSync(hold)) {
+          publishJson(`${hold}.ack.json`, { pid: process.pid });
+          const deadline = Date.now() + 12000;
+          while (fs.existsSync(hold)) {
+            if (Date.now() >= deadline) throw new Error("Timed out waiting for fixture runner release");
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          }
+        }
       }
       return original(file, ...args);
     };
