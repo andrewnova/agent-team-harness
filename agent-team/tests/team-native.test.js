@@ -97,15 +97,47 @@ for (const leader of ["codex", "claude"]) {
         assert.equal(option(flags, "--sandbox"), writable ? "workspace-write" : "read-only");
         assert.equal(option(flags, "--ask-for-approval"), "on-request");
         assert.ok(flags.includes("--no-alt-screen"));
+        assert.ok(flags.includes("features.multi_agent=true"));
+        assert.ok(flags.includes('model_reasoning_effort="xhigh"'));
+        assert.ok(flags.includes("features.multi_agent_v2.enabled=true"));
+        assert.ok(flags.includes("features.multi_agent_v2.expose_spawn_agent_model_overrides=false"));
+        assert.ok(flags.includes("features.step_model_switching=false"));
+        assert.ok(flags.includes(`agents.default_subagent_model=${JSON.stringify(job.model)}`));
+        assert.ok(flags.includes('agents.default_subagent_reasoning_effort="xhigh"'));
+        const childConfig = path.join(command.directory, "codex-child.toml");
+        for (const childRole of ["default", "worker", "explorer"]) assert.ok(flags.includes(`agents.${childRole}.config_file=${JSON.stringify(childConfig)}`));
+        const child = fs.readFileSync(childConfig, "utf8");
+        assert.ok(child.includes(`model = ${JSON.stringify(job.model)}`));
+        assert.match(child, /model_reasoning_effort = "xhigh"/);
+        assert.match(child, /parent alone may use the harness/);
+        assert.equal(fs.statSync(childConfig).mode & 0o777, 0o600);
         assert.equal(launch.session_id, undefined, "Codex identity must come from the actual session");
       } else {
         assert.equal(option(flags, "--permission-mode"), writable ? "acceptEdits" : "dontAsk");
-        assert.deepEqual(JSON.parse(option(flags, "--settings")), { switchModelsOnFlag: false });
+        const settings = JSON.parse(option(flags, "--settings"));
+        assert.equal(option(flags, "--effort"), "medium");
+        assert.equal(settings.switchModelsOnFlag, false);
+        assert.equal(settings.teammateMode, "in-process");
+        assert.deepEqual(settings.env, {
+          CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: "1",
+          CLAUDE_CODE_EFFORT_LEVEL: "medium",
+          CLAUDE_CODE_SUBAGENT_MODEL: job.model,
+          CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1"
+        });
+        const guard = settings.hooks.PreToolUse[0].hooks[0];
+        assert.equal(guard.command, process.execPath);
+        assert.deepEqual(guard.args, [require.resolve("../src/team/claudeAgentGuard"), command.directory, launch.session_id, writable ? "write" : "read"]);
+        assert.ok(flags.includes("Agent"));
+        assert.equal(flags.includes("--disallowedTools"), false);
         assert.ok(flags.includes("--strict-mcp-config"));
         assert.match(launch.session_id, /^[0-9a-f-]{36}$/);
         assert.equal(option(flags, "--session-id"), launch.session_id);
         for (const tool of ["team_inbox", "team_send", "team_reply", "team_report"]) assert.ok(flags.includes(`mcp__agent_team__${tool}`));
-        if (!writable) assert.equal(option(flags, "--tools"), "Read,Glob,Grep");
+        if (!writable) {
+          const exposed = option(flags, "--tools").split(",");
+          for (const tool of ["Read", "Glob", "Grep", "Agent", "SendMessage"]) assert.ok(exposed.includes(tool));
+          for (const tool of ["Bash", "Write", "Edit"]) assert.equal(exposed.includes(tool), false);
+        }
         assert.equal(fs.statSync(option(flags, "--mcp-config")).mode & 0o777, 0o600);
       }
     });

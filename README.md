@@ -14,7 +14,7 @@ One project in the sidebar. A lead and separate worker and reviewer tabs inside 
 
 ## Quickstart
 
-You need **macOS**, [cmux](https://cmux.com/), Git, **Node.js 22.13 or later**, and the native [Codex](https://learn.chatgpt.com/docs/codex/cli) and [Claude Code](https://code.claude.com/docs/en/setup) CLIs installed and signed in. Your accounts must have access to the configured models.
+You need **macOS**, [cmux](https://cmux.com/), Git, **Node.js 22.13 or later**, and the native [Codex](https://learn.chatgpt.com/docs/codex/cli) (0.153.4 or later) and [Claude Code](https://code.claude.com/docs/en/setup) (2.1.263 or later) CLIs installed and signed in. Your accounts must have access to the configured models.
 
 Open a terminal **inside cmux**, then run:
 
@@ -28,7 +28,7 @@ Replace the project path with an existing Git repository. The starter opens a **
 
 > Add a settings page with saved notification preferences. Inspect the existing app first, split independent work, and verify the complete user flow.
 
-The lead creates worker and reviewer tabs as needed. Up to **four jobs, including the lead**, can be active by default. The starter does not schedule tasks itself.
+The lead creates worker and reviewer tabs as needed. Up to **four jobs, including the lead**, can be active by default. Child agents inside a job do not count toward that cap. The starter does not schedule tasks itself.
 
 To use a Fable lead:
 
@@ -52,6 +52,12 @@ Use `--max-active` to set capacity, `--codex-bin` and `--claude-bin` to select e
 
 Default IDs are `gpt-6-astra` and `claude-fable-5-1[1m]`. Review is a separate assignment from implementation, even when the same model helped write part of the feature.
 
+## Child agents inside each job
+
+Every job is a native session and can run its own child agents. Astra jobs use Codex multi-agent at **xhigh** effort. Fable jobs use Claude Code Agent Teams at **medium** effort, with every child kept on the parent's model. These defaults ship with the harness in [native-team.config.json](agent-team/native-team.config.json) and are applied per launch; your global Codex and Claude settings are not edited.
+
+Workers split independent parts of their assignment across children. Reviewers fan out across independent risk areas of the frozen candidate, collect every result, and return one verdict. The parent job owns its children: what they work on, where they write, what they may do, and when they stop. Children answer their parent through native messages; only the parent reports to the harness. Read-only reviewers can use children too; their children cannot edit source either. The native CLI and your account set how many children can run; the harness does not.
+
 ## From task to reviewed feature
 
 1. **Define.** The lead inspects the project and writes a brief, assignments, and meaningful checks.
@@ -67,12 +73,12 @@ A feature becomes eligible only when every required current review and check pas
 | Component | Responsibility |
 | --- | --- |
 | **cmux** | Visible project and tabs, direct steering, and addressed terminal wakes |
-| **Native Codex / Claude Code** | Reasoning, editing, tool use, authentication, and approvals |
+| **Native Codex / Claude Code** | Reasoning, editing, tool use, child agents, authentication, and approvals |
 | **Harness** | Job ownership and capacity, durable messages, feature assembly, and evidence for acceptance |
 
 Both CLIs receive the same local MCP tools: `team_report`, `team_send`, `team_inbox`, and `team_reply`. Messages stay in the local mailbox. A wake asks the recipient to read its inbox; only its actual response proves it answered.
 
-The lead decides what to launch and what to accept. There is no additional scheduler or nested manager hierarchy.
+The lead decides what to launch and what to accept. The harness adds no scheduler of its own, for jobs or for the child agents inside them.
 
 ## Inspect and stop
 
@@ -90,7 +96,7 @@ Run terminal reads, launches, and wakes inside cmux. Cancellation requests termi
 
 ## Current boundaries
 
-This is an alpha native workflow. Live grouped tabs, agent readiness, messages and replies in both directions, and shutdown have been exercised on macOS. CI runs lint and the test suite. Account access, native approvals, and model pauses can still block a job; incomplete work stays incomplete. Throughput improvement has not been benchmarked.
+This is an alpha native workflow. Live grouped tabs, agent readiness, messages and replies in both directions, and shutdown have been exercised on macOS. CI runs lint and the test suite. Account access, native approvals, and model pauses can still block a job; incomplete work stays incomplete. Child-agent defaults are tuned to the current Claude Code release; their live behavior and any throughput improvement have not been benchmarked.
 
 Code and prompts are processed by the selected native coding services. Local coordination does not mean offline model execution.
 

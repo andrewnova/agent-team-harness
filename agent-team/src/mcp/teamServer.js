@@ -2,7 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { encodeFrame, decodeFrames } = require("./claudeServer");
-const { getJob, jobInbox, sendJobMessage, reportJob } = require("../team/jobs");
+const { getJob, bindJob, jobInbox, sendJobMessage, reportJob } = require("../team/jobs");
 
 const string = { type: "string", minLength: 1 };
 const jobId = { ...string, pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$" };
@@ -40,12 +40,23 @@ function assertBinding(context) {
   return job;
 }
 
-function createContext({ root, job_id, attempt, onMessage }) {
+function createContext({ root, job_id, attempt, onMessage, nativeCaller }) {
   if (typeof root !== "string" || !path.isAbsolute(root)) throw new Error("MCP requires an explicit absolute coordinator root");
   if (onMessage !== undefined && typeof onMessage !== "function") throw new Error("onMessage must be a synchronous function");
-  const context = Object.freeze({ root: fs.realpathSync(root), job_id, attempt, ...(onMessage ? { onMessage } : {}) });
-  assertBinding(context);
+  if (nativeCaller !== undefined && (!nativeCaller || nativeCaller.runtime !== "codex" ||
+    (nativeCaller.thread_id !== null && (typeof nativeCaller.thread_id !== "string" || !nativeCaller.thread_id.trim())))) {
+    throw new Error("invalid native Codex caller context");
+  }
+  const context = Object.freeze({ root: fs.realpathSync(root), job_id, attempt, ...(onMessage ? { onMessage } : {}),
+    ...(nativeCaller ? { nativeCaller: Object.freeze({ runtime: "codex", thread_id: nativeCaller.thread_id }) } : {}) });
+  const job = assertBinding(context);
+  if (nativeCaller && job.runtime !== "codex") throw new Error("native Codex caller requires a Codex job");
   return context;
+}
+
+function isParentCaller(context, job) {
+  return !context.nativeCaller || context.nativeCaller.thread_id === null ||
+    (typeof job.session_id === "string" && Boolean(job.session_id) && context.nativeCaller.thread_id === job.session_id);
 }
 
 function replyTarget(context, inReplyTo) {
@@ -74,8 +85,23 @@ function afterSend(context, message) {
 }
 
 // All actor identity comes from the process launch binding, never tool input.
-function dispatchTool(context, name, args = {}) {
-  const boundJob = assertBinding(context);
+function dispatchTool(context, name, args = {}, requestMeta) {
+  let boundJob = assertBinding(context);
+  // Codex does not always pass CODEX_THREAD_ID to MCP subprocesses. Its native
+  // tools/call metadata identifies the parent at the first ready handshake,
+  // which the launch contract requires before any delegation or mailbox work.
+  if (context.nativeCaller?.thread_id === null && !boundJob.session_id && boundJob.status === "launching" &&
+    name === "team_report" && args?.status === "ready" && typeof requestMeta?.threadId === "string" && requestMeta.threadId.trim() && !requestMeta.threadId.includes("\0")) {
+    validateArguments(toolDefinitions().find((tool) => tool.name === name), args);
+    boundJob = bindJob(context.root, context.job_id, context.attempt, {
+      workspace_id: boundJob.workspace_id, surface_id: boundJob.surface_id, session_id: requestMeta.threadId
+    });
+  }
+  // The process identity fences separate child connections; per-call native
+  // metadata also fences children using the parent's shared connection.
+  if (context.nativeCaller && (!boundJob.session_id || !isParentCaller(context, boundJob) || requestMeta?.threadId !== boundJob.session_id)) {
+    throw new Error("native Codex team tools require the parent thread identity");
+  }
   const definition = toolDefinitions().find((tool) => tool.name === name);
   if (!definition) throw new Error(`unknown team tool: ${name}`);
   validateArguments(definition, args);
@@ -106,9 +132,9 @@ function dispatchTool(context, name, args = {}) {
   return { ok: true, job, ...(message ? afterSend(context, message) : {}) };
 }
 
-function callTool(context, name, args = {}) {
+function callTool(context, name, args = {}, requestMeta) {
   try {
-    return { content: [{ type: "text", text: JSON.stringify(dispatchTool(context, name, args)) }] };
+    return { content: [{ type: "text", text: JSON.stringify(dispatchTool(context, name, args, requestMeta)) }] };
   } catch (error) {
     return { isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, error: error.message }) }] };
   }
@@ -120,7 +146,7 @@ function handleRequest(context, message) {
   if (!message || Array.isArray(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string") return failure(null, -32600, "Invalid JSON-RPC request");
   if (!Object.hasOwn(message, "id")) return null;
   try {
-    assertBinding(context);
+    const parentCaller = isParentCaller(context, assertBinding(context));
     let result;
     switch (message.method) {
       case "initialize":
@@ -128,11 +154,13 @@ function handleRequest(context, message) {
           protocolVersion: message.params?.protocolVersion || "2024-11-05",
           serverInfo: { name: "agent-team-job", version: "0.1.0" },
           capabilities: { tools: { listChanged: false } },
-          instructions: "Use team_report with status ready after reading your assignment. Messages are addressed to your launch job and attempt. Semantic reports do not stop your process; only the parent releases ownership. Use team_inbox after a parent wake."
+          instructions: parentCaller
+            ? "Use team_report with status ready after reading your assignment. Messages are addressed to your launch job and attempt. Semantic reports do not stop your process; only the parent releases ownership. Use team_inbox after a parent wake."
+            : "No harness tools are available to this native subagent. Return results to your parent through native agent communication."
         };
         break;
-      case "tools/list": result = { tools: toolDefinitions() }; break;
-      case "tools/call": result = callTool(context, message.params?.name, message.params?.arguments ?? {}); break;
+      case "tools/list": result = { tools: parentCaller ? toolDefinitions() : [] }; break;
+      case "tools/call": result = callTool(context, message.params?.name, message.params?.arguments ?? {}, message.params?._meta); break;
       case "ping": result = {}; break;
       default: return failure(message.id, -32601, `Unknown method: ${message.method}`);
     }

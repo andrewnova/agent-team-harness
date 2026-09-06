@@ -4,6 +4,8 @@ const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const jobs = require("./jobs");
 const { createTransport } = require("./cmux");
+const config = require("../../native-team.config.json");
+const { readTools } = require("./claudeAgentGuard");
 
 function attemptDirectory(root, job) {
   const dir = path.join(fs.realpathSync(root), ".agent-team", "sessions", job.id, String(job.attempt));
@@ -39,7 +41,10 @@ function buildNativeCommand(root, job, options = {}) {
     `You are job ${job.id}, attempt ${job.attempt}, role ${job.role}, in an Agent Team Harness cmux session.`,
     "Use the agent_team MCP tools for communication. First call team_report with status ready, then team_inbox.",
     "Messages are addressed to your exact job attempt. A wake means read team_inbox; do not infer another agent's reply from terminal output.",
-    "Send requests with team_send and answer with team_reply. Do not spawn nested agents. Work only within this assignment.",
+    "Send requests with team_send and answer with team_reply. Work only within this assignment.",
+    "Use as many native agents as can usefully work in parallel within available native CLI and account limits, for both coding and reviewing. Split independent responsibilities, refill useful capacity, and avoid duplicate work. Reviewers should fan out across independent risk areas of the complete frozen candidate. There is no harness-imposed child-agent count cap.",
+    job.runtime === "claude" ? `Claude Code Agent Teams are enabled. Spawn named native teammates for parallel work; use Fable at ${config.claude.effort} effort throughout. Keep teammates inside this native session.` : `Native Codex subagents are enabled. Use Astra at ${config.codex.effort} effort for every coding, exploration and review agent.`,
+    "You own every child agent: assign bounded scope and source context, preserve the job's permission boundary, use private worktrees for simultaneous writers, collect and assess all results, then close or shut down children before reporting terminal completion. Children use native messages to return results; only this parent session may use the harness team MCP identity or report this job complete.",
     "Terminal team_report statuses end this native process after the report is delivered. Report completion only when your assignment is finished.",
     job.writable ? "Use your assigned checkout for edits; keep changes within the stated scope." : "This assignment is read-only. Do not change source files.",
     reviewContext, job.prompt
@@ -48,25 +53,54 @@ function buildNativeCommand(root, job, options = {}) {
   let session_id;
   if (job.runtime === "claude") {
     session_id = crypto.randomUUID();
+    const guard = { type: "command", command: process.execPath, args: [path.join(__dirname, "claudeAgentGuard.js"), directory, session_id, job.writable ? "write" : "read"] };
+    const settings = {
+      switchModelsOnFlag: false,
+      teammateMode: config.claude.teammate_mode,
+      env: {
+        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: config.claude.agent_teams ? "1" : "0",
+        CLAUDE_CODE_EFFORT_LEVEL: config.claude.effort,
+        CLAUDE_CODE_SUBAGENT_MODEL: job.model,
+        CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1"
+      },
+      hooks: {
+        PreToolUse: [{ matcher: job.writable ? "mcp__agent_team__.*" : ".*", hooks: [guard] }],
+        SubagentStart: [{ hooks: [guard] }],
+        SubagentStop: [{ hooks: [guard] }]
+      }
+    };
     const configPath = path.join(directory, "mcp.json");
     // These four communication tools must be available before the first prompt,
     // including in read-only sessions without the general ToolSearch tool.
     fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { agent_team: { command: process.execPath, args: serverArgs, alwaysLoad: true } } }), { mode: 0o600, flag: "wx" });
-    argv = [options.claude_bin || "claude", "--model", job.model, "--name", job.id, "--session-id", session_id,
+    argv = [options.claude_bin || "claude", "--model", job.model, "--effort", config.claude.effort, "--name", job.id, "--session-id", session_id,
       "--mcp-config", configPath, "--strict-mcp-config", "--permission-mode", job.writable ? "acceptEdits" : "dontAsk",
       // Preserve the assigned model: native safeguards must pause the job,
       // rather than silently fulfilling its assignment on another model.
-      "--settings", JSON.stringify({ switchModelsOnFlag: false }),
-      "--disallowedTools", "Agent",
-      "--allowedTools", "mcp__agent_team__*", "mcp__agent_team__team_inbox", "mcp__agent_team__team_send", "mcp__agent_team__team_reply", "mcp__agent_team__team_report"];
-    if (!job.writable) argv.push("--tools", "Read,Glob,Grep");
+      "--settings", JSON.stringify(settings),
+      "--allowedTools", "Agent", "SendMessage", "mcp__agent_team__*", "mcp__agent_team__team_inbox", "mcp__agent_team__team_send", "mcp__agent_team__team_reply", "mcp__agent_team__team_report"];
+    if (!job.writable) argv.push("--tools", [...readTools].join(","));
     if (reviewContext) argv.push("--add-dir", directory);
     argv.push("--", instructions);
   } else if (job.runtime === "codex") {
+    const childConfig = path.join(directory, "codex-child.toml");
+    fs.writeFileSync(childConfig, [
+      `model = ${JSON.stringify(job.model)}`,
+      `model_reasoning_effort = ${JSON.stringify(config.codex.effort)}`,
+      `developer_instructions = ${JSON.stringify("Use as many native agents as usefully independent work permits within available native and account limits. Keep the assigned model and xhigh effort. Preserve the inherited sandbox and source scope. Concurrent writers need private worktrees. Return results through native agent communication. The owning parent alone may use the harness agent_team MCP identity. Collect all child results and close children before returning.")}`,
+      ""
+    ].join("\n"), { mode: 0o600, flag: "wx" });
     // CLI -c values are TOML. JSON strings/arrays are also valid TOML here.
     argv = [options.codex_bin || "codex", "--model", job.model, "-C", job.cwd, "--no-alt-screen",
       "--sandbox", job.writable ? "workspace-write" : "read-only", "--ask-for-approval", "on-request",
-      "-c", "features.multi_agent=false", "-c", `mcp_servers.agent_team.command=${JSON.stringify(process.execPath)}`,
+      "-c", `features.multi_agent=${config.codex.multi_agent}`, "-c", `model_reasoning_effort=${JSON.stringify(config.codex.effort)}`,
+      "-c", "features.multi_agent_v2.enabled=true", "-c", "features.multi_agent_v2.expose_spawn_agent_model_overrides=false",
+      "-c", "features.step_model_switching=false", "-c", "agents.enabled=true",
+      "-c", `review_model=${JSON.stringify(job.model)}`,
+      "-c", `agents.default_subagent_model=${JSON.stringify(job.model)}`,
+      "-c", `agents.default_subagent_reasoning_effort=${JSON.stringify(config.codex.effort)}`,
+      ...["default", "worker", "explorer"].flatMap((role) => ["-c", `agents.${role}.config_file=${JSON.stringify(childConfig)}`]),
+      "-c", `mcp_servers.agent_team.command=${JSON.stringify(process.execPath)}`,
       "-c", `mcp_servers.agent_team.args=${JSON.stringify(serverArgs)}`,
       "-c", "mcp_servers.agent_team.required=true", "--", instructions];
   } else throw new Error("unsupported native runtime");

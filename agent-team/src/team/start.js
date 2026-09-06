@@ -8,12 +8,13 @@ const jobs = require("./jobs");
 const native = require("./native");
 const { createTransport } = require("./cmux");
 const { shellQuote } = require("../bridge/claudeChannel/utils");
+const runtimePolicy = require("../../native-team.config.json");
 
 const usage = `Start a native coding team from a terminal inside cmux.
   node scripts/start-team.js --project /absolute/path/to/repo [options]
 
   --leader codex|claude       Lead runtime (default: codex)
-  --max-active 4              Total active jobs, including the lead
+  --max-active 4              Top-level harness jobs, including the lead; excludes native child agents
   --coordinator /path         Separate state directory (default: ~/.local/state/agent-team/cmux/<project-id>)
   --codex-bin /path/to/codex   Override the Codex executable found in PATH
   --claude-bin /path/to/claude Override the Claude executable found in PATH
@@ -22,6 +23,7 @@ const usage = `Start a native coding team from a terminal inside cmux.
   --help                     Show this help without changing anything
 
 Repeated startup reports an existing active lead; it never opens a duplicate.
+Native agents are enabled: Astra uses xhigh; Fable uses medium with Claude Code Agent Teams.
 Model access, native trust, login and approval prompts remain with the native CLIs.
 `;
 
@@ -55,13 +57,13 @@ First report ready, read team_inbox and read ${path.resolve(__dirname, "../../..
 
 Use the native team CLI: ${cli}
 Launch ready top-level harness jobs with: job launch <id> ${launch}
-You are the only owner of assignments, repair decisions and feature acceptance. Create flat worker jobs through the CLI, without nested agent teams or the legacy start/daemon workflow. Refill available capacity as jobs finish; the cap includes you.
+You are the only owner of top-level assignments, repair decisions and feature acceptance. Create worker jobs through the CLI. Every job may use native child agents; the top-level cap includes you but does not count those children. Refill useful capacity as jobs finish. Use as many native agents as can usefully work in parallel for both coding and reviewing, within native CLI and account limits. Fable uses medium effort with native Claude Code Agent Teams; Astra always uses xhigh. Each parent owns child scopes, permission boundaries, isolated concurrent writes, result synthesis and shutdown.
 
 Backend work and fixes use runtime codex, model ${config.codex_model}. Frontend work and fixes use runtime claude, model ${config.claude_model}. Required independent reviewers are fresh instances of the opposite lead runtime. Use explicit model IDs and never silently substitute a model. Missing or interrupted reviews do not count as approval.
 
 Read the project's AGENTS.md and follow the user's authorized scope. Define a brief and meaningful checks. Create the feature worktree and private writer checkouts outside this coordinator. Keep this checkout for coordination only; do not implement in the user's main checkout. Assemble worker commits, freeze the full feature, run checks alongside independent reviews, collect the round, batch justified repairs, then import current results. Use feature status to check eligibility. Source changes require current reviews and checks. Eligibility does not authorize merging or deployment.
 
-All worker and reviewer results must address ${id} through the team MCP mailbox. The mailbox stores the message; a cmux wake only asks the receiver to read its inbox. Use semantic replies as evidence of communication. Do not stop yourself while worker replies are outstanding. Preserve state and terminal evidence, and verify that cancelled processes stop before reusing their writer claims. Native sandbox and approval boundaries remain in force. Do not merge, publish, contact others or delete unrelated data without authority from the user's task. Follow repository commit conventions; for this harness, use Lore decision trailers. Do not report terminal completion merely because you are waiting for user input.`;
+All top-level worker and reviewer results must address ${id} through the team MCP mailbox. Native children return findings through their parent's native agent messaging and must not impersonate their parent's harness job. The mailbox stores the message; a cmux wake only asks the receiver to read its inbox. Use semantic replies as evidence of communication. Do not stop yourself while worker replies are outstanding. Preserve state and terminal evidence, and verify that cancelled processes stop before reusing their writer claims. Native sandbox and approval boundaries remain in force. Do not merge, publish, contact others or delete unrelated data without authority from the user's task. Follow the target repository's commit conventions. Do not report terminal completion merely because you are waiting for user input.`;
 }
 
 function start(values, { platform = process.platform, env = process.env, home = os.homedir(), transport = createTransport() } = {}) {
@@ -80,7 +82,7 @@ function start(values, { platform = process.platform, env = process.env, home = 
   const directory = path.resolve(requested);
   if (contains(project, directory) || contains(directory, project)) throw new Error("The coordinator must be separate from the project checkout, not inside it or an ancestor of it.");
   const config = {
-    project, coordinator: directory, leader, max_active,
+    project, coordinator: directory, leader, max_active, runtime_policy: runtimePolicy,
     codex_bin: executable(values["codex-bin"] || "codex", env),
     claude_bin: executable(values["claude-bin"] || "claude", env),
     codex_model: values["codex-model"] || "gpt-6-astra",
