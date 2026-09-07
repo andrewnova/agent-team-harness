@@ -154,6 +154,28 @@ test("startup discovers a persisted undelivered task even when the retry omits i
   assert.equal(jobs.jobInbox(restarted.coordinator, restarted.job.id, 1)[0].body, "Keep this durable task visible");
 });
 
+test("operator task state coexists with worker messages, terminal reports and legacy SQLite rebuild", (t) => {
+  const f = fixture(t);
+  const taskFile = path.join(f.dir, "task.txt");
+  fs.writeFileSync(taskFile, "Implement then report through the real mailbox");
+  const first = start({ ...f.values, "task-file": taskFile }, f.context);
+  const lead = mcp.createContext({ root: first.coordinator, job_id: first.job.id, attempt: 1 });
+  const taskMessage = mcp.dispatchTool(lead, "team_inbox").messages[0];
+  mcp.dispatchTool(lead, "team_reply", { in_reply_to: taskMessage.id, body: "Task acknowledged" });
+  jobs.createJob(first.coordinator, { id: "implementation", leader: "codex", role: "frontend", model: "test", cwd: f.project, writable: true, prompt: "Implement", parent_job: first.job.id });
+  jobs.claimJob(first.coordinator, "implementation", { max_active: 3 });
+  const worker = mcp.createContext({ root: first.coordinator, job_id: "implementation", attempt: 1 });
+  mcp.dispatchTool(worker, "team_send", { to_job: first.job.id, body: "Implementation ready" });
+  const report = mcp.dispatchTool(worker, "team_report", { status: "completed", to_job: first.job.id, result: "Implementation verified" });
+  assert.equal(report.job.reported_result.result, "Implementation verified");
+  jobs.finishJob(first.coordinator, "implementation", 1, { status: "completed", process_stopped: true });
+  assert.ok(jobs.jobFinishedMessage(first.coordinator, "implementation", 1).message);
+  assert.doesNotThrow(() => require("../src/db").rebuildDatabase(first.coordinator));
+  assert.ok(mcp.dispatchTool(lead, "team_inbox").messages.some((message) => message.body === "Implementation verified"));
+  mcp.dispatchTool(lead, "team_reply", { in_reply_to: taskMessage.id, body: "Feature accepted", task_status: "completed" });
+  assert.equal(JSON.parse(fs.readFileSync(first.task.record_path)).status, "completed");
+});
+
 test("SIGKILL after the lead claim recovers startup and the saved task without repeating a native allocation", { timeout: 10000 }, async (t) => {
   const f = fixture(t);
   const taskFile = path.join(f.dir, "task.txt");

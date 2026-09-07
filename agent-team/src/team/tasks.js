@@ -11,7 +11,9 @@ function validate(id, body) {
 }
 
 function directory(root) {
-  const dir = path.join(root, ".agent-team", "state", "tasks");
+  // "tasks" belongs to the legacy board/SQLite mirror schema. Operator
+  // submissions must not be interpreted as legacy task_id records on rebuild.
+  const dir = path.join(root, ".agent-team", "state", "operator-tasks");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (fs.realpathSync(dir) !== dir) throw new Error("task state must not use symlink aliases");
   return dir;
