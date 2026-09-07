@@ -21,7 +21,7 @@ while [ "$#" -gt 0 ]; do
 Usage: scripts/install-team-skill.sh [--refresh] [--source /absolute/clone/path]
 
 Link team and agent-team-harness from one source into the shared skills hub,
-Codex, and Claude Code. Requires Node.js (already required by agent-team).
+Codex, and Claude Code. Requires Node.js >=22.13 (already required by agent-team).
 The source defaults to this script's clone. Prefer a stable clone over a temporary
 worktree: links use its real path, and it must remain available after installation.
 
@@ -31,6 +31,7 @@ siblings (.team.backup-1 or .agent-team-harness.backup-1, etc.) before linking.
 Backups are never overwritten; relative symlink targets remain relative to the
 same directory. Each backup path is printed. To restore, move the installed link
 aside, then rename the backup to its original name. Repeated installs are no-ops.
+Concurrent installs by the same user serialize, including preflight and rollback.
 
 No CLI wrapper, daemon, MCP server, or native configuration is installed.
 
@@ -91,7 +92,29 @@ function writableParent(target) {
   fs.accessSync(parent, fs.constants.W_OK | fs.constants.X_OK);
 }
 
+let mutex;
 try {
+  // One permanent, per-user mutex covers every source and target combination,
+  // including aliases and partially overlapping installs. Never unlink it:
+  // SQLite releases ownership on process exit without changing the lock inode.
+  const mutexFile = path.join(fs.realpathSync("/tmp"), `agent-team-skill-install-${process.getuid()}.sqlite`);
+  try { fs.closeSync(fs.openSync(mutexFile, "wx", 0o600)); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  const before = fs.lstatSync(mutexFile);
+  if (!before.isFile() || before.nlink !== 1 || before.uid !== process.getuid()) {
+    throw new Error(`Installer mutex must be an unaliased file owned by this user: ${mutexFile}`);
+  }
+  const { DatabaseSync } = require("node:sqlite");
+  mutex = new DatabaseSync(mutexFile);
+  mutex.exec("PRAGMA busy_timeout = 10000");
+  try { mutex.exec("BEGIN IMMEDIATE"); }
+  catch (error) {
+    if (error.errcode === 5 || error.errcode === 6) throw new Error("Another skill installation is in progress; retry after it finishes.");
+    throw error;
+  }
+  const currentMutex = fs.lstatSync(mutexFile);
+  if (currentMutex.dev !== before.dev || currentMutex.ino !== before.ino) throw new Error("Installer mutex changed during acquisition; retry.");
+
   const sourceRoot = fs.realpathSync(absolute(process.argv[2]));
   const refresh = process.argv[3] === "1";
   const sources = ["team", "agent-team-harness"].map((name) => {
@@ -196,6 +219,8 @@ try {
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
+} finally {
+  mutex?.close();
 }
 NODE
 

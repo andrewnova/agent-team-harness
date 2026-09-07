@@ -2,16 +2,63 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
+const { setTimeout: delay } = require("node:timers/promises");
 
 const repository = path.resolve(__dirname, "../..");
 const names = ["team", "agent-team-harness"];
 const packagedSkills = path.join("plugins", "agent-team-harness", "skills");
 
+// Redirect only the installer's fixed mutex directory, so even its lock files
+// stay isolated from real installs. Optional barriers observe actual processes
+// and SQLite transactions without adding production test switches.
+const preload = `
+const fs = require('node:fs');
+const realpath = fs.realpathSync;
+fs.realpathSync = (target, ...args) => realpath(target === '/tmp' ? process.env.INSTALL_TEST_MUTEX_ROOT : target, ...args);
+if (process.env.INSTALL_TEST_EVENTS) {
+  const actor = process.env.INSTALL_TEST_ACTOR;
+  const event = (type, details = {}) => fs.appendFileSync(process.env.INSTALL_TEST_EVENTS, JSON.stringify({actor, type, ...details}) + '\\n');
+  const {DatabaseSync} = require('node:sqlite');
+  const exec = DatabaseSync.prototype.exec;
+  DatabaseSync.prototype.exec = function(sql) {
+    if (sql === 'BEGIN IMMEDIATE') event('lock-attempt');
+    const result = exec.call(this, sql);
+    if (sql === 'BEGIN IMMEDIATE') event('acquired');
+    return result;
+  };
+  const close = DatabaseSync.prototype.close;
+  DatabaseSync.prototype.close = function() { event('releasing'); return close.call(this); };
+  let paused = false;
+  let links = 0;
+  for (const operation of ['mkdirSync', 'renameSync', 'symlinkSync', 'unlinkSync', 'rmdirSync']) {
+    const original = fs[operation];
+    fs[operation] = (...args) => {
+      event('mutation', {operation});
+      if (actor === 'first' && !paused && operation === 'renameSync' && args[1].endsWith('/.team.backup-1')) {
+        paused = true;
+        event('paused');
+        const deadline = Date.now() + 10000;
+        while (!fs.existsSync(process.env.INSTALL_TEST_RELEASE)) {
+          if (Date.now() > deadline) throw new Error('installer barrier timed out');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        }
+      }
+      if (operation === 'symlinkSync' && ++links === 2 && process.env.INSTALL_TEST_FAIL) throw new Error('injected link failure');
+      return original(...args);
+    };
+  }
+}
+`;
+
 function fixture(t) {
   // Never inherit real native skill targets, even when run from an installed app.
   const root = fs.realpathSync(fs.mkdtempSync("/tmp/team-skill-install-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const mutexRoot = fs.realpathSync(fs.mkdtempSync("/tmp/team-skill-install-mutex-"));
+  t.after(() => fs.rmSync(mutexRoot, { recursive: true, force: true }));
+  const hook = path.join(mutexRoot, "preload.cjs");
+  fs.writeFileSync(hook, preload);
   const source = path.join(root, "stable source clone");
   fs.mkdirSync(path.join(source, "scripts"), { recursive: true });
   const script = path.join(source, "scripts", "install-team-skill.sh");
@@ -21,6 +68,9 @@ function fixture(t) {
   }
   const env = {
     ...process.env,
+    PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH || ""}`,
+    NODE_OPTIONS: `--require ${hook}`,
+    INSTALL_TEST_MUTEX_ROOT: mutexRoot,
     AGENT_TEAM_AGENTS_SKILLS: path.join(root, "shared skills"),
     CODEX_HOME: path.join(root, "codex config"),
     CLAUDE_CONFIG_DIR: path.join(root, "claude config")
@@ -96,6 +146,100 @@ test("installs both packaged skills into all apps from a spaced clone path and p
   success(f.run(["--refresh"]));
   assert.deepEqual(snapshot(f.root), after, "repeat install must preserve link inodes without new backups");
 });
+
+for (const layout of ["shared", "aliases", "partial overlap", "disjoint", "rollback"]) {
+  test(`concurrent refreshes serialize preflight and mutation with ${layout} targets`, { timeout: 20000 }, async (t) => {
+    const f = fixture(t);
+    for (const directory of f.directories) {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, "team"), `original team at ${directory}`);
+      fs.mkdirSync(path.join(directory, "agent-team-harness"));
+      fs.writeFileSync(path.join(directory, "agent-team-harness", "SKILL.md"), "original local harness");
+    }
+    const originals = f.directories.flatMap((directory) => names.map((name) => ({
+      backup: path.join(directory, `.${name}.backup-1`), contents: snapshot(path.join(directory, name))
+    })));
+    const secondSource = path.join(f.root, "second source clone");
+    fs.cpSync(f.source, secondSource, { recursive: true });
+    const sourcesBefore = [snapshot(f.source), snapshot(secondSource)];
+    const overrides = {};
+    if (layout === "aliases" || layout === "partial overlap") {
+      const codexAlias = path.join(f.root, "codex alias");
+      fs.symlinkSync(f.env.CODEX_HOME, codexAlias);
+      overrides.CODEX_HOME = codexAlias;
+    }
+    if (layout === "aliases") {
+      const hubAlias = path.join(f.root, "hub alias");
+      fs.symlinkSync(f.directories[0], hubAlias);
+      overrides.AGENT_TEAM_AGENTS_SKILLS = hubAlias;
+    }
+    if (layout === "partial overlap" || layout === "disjoint") {
+      overrides.AGENT_TEAM_AGENTS_SKILLS = path.join(f.root, "other shared hub");
+      overrides.CLAUDE_CONFIG_DIR = path.join(f.root, "other claude config");
+      if (layout === "disjoint") overrides.CODEX_HOME = path.join(f.root, "other codex config");
+    }
+    const events = path.join(f.root, "events.jsonl");
+    const release = path.join(f.root, "release");
+    fs.writeFileSync(events, "");
+    const trace = () => fs.readFileSync(events, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    const children = [];
+    function launch(actor, source, extra = {}) {
+      const child = spawn("bash", [f.script, "--refresh", "--source", source], {
+        cwd: f.root, env: { ...f.env, INSTALL_TEST_EVENTS: events, INSTALL_TEST_ACTOR: actor, INSTALL_TEST_RELEASE: release, ...extra },
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      let stdout = "", stderr = "";
+      child.stdout.on("data", (chunk) => { stdout += chunk; });
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      const result = new Promise((resolve) => {
+        child.on("error", (error) => resolve({ error, stdout, stderr }));
+        child.on("close", (status) => resolve({ status, stdout, stderr }));
+      });
+      children.push(result);
+      return result;
+    }
+    async function until(predicate) {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        if (predicate(trace())) return;
+        await delay(10);
+      }
+      assert.fail(`barrier did not arrive: ${JSON.stringify(trace())}`);
+    }
+    let first, second;
+    try {
+      first = launch("first", f.source, layout === "rollback" ? { INSTALL_TEST_FAIL: "1" } : {});
+      await until((rows) => rows.some((row) => row.actor === "first" && row.type === "paused"));
+      second = launch("second", secondSource, overrides);
+      // On the unfixed installer this sees a second mutation instead of a lock
+      // attempt while the first installer still owns its pre-rename barrier.
+      await until((rows) => rows.some((row) => row.actor === "second" && ["lock-attempt", "mutation"].includes(row.type)));
+      assert.equal(trace().some((row) => row.actor === "second" && row.type === "mutation"), false);
+    } finally {
+      fs.writeFileSync(release, "continue");
+      await Promise.all(children);
+    }
+    const firstResult = await first;
+    if (layout === "rollback") {
+      assert.equal(firstResult.status, 1);
+      assert.match(firstResult.stderr, /injected link failure/);
+    } else success(firstResult);
+    success(await second);
+    let owner = null;
+    for (const row of trace()) {
+      if (row.type === "acquired") { assert.equal(owner, null, "installers must never overlap"); owner = row.actor; }
+      if (row.type === "mutation") assert.equal(owner, row.actor, "every mutation, including rollback, must own the mutex");
+      if (row.type === "releasing") { assert.equal(owner, row.actor); owner = null; }
+    }
+    assert.equal(owner, null);
+    for (const original of originals) assert.deepEqual(snapshot(original.backup), original.contents, "preserve original bytes and inodes");
+    assert.deepEqual([snapshot(f.source), snapshot(secondSource)], sourcesBefore, "both source clones remain unchanged");
+    const secondEnv = { ...f.env, ...overrides };
+    const secondDirectories = [secondEnv.AGENT_TEAM_AGENTS_SKILLS, path.join(secondEnv.CODEX_HOME, "skills"), path.join(secondEnv.CLAUDE_CONFIG_DIR, "skills")].map((directory) => fs.realpathSync(directory));
+    assertInstalled(f, secondSource, secondDirectories);
+    assertInstalled(f, f.source, f.directories.filter((directory) => !secondDirectories.includes(directory)));
+  });
+}
 
 test("an explicit stable source survives removal of the installer worktree", (t) => {
   const f = fixture(t);
