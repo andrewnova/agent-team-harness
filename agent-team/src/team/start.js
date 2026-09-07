@@ -34,15 +34,29 @@ Native agents are enabled: Astra uses xhigh; Fable uses medium with Claude Code 
 Model access, native trust, login and approval prompts remain with the native CLIs.
 `;
 
-function executable(value, env) {
+function isCmuxShim(file) {
+  return file.includes(`${path.sep}cmux-cli-shims${path.sep}`) ||
+    /\/cmux\.app\/Contents\/Resources\/bin\/(?:codex|claude|cmux-(?:codex|claude)-wrapper)$/.test(file);
+}
+
+function executable(value, env, skipCmuxShims = false) {
   const candidates = path.isAbsolute(value) ? [value] : (env.PATH || "").split(path.delimiter).filter(Boolean).map((dir) => path.resolve(dir, value));
+  let skippedCmuxShim = false;
   for (const candidate of candidates) {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
-      if (fs.statSync(candidate).isFile()) return candidate;
+      if (!fs.statSync(candidate).isFile()) continue;
+      // Surface wrappers rediscover the CLI using PATH, which a new cmux
+      // workspace need not inherit. Only default discovery skips them.
+      if (skipCmuxShims && (isCmuxShim(candidate) || isCmuxShim(fs.realpathSync(candidate)))) {
+        skippedCmuxShim = true;
+        continue;
+      }
+      return candidate;
     } catch { /* Try the next PATH entry. */ }
   }
-  throw new Error(`Executable not found: ${value}. Install it or pass its absolute --codex-bin/--claude-bin path.`);
+  const detail = skippedCmuxShim ? " cmux shims were skipped because they depend on the caller's PATH." : "";
+  throw new Error(`Executable not found: ${value}.${detail} Install it or pass its absolute --codex-bin/--claude-bin path.`);
 }
 
 function git(args, cwd) {
@@ -90,8 +104,8 @@ function start(values, { platform = process.platform, env = process.env, home = 
   if (contains(project, directory) || contains(directory, project)) throw new Error("The coordinator must be separate from the project checkout, not inside it or an ancestor of it.");
   const config = {
     project, coordinator: directory, leader, max_active, runtime_policy: runtimePolicy,
-    codex_bin: executable(values["codex-bin"] || "codex", env),
-    claude_bin: executable(values["claude-bin"] || "claude", env),
+    codex_bin: executable(values["codex-bin"] || "codex", env, !values["codex-bin"]),
+    claude_bin: executable(values["claude-bin"] || "claude", env, !values["claude-bin"]),
     codex_model: values["codex-model"] || "gpt-6-astra",
     claude_model: values["claude-model"] || "claude-fable-5-1[1m]"
   };

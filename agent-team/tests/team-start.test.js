@@ -34,6 +34,71 @@ function fixture(t) {
   };
 }
 
+function discoveryFixture(t, runtime) {
+  const f = fixture(t);
+  const install = (directory, body) => {
+    const bin = path.join(f.dir, directory, runtime);
+    fs.mkdirSync(path.dirname(bin), { recursive: true });
+    fs.writeFileSync(bin, body, { mode: 0o700 });
+    return bin;
+  };
+  const shim = install("cmux-cli-shims/surface", "#!/bin/sh\nexit 127\n");
+  const real = install("native bin", "#!/bin/sh\nprintf 'native-cli\\n'\n");
+  f.values.leader = runtime;
+  delete f.values[`${runtime}-bin`];
+  f.context.env.PATH = [path.dirname(shim), path.dirname(real)].join(path.delimiter);
+  return { ...f, shim, real, install };
+}
+
+for (const runtime of ["codex", "claude"]) {
+  test(`${runtime} default PATH discovery persists a native CLI past cmux surface shims and their aliases`, (t) => {
+    const f = discoveryFixture(t, runtime);
+    const alias = path.join(f.dir, "shim alias");
+    fs.symlinkSync(path.dirname(f.shim), alias);
+    const bundled = path.join(f.dir, "cmux.app", "Contents", "Resources", "bin", `cmux-${runtime}-wrapper`);
+    fs.mkdirSync(path.dirname(bundled), { recursive: true });
+    fs.copyFileSync(f.shim, bundled);
+    const bundledAlias = path.join(f.dir, "bundle alias");
+    fs.mkdirSync(bundledAlias);
+    fs.symlinkSync(bundled, path.join(bundledAlias, runtime));
+    f.context.env.PATH = [path.dirname(f.shim), alias, bundledAlias, path.dirname(f.real)].join(path.delimiter);
+    const result = start(f.values, f.context);
+    const saved = JSON.parse(fs.readFileSync(path.join(result.coordinator, ".agent-team", "start.json")));
+    const launch = JSON.parse(fs.readFileSync(path.join(result.coordinator, ".agent-team", "sessions", result.job.id, "1", "launch.json")));
+    assert.equal(saved[`${runtime}_bin`], f.real);
+    assert.equal(launch.argv[0], f.real);
+    // The new workspace need not inherit the caller's native CLI directory.
+    assert.equal(execFileSync(launch.argv[0], [], { env: { PATH: "/usr/bin:/bin" }, encoding: "utf8" }), "native-cli\n");
+  });
+
+  for (const override of ["absolute", "PATH"]) {
+    test(`${runtime} explicit ${override} executable override preserves a cmux wrapper`, (t) => {
+      const f = discoveryFixture(t, runtime);
+      f.values[`${runtime}-bin`] = override === "absolute" ? f.shim : runtime;
+      const result = start(f.values, f.context);
+      const saved = JSON.parse(fs.readFileSync(path.join(result.coordinator, ".agent-team", "start.json")));
+      assert.equal(saved[`${runtime}_bin`], f.shim);
+    });
+  }
+
+  test(`${runtime} default PATH discovery preserves an ordinary user wrapper`, (t) => {
+    const f = discoveryFixture(t, runtime);
+    const wrapper = f.install("user wrappers", "#!/bin/sh\nexit 0\n");
+    f.context.env.PATH = [path.dirname(wrapper), f.context.env.PATH].join(path.delimiter);
+    const result = start(f.values, f.context);
+    const saved = JSON.parse(fs.readFileSync(path.join(result.coordinator, ".agent-team", "start.json")));
+    assert.equal(saved[`${runtime}_bin`], wrapper);
+  });
+
+  test(`${runtime} default PATH discovery rejects cmux-only PATH before creating state`, (t) => {
+    const f = discoveryFixture(t, runtime);
+    f.context.env.PATH = path.dirname(f.shim);
+    assert.throws(() => start(f.values, f.context), new RegExp(`Executable not found: ${runtime}.*cmux`, "i"));
+    assert.equal(fs.existsSync(f.context.home), false);
+    assert.deepEqual(f.calls, { project: 0, session: 0 });
+  });
+}
+
 for (const leader of ["codex", "claude"]) {
   test(`${leader} startup persists one task before launch, reuses it before readiness and records acknowledgment`, (t) => {
     const f = fixture(t);
