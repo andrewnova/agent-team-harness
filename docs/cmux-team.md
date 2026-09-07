@@ -6,6 +6,8 @@ For bounded coding or review work, use [direct native sessions](direct-sessions.
 
 ## Start a team
 
+Startup and job-state mutations use separate SQLite mutexes that release when their process exits. Recovering these short metadata locks preserves active jobs, capacity, and writer claims. Competing retries serialize on the same persistent mutex. Legacy directory locks recover only when a successful process inventory proves the recorded PID absent; missing owners or live/uncertain PIDs remain blocked for inspection. Never delete locks to release a running job, and preserve the permanent `start.lock.sqlite` and `state/jobs.lock.sqlite` files. These local mutexes require a filesystem with reliable SQLite locking.
+
 Install cmux, Git, Node.js >=22.13.0, Codex CLI >=0.153.4, and Claude Code >=2.1.263 on macOS; those are the native CLI versions verified with this workflow. Sign in to both coding CLIs and confirm account access to the chosen models. The target must be an existing Git repository.
 
 ### With the team skill

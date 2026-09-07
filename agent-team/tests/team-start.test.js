@@ -9,6 +9,7 @@ const { start } = require("../src/team/start");
 const jobs = require("../src/team/jobs");
 const { getProject } = require("../src/team/project");
 const mcp = require("../src/mcp/teamServer");
+const native = require("../src/team/native");
 
 function fixture(t) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "team-start-")));
@@ -122,6 +123,21 @@ test("invalid task flags and empty body fail before coordinator creation", (t) =
   assert.throws(() => start({ ...f.values, "task-file": taskFile }, f.context), /non-empty/);
   assert.throws(() => start({ ...f.values, "task-file": "relative" }, f.context), /absolute/);
   assert.equal(fs.existsSync(f.context.home), false);
+});
+
+test("retry repairs a task handoff interrupted after queued lead creation without allocating a second lead", (t) => {
+  const f = fixture(t);
+  const taskFile = path.join(f.dir, "task.txt");
+  fs.writeFileSync(taskFile, "Run exactly one assignment");
+  const values = { ...f.values, "task-file": taskFile };
+  const interrupted = t.mock.method(native, "launchJob", () => { throw new Error("interrupted before native claim"); });
+  assert.throws(() => start(values, f.context), /interrupted/);
+  interrupted.mock.restore();
+  const restarted = start(values, f.context);
+  assert.equal(restarted.task.state, "submitted");
+  assert.equal(jobs.listJobs(restarted.coordinator).length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(restarted.task.record_path)).deliveries.length, 1);
+  assert.deepEqual(f.calls, { project: 1, session: 1 });
 });
 
 test("public starter creates an isolated coordinator and preserves paths with spaces", (t) => {

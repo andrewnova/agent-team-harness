@@ -57,7 +57,9 @@ function fixture(t) {
 
 function output(result, status = 0) {
   assert.equal(result.status, status, result.stderr || result.stdout);
-  assert.equal(result.stderr, "");
+  // Node 22 emits this built-in SQLite diagnostic when the lock first opens.
+  // Keep rejecting all other stderr, including actual CLI failures.
+  assert.match(result.stderr, /^(?:\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\n)?$/);
   return JSON.parse(result.stdout);
 }
 

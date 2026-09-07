@@ -11,6 +11,7 @@ const { createTransport } = require("./cmux");
 const { shellQuote } = require("../bridge/claudeChannel/utils");
 const runtimePolicy = require("../../native-team.config.json");
 const tasks = require("./tasks");
+const { withLock } = require("./lock");
 
 const usage = `Start a native coding team from a terminal inside cmux.
   node scripts/start-team.js --project /absolute/path/to/repo [options]
@@ -116,11 +117,7 @@ function start(values, { platform = process.platform, env = process.env, home = 
   fs.mkdirSync(state, { recursive: true, mode: 0o700 });
   if (fs.realpathSync(state) !== state) throw new Error("Coordinator state must not be aliased.");
   const lock = path.join(state, "start.lock");
-  try { fs.mkdirSync(lock); } catch (error) {
-    if (error.code === "EEXIST") throw new Error("Another startup is in progress; inspect it before retrying.");
-    throw error;
-  }
-  try {
+  return withLock(lock, () => {
     // Commit the caller's task before any native session can start. A retry
     // repairs an interrupted launch using this same immutable submission.
     if (submission) jobs.submitTask(directory, submission);
@@ -169,7 +166,7 @@ function start(values, { platform = process.platform, env = process.env, home = 
     const job = native.launchJob(directory, id, { max_active, codex_bin: config.codex_bin, claude_bin: config.claude_bin, transport, project_title: `Team · ${path.basename(project)}` });
     const health = native.jobHealth(directory, job, { transport });
     return { coordinator: directory, project, reused: false, job: jobs.getJob(directory, job.id), ...health, ...task };
-  } finally { fs.rmdirSync(lock); }
+  });
 }
 
 function main(args) {

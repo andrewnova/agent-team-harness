@@ -67,7 +67,8 @@ async function nativeFixture() {
   await request("initialize", { protocolVersion: "2024-11-05" });
   server.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const ready = await tool("team_report", { status: "ready" });
-  fs.writeFileSync(config.ready, JSON.stringify({ ready, mcp_pid: server.pid }));
+  fs.writeFileSync(`${config.ready}.tmp`, JSON.stringify({ ready, mcp_pid: server.pid }));
+  fs.renameSync(`${config.ready}.tmp`, config.ready);
   let next = 1;
   let busy = false;
   const timer = setInterval(async () => {
@@ -77,7 +78,8 @@ async function nativeFixture() {
     const action = JSON.parse(fs.readFileSync(file));
     if (action.report) {
       const response = await tool("team_report", action.report);
-      fs.writeFileSync(`${config.control}.${next}.response.json`, JSON.stringify(response));
+      fs.writeFileSync(`${config.control}.${next}.response.tmp`, JSON.stringify(response));
+      fs.renameSync(`${config.control}.${next}.response.tmp`, `${config.control}.${next}.response.json`);
       if (config.closeMcpBeforeStop) {
         server.stdin.end();
         await serverClosed;
@@ -250,7 +252,8 @@ function fixture(t) {
   }
   async function action(packet, input) {
     const index = ++packet.sequence;
-    fs.writeFileSync(`${packet.control}.${index}.json`, JSON.stringify(input));
+    fs.writeFileSync(`${packet.control}.${index}.tmp`, JSON.stringify(input));
+    fs.renameSync(`${packet.control}.${index}.tmp`, `${packet.control}.${index}.json`);
     if (!input.report) return;
     const response = await until(() => read(`${packet.control}.${index}.response.json`), Boolean, "semantic report");
     const result = JSON.parse(response.result.content[0].text);
