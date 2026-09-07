@@ -1,6 +1,10 @@
-# Experimental native teams in cmux
+<a id="experimental-native-teams-in-cmux"></a>
 
-For bounded coding or review work, use [direct native sessions](direct-sessions.md), with the optional [team skill](../README.md#invoke-the-team-skill) for native agents and a fresh review. This coordinated path is an explicit experiment: the [September 6 trial](native-workflow-findings.md) did not reach complete feature acceptance within twenty minutes.
+# Historical native teams in cmux
+
+This is historical documentation for **manual cmux startup only**. The current `team` skill uses native sessions inside Herdr; see the [README setup](../README.md#quickstart) and [invocation guide](../README.md#invoke-the-team-skill). The skill no longer activates this cmux workflow. For a standalone coding or review session, use the [direct native CLI guide](direct-sessions.md).
+
+The retained harness remains an experiment: the [September 6 trial](native-workflow-findings.md) did not reach complete feature acceptance within twenty minutes. The commands and behavior below describe that harness, including its separate coordinator and historical model routing.
 
 `agent-team team` runs parallel native Codex and Claude Code sessions inside one cmux project. It reuses the harness mailbox and local state without starting the legacy daemon. A lead owns the brief, assignments, repair decisions, and acceptance.
 
@@ -8,19 +12,9 @@ For bounded coding or review work, use [direct native sessions](direct-sessions.
 
 Install cmux, Git, Node.js >=22.13.0, Codex CLI >=0.153.4, and Claude Code >=2.1.263 on macOS; those are the native CLI versions verified with this workflow. Sign in to both coding CLIs and confirm account access to the chosen models. The target must be an existing Git repository.
 
-### With the team skill
+<a id="with-the-team-skill"></a>
 
-After the [one-time standalone skill installation](../README.md#invoke-the-team-skill), invoke it in your target project with a leading `cmux`:
-
-| App | Open a team ready for a task |
-| --- | --- |
-| Claude Code | `/team cmux` |
-| Codex desktop | Type `@team`, select the skill suggestion, then type `cmux` |
-| Codex CLI | `$team cmux` |
-
-The skill starts or reuses that project's team and selects the current native runtime as lead unless you choose another. It checks the returned coordinator, lead job, and health, then waits for native readiness. With no task, it leaves the ready lead waiting for you. Append a task, such as `/team cmux Build the settings page`, to enter it once in that exact lead's native terminal after readiness and confirm its acknowledgment.
-
-Startup must execute inside a cmux terminal. From a desktop session, the agent uses available authorized native computer control to open cmux and run the starter there. If that control is unavailable, it gives you the exact command to run in a cmux terminal. Native authentication, trust, and permissions remain in force; complete any blocking native prompts before activation can finish.
+The former skill activation path has been replaced by the [Herdr team workflow](../README.md#invoke-the-team-skill). To use the historical harness, run the manual starter below inside cmux. Native authentication, trust, and permissions remain in force.
 
 ### Direct startup without the skill
 
@@ -192,6 +186,6 @@ Uncertain allocation, lost surface identity, unobservable descendants, stale res
 
 ## Validation boundary
 
-Desktop activation through the team skill, including task handoff, is specified in the skill instructions but has not been tested live. Validation of the public starter does not establish that desktop flow.
+This section concerns the retained cmux harness and manual starter. It does not validate the current Herdr team skill; that workflow has its own [validation boundary](../README.md#why-this-is-the-default).
 
 Hermetic tests cover routing, concurrent ownership, attempt fencing, addressed MCP messages, launch failures, source-bound review/check evidence, and CLI behavior. Live proof must separately establish model availability, native readiness, the two-way semantic exchange, direct steering, child-agent behavior inside a job, and shutdown on the installed CLIs. Successful unit tests do not establish those live properties.

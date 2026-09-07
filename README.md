@@ -1,41 +1,18 @@
-# Agent Team Harness
+# Team for Herdr
 
-<img src="site/assets/logo.svg" alt="Agent Team Harness logo" width="72">
+<img src="site/assets/logo.svg" alt="Team for Herdr logo" width="72">
 
-**Start with a direct native Codex or Claude Code session.**
+**Run a native Codex or Claude Code team inside Herdr.**
 
-For a bounded coding task or review, open your repository in the native CLI, give it the task, and check the result. The optional [team skill](#invoke-the-team-skill) adds useful native agents and a fresh review while keeping your current session as lead. The coordinated cmux workflow is experimental.
+The `team` skill keeps your invoking session as lead, proposes builders for your task, and keeps the main roles visible in Herdr. The lead always reviews the result; a separate adversarial check is optional. This is a one-file workflow built on Herdr's official `herdr --skill` instructions. No custom coordinator is required.
 
-[Website](https://andrewnova.github.io/agent-team-harness/) · [Team skill](#invoke-the-team-skill) · [Direct-session guide](docs/direct-sessions.md) · [Experimental teams](docs/cmux-team.md)
+[Website](https://andrewnova.github.io/agent-team-harness/) · [Quickstart](#quickstart) · [Invoke the team skill](#invoke-the-team-skill) · [Direct-session guide](docs/direct-sessions.md) · [Historical cmux guide](docs/cmux-team.md)
 
 ## Quickstart
 
-Use your installed, signed-in CLI in the target repository. These commands work without a skill; for the reusable workflow, [install the team skill once](#invoke-the-team-skill).
+Install [Herdr using its official instructions](https://herdr.dev/docs/install/). Have Git, Bash, and the native Codex or Claude Code CLI installed and signed in, with access to the models you want to use. Install both CLIs if your approved lineup will use both. The skill setup requires only Bash and Git; it has no Node.js runtime requirement.
 
-```sh
-cd /absolute/path/to/your/repo
-codex --model gpt-6-astra -c 'model_reasoning_effort="xhigh"'
-```
-
-Or start Claude Code:
-
-```sh
-cd /absolute/path/to/your/repo
-claude --model 'claude-fable-5-1[1m]' --effort medium \
-  --settings '{"switchModelsOnFlag":false}'
-```
-
-Choose explicit model IDs available to your account. These examples use the existing Astra / xhigh and Fable / medium preferences. Native authentication, trust, and permission settings remain in force. No harness installation, cmux, coordinator, or global configuration change is required for this path.
-
-Give the session a concrete task:
-
-> Add a settings page with saved notification preferences. Inspect the existing app, make the change, and verify saving and reloading. Use independent child agents where useful. Report the changed files, checks, and remaining issues.
-
-Keep one writer per checkout. For parallel writing, use separate worktrees. Once the candidate is committed, use a fresh session for an independent review of that exact commit and its requirements. [Implementation and review prompts](docs/direct-sessions.md).
-
-## Invoke the team skill
-
-Install the standalone skill once from a clone you will keep available:
+Clone this repository into a location you will keep, then install the skill:
 
 ```sh
 git clone https://github.com/andrewnova/agent-team-harness.git
@@ -43,59 +20,87 @@ cd agent-team-harness
 ./scripts/install-team-skill.sh
 ```
 
-For an existing clone, run the installer there; update first with `git pull --ff-only` only if `git status --short` is empty. The installer links one shared skill into Codex and Claude Code, so keep the clone at that location. It preserves any existing different `team` skill and installs no CLI wrapper, daemon, or MCP configuration.
+The installer installs only `team`, linking the shared skill source into Codex and Claude Code through symlinks. Keep this clone at its installed location. It installs no CLI wrapper, daemon, or MCP configuration.
 
-Then open your target project and invoke the skill:
+For an existing clone, inspect `git status --short` and update with `git pull --ff-only` when the checkout is clean. If the installer finds a different existing `team` skill, refresh it explicitly:
 
-| App | Invocation |
+```sh
+./scripts/install-team-skill.sh --refresh
+```
+
+Refresh preserves the replaced files or links as backups and links to this clone. Start a new native session if the skill is not visible yet.
+
+### Optional session restore
+
+For the CLIs you use, install Herdr's optional integrations:
+
+```sh
+herdr integration install claude
+herdr integration install codex
+herdr integration status
+```
+
+These integrations add native `SessionStart` hooks that report session identity for eligible conversation recovery after a Herdr server restart. Start fresh native sessions after installing the hooks. Claude Code and Codex activity still comes from Herdr's screen detection. They are separate from the skill installer and do not provide a global stop. See the official [integration instructions](https://herdr.dev/docs/integrations/) and [session restore requirements](https://herdr.dev/docs/session-state/).
+
+## Invoke the team skill
+
+Open a terminal in the project you want to work on and start Herdr:
+
+```sh
+cd /absolute/path/to/your/repo
+herdr
+```
+
+If Herdr attaches to an existing session, select or create the workspace for your project. In a **shell pane inside that workspace**, confirm the project directory and launch your lead:
+
+```sh
+codex
+```
+
+Or run `claude` in that pane. Complete any native login or workspace prompts, then enter the task at the agent's prompt:
+
+| Native CLI inside Herdr | Example invocation |
 | --- | --- |
-| Claude Code | `/team Add a settings page and verify saving preferences` |
-| Codex desktop | Type `@team`, select the skill suggestion, then enter your task |
-| Codex CLI | `$team Add a settings page and verify saving preferences` |
+| Codex | `$team Add a settings page with notification preferences. Verify that saving and reloading preserves the selection.` |
+| Claude Code | `/team Add a settings page with notification preferences. Verify that saving and reloading preserves the selection.` |
 
-The current session leads, uses native agents for useful independent work, and gets a fresh read-only review. It preserves your task scope, model, effort, and native permissions. Start a new session if the skill is not visible. See the [direct-session guide](docs/direct-sessions.md), [shipped skill](plugins/agent-team-harness/skills/team/SKILL.md), [Codex skill invocation](https://learn.chatgpt.com/docs/build-skills#how-codex-uses-skills), and [Claude skill naming](https://code.claude.com/docs/en/skills#how-a-skill-gets-its-command-name).
+Your invoking Codex or Claude Code session remains **Lead**, preserving its model, effort, permissions, and task scope. A bare `$team` or `/team` prepares the workspace and waits for your task.
 
-For the experimental coordinated workflow, put `cmux` first after the skill name. Mentioning cmux elsewhere in a task keeps the native workflow.
+The workflow starts only in a native agent inside Herdr, where `HERDR_ENV=1` is inherited from the pane. Invoking it in Codex desktop or another session outside Herdr explains this entry requirement; it does not bootstrap or control a Herdr workspace from there. The lead reads the installed version's `herdr --skill` for control commands. See Herdr's [official skill documentation](https://herdr.dev/docs/agent-skill/) and the [shipped team skill](plugins/agent-team-harness/skills/team/SKILL.md).
 
-| App | Open a team ready for a task |
-| --- | --- |
-| Claude Code | `/team cmux` |
-| Codex desktop | Select `@team`, then type `cmux` |
-| Codex CLI | `$team cmux` |
+### Before workers start
 
-The skill starts or reuses the current project's team, selecting your current native runtime as lead unless you choose another. `/team cmux` waits for readiness and leaves the lead ready for your task. Append a task, such as `/team cmux Build the settings page`, to enter it once in that lead's native terminal after readiness and confirm its acknowledgment.
+The lead inspects your project and proposes the builder runtime, model, and assignment for your approval. It recommends Fable through Claude Code for frontend work and Codex for backend work. For mixed work, it explains whether one builder or separate frontend/backend assignments fit. It checks model availability, never silently substitutes, and asks you to approve or change the proposal before launching or dispatching workers.
 
-Startup must execute in a cmux terminal. A desktop agent uses available authorized native computer control to open one and run the starter; if that control is unavailable, it gives you the exact command to run there. Native authentication, trust, and permissions still apply. See the [cmux guide](docs/cmux-team.md) for prerequisites, direct startup, and the current validation boundary.
+At the same time, the lead explicitly asks whether you want an **Adversarial** check and proposes its runtime. If approved, that role is a separate native agent with fresh context, distinct from both the lead and the implementation author. Its model may match the lead's. If declined, that role is omitted; the lead still reviews and verifies the work. Approval covers routine follow-ups and retries for the same task and lineup; a material change needs a new decision.
+
+### Working with the team
+
+- **Visible roles:** Lead, Build, and the approved Adversarial role use named Herdr tabs. Simultaneous writers get separate Git worktrees and disjoint assignments; an adversarial agent gets a separate checkout of the actual candidate.
+- **Useful parallelism:** The lead and builders are encouraged to use as many useful native children as their configured limits allow, with bounded scopes and isolated writers. Parents collect, review, verify, and close their children. Children may appear only inside the parent CLI, rather than as separate Herdr tabs or Agents entries. They do not require individual approval or override a declined adversarial check.
+- **Steering:** Send changed requirements through the lead. It updates affected assignments and review criteria while preserving completed work.
+- **Pause and resume:** Say `pause team` to stop dispatch and request that workers and their native children hold or stop. A reported human Esc or unexplained interruption holds that assignment until you resume it. The lead reports what stopped and what remains active or unverified. This is a best-effort behavioral convention, not an enforced global stop or a guarantee that background processes exited. Resume requires your explicit instruction; after a restart, the lead rediscovers identities and inspects existing work before dispatch.
+- **Finish:** The lead reviews the complete candidate diff and source, evaluates any approved adversarial findings, and verifies relevant behavior, including a real browser for UI work when available. It reports changed files, checks, findings, and limitations, leaving tabs available and agents idle for inspection. Commit, merge, and publication authority comes from your task.
+
+For a standalone implementation or review without a team, use the [direct native CLI guide](docs/direct-sessions.md).
 
 ## Why this is the default
 
-In the September 6 trial, neither coordinated small-task run reached feature acceptance during a twenty-minute observation window. Native prompts required repeated operator handling. Startup, addressed communication, and individual worker completion worked, but that did not establish a useful complete workflow.
+Herdr owns terminals and agent control; the native lead owns assignments, integration, review, and final verification. A single skill supplies the workflow and reads Herdr's release-matched command instructions instead of maintaining a second control layer.
 
-The trial preceded the final lifecycle repairs. Passing their deterministic tests does not prove a speed advantage for the repaired team workflow. Direct sessions are the default for bounded work; coordination must earn its extra steps on a genuinely parallel workload. [Trial findings](docs/native-workflow-findings.md).
+An earlier Herdr countertrial passed seven tests plus browser and user checks. The revised team skill has not yet been tested live end to end. That earlier result does not establish this revision's behavior or a performance advantage.
 
-## Experimental teams in cmux
+<a id="experimental-teams-in-cmux"></a>
 
-The optional harness groups native lead, worker, and reviewer sessions in one cmux workspace. It owns concurrent-writer claims, addressed messages, feature assembly, and review/check evidence. cmux owns visible tabs; the native CLIs own model execution, child agents, authentication, and approvals. There is no harness scheduler.
+## Historical harness workflows
 
-![Conceptual illustration of four coding sessions connected through a shared mailbox inside one workspace](site/assets/cmux-team-hero.png)
+The existing cmux harness code, manual starter, and daemon workflow remain available for existing installations and historical experiments. They are separate from the current Herdr team skill. The [cmux guide](docs/cmux-team.md#start-a-team) documents manual startup and the original ownership, messaging, review, and recovery model. Existing `start --daemon` users can use the [legacy guide](docs/legacy-workflow.md).
 
-*Conceptual artwork generated with GPT Image 2. Alpha software, maintained by Andrew Guzman.*
-
-For an explicit team experiment, use macOS, cmux, Git, Node.js 22.13 or later, and both native CLIs. From a terminal inside cmux:
-
-```sh
-git clone https://github.com/andrewnova/agent-team-harness.git
-cd agent-team-harness
-node scripts/start-team.js --project /absolute/path/to/your/repo
-```
-
-The starter creates local coordinator state outside the target Git checkout and opens an Astra lead. Complete native prompts, wait for its readiness report, then give it a task. Use `--leader claude` for a Fable lead. Up to four jobs, including the lead, can be active by default; native child agents are governed by their CLI and account limits.
-
-Running the same command again inspects the existing active lead. It does not prove that blocked or incomplete work has recovered. `node scripts/start-team.js --help` lists capacity and executable/model overrides.
-
-[Team startup, ownership, messaging, review, and recovery](docs/cmux-team.md). Existing users of `start --daemon` can use the [legacy guide](docs/legacy-workflow.md). Neither path is required for ordinary direct-session work.
+The [September 6 cmux trial findings](docs/native-workflow-findings.md) record the earlier workflow's limitations: neither coordinated small-task run reached feature acceptance during a twenty-minute observation window. Those findings concern that harness, not the revised Herdr skill.
 
 ## Development
+
+The retained harness has its own Node.js dependencies and checks. They are not needed to install or invoke the Herdr team skill.
 
 ```sh
 npm --prefix agent-team ci

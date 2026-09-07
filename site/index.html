@@ -3,25 +3,23 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Agent Team Harness</title>
-    <meta name="description" content="Use the team skill in Claude Code or Codex for native agents and a fresh review. Add cmux to open an experimental coordinated team workspace.">
+    <title>Team for Herdr · One skill. Your team.</title>
+    <meta name="description" content="A shared Herdr team skill for native Claude Code and Codex. Choose your builder, use parallel subagents, keep review with the lead, and add an adversarial check when you want one.">
     <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
-
     <header class="site-header">
-      <a class="brand" href="#top" aria-label="Agent Team Harness home">
+      <a class="brand" href="#top" aria-label="Team for Herdr home">
         <img src="assets/logo.svg" alt="" width="36" height="36">
-        <span>Agent Team Harness</span>
+        <span>Team for Herdr</span>
       </a>
       <nav aria-label="Primary">
         <a href="#quickstart">Get started</a>
-        <a href="#team-start">cmux</a>
         <a href="#roles">Roles</a>
         <a href="#workflow">Workflow</a>
-        <a href="#messaging">Messaging</a>
+        <a href="#steering">Steering</a>
         <a class="nav-button" href="https://github.com/andrewnova/agent-team-harness">GitHub</a>
       </nav>
     </header>
@@ -29,371 +27,178 @@
     <main id="main">
       <section class="hero" id="top" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow">Native agents &middot; optional cmux coordination</p>
-          <h1 id="hero-title">Your task. A native team.</h1>
-          <p class="lede">
-            Use <code>/team</code> in Claude Code or select <code>@team</code> in Codex.
-            Your session leads, delegates useful independent work, and gets a fresh review.
-            Add <code>cmux</code> when you want a coordinated workspace with visible agent tabs.
-          </p>
+          <p class="eyebrow">Claude Code + Codex · Powered by Herdr</p>
+          <h1 id="hero-title">One skill.<br>Your team.</h1>
+          <p class="lede">Start with either native agent. Approve the builder for your task, let useful work run in parallel, and keep the final review with your lead. Add a separate adversarial check when you want one.</p>
           <div class="hero-actions">
-            <a class="button primary" href="#quickstart">Install the skill</a>
-            <a class="button secondary" href="#team-start">Use cmux</a>
+            <a class="button primary" href="#quickstart">Get started</a>
+            <a class="button secondary" href="https://github.com/andrewnova/agent-team-harness/blob/main/plugins/agent-team-harness/skills/team/SKILL.md">Read the skill</a>
           </div>
-          <p class="credit">Created and maintained by Andrew Guzman. Source on GitHub.</p>
+          <p class="credit">Created and maintained by Andrew Guzman. One shared Markdown file.</p>
         </div>
-
-        <figure class="hero-figure">
-          <img src="assets/cmux-team-hero.png" width="1672" height="941" alt="Conceptual artwork: four terminal panels connected to a central message tray inside one dark frame.">
-          <figcaption>Conceptual artwork of the experimental team workflow. Direct sessions do not need the harness.</figcaption>
+        <figure class="team-mock" aria-labelledby="mock-caption">
+          <div class="mock-window">
+            <div class="mock-sidebar">
+              <span class="mock-label">Herdr workspace</span>
+              <ul role="list"><li class="is-active">your-project</li></ul>
+            </div>
+            <div class="mock-main">
+              <ul class="mock-tabs" role="list" aria-label="Example team roles">
+                <li class="is-active"><span class="tab-name">Lead</span><span class="tab-meta">Claude or Codex</span></li>
+                <li><span class="tab-name">Build</span><span class="tab-meta">You approve the choice</span></li>
+                <li><span class="tab-name">Adversarial</span><span class="tab-meta">Optional · separate agent</span></li>
+              </ul>
+              <dl class="mock-pane">
+                <div><dt>Before dispatch</dt><dd>The lead recommends a builder and asks whether you want an adversarial check.</dd></div>
+                <div><dt>During the work</dt><dd>Both runtimes use useful native subagents, with clear scopes and separate writer checkouts.</dd></div>
+                <div><dt>At the finish</dt><dd>The lead reviews the actual result, verifies it, and evaluates any adversarial findings.</dd></div>
+              </dl>
+            </div>
+          </div>
+          <figcaption id="mock-caption">Illustrative role layout. Herdr shows the main agents; internal subagents may appear only within their parent CLI.</figcaption>
         </figure>
       </section>
 
-      <section class="section quickstart" id="quickstart" aria-labelledby="skill-title">
+      <section class="band intro" aria-label="The team at a glance">
+        <div><span class="stat">Either agent can lead</span><p>Your invoking Claude Code or Codex session keeps the task, context, and final decision.</p></div>
+        <div><span class="stat">Choose before dispatch</span><p>Builder routing is a recommendation. You approve it and choose whether to add adversarial work.</p></div>
+        <div><span class="stat">Useful parallelism</span><p>Use as many useful native children as configured limits allow. Their parent owns the results and cleanup.</p></div>
+      </section>
+
+      <section class="section quickstart" id="quickstart" aria-labelledby="setup-title">
         <div class="quickstart-copy">
-          <p class="eyebrow">Start here</p>
-          <h2 id="skill-title">Install once. Call your team.</h2>
-          <p>One shared skill works in Claude Code, Codex desktop, and Codex CLI. Start with your signed-in native app and open the repository you want to work on.</p>
-          <p>The installer adds skill links. Your native model, trust, and permission settings stay in force.</p>
-          <p>Prefer to work without the skill? Use the <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/direct-sessions.md">direct-session guide</a>.</p>
+          <p class="eyebrow">01 · One-time setup</p>
+          <h2 id="setup-title">Install the shared skill.</h2>
+          <p>You need <a href="https://herdr.dev/docs/install/">Herdr</a>, Git, and the native CLIs you plan to use, installed and signed in. The supplied skill installer uses Bash on macOS or Linux.</p>
+          <p>Keep the clone at a stable location. The installer links the same skill into Claude Code, Codex, and the shared skills directory.</p>
+          <p>Your native model, effort, trust, and permission settings stay in force. Model availability depends on your accounts.</p>
         </div>
         <div class="quickstart-main">
           <div class="code-block" data-copy>
-            <div class="code-top"><span class="code-title">One-time skill setup</span></div>
+            <div class="code-top"><span class="code-title">Install from GitHub</span></div>
             <pre><code>git clone https://github.com/andrewnova/agent-team-harness.git
 cd agent-team-harness
 ./scripts/install-team-skill.sh</code></pre>
             <p class="code-status" role="status" aria-live="polite"></p>
           </div>
-          <p>Keep this clone available: both apps read the same skill source. If you already have the clone, update it and run the installer there. Existing different skills are preserved. Start a new native session if <code>team</code> is not visible.</p>
+          <p>Already using this clone? Update it when your working tree is clean. If a different skill is installed, use <code>./scripts/install-team-skill.sh --refresh</code> to preserve a backup and replace it.</p>
+          <details>
+            <summary>Optional: enable native conversation restore</summary>
+            <p>Herdr's official integrations record native session identity for eligible conversation recovery after a server restart. They add hooks to your native CLI configuration. Start fresh agent sessions after installing them.</p>
+            <div class="code-block" data-copy>
+              <div class="code-top"><span class="code-title">Official Herdr integrations</span></div>
+              <pre><code>herdr integration install claude
+herdr integration install codex
+herdr integration status</code></pre>
+              <p class="code-status" role="status" aria-live="polite"></p>
+            </div>
+            <p>These hooks do not implement a global pause. <a href="https://herdr.dev/docs/integrations/">Integration details</a>.</p>
+          </details>
+        </div>
+      </section>
+
+      <section class="section quickstart" id="start" aria-labelledby="start-title">
+        <div class="quickstart-copy">
+          <p class="eyebrow">02 · Start a task</p>
+          <h2 id="start-title">Open your project in Herdr.</h2>
+          <p>Run Herdr from your project directory. If it attaches to an existing session, select or create the workspace for this project.</p>
+          <p>Inside that workspace's shell pane, confirm the project directory and start <code>codex</code> or <code>claude</code>. That native session becomes your lead.</p>
+          <p>This workflow starts inside Herdr. Invoking the skill in a desktop chat outside Herdr does not launch a team.</p>
+        </div>
+        <div class="quickstart-main">
+          <div class="code-block" data-copy>
+            <div class="code-top"><span class="code-title">In your terminal</span></div>
+            <pre><code>cd /absolute/path/to/your/project
+herdr</code></pre>
+            <p class="code-status" role="status" aria-live="polite"></p>
+          </div>
           <div class="table-wrap">
             <table class="routing invocation">
-              <caption>Choose your app and give it a task</caption>
-              <thead>
-                <tr><th scope="col">App</th><th scope="col">Native work</th><th scope="col">cmux team</th></tr>
-              </thead>
+              <caption>After starting your native agent inside Herdr</caption>
+              <thead><tr><th scope="col">Lead</th><th scope="col">Type in the agent prompt</th></tr></thead>
               <tbody>
-                <tr>
-                  <th scope="row">Claude Code</th>
-                  <td data-label="Native work"><code>/team &lt;task&gt;</code></td>
-                  <td data-label="cmux team"><code>/team cmux</code></td>
-                </tr>
-                <tr>
-                  <th scope="row">Codex desktop</th>
-                  <td data-label="Native work">Select <code>@team</code>, then enter your task</td>
-                  <td data-label="cmux team">Select <code>@team</code>, then type <code>cmux</code></td>
-                </tr>
-                <tr>
-                  <th scope="row">Codex CLI</th>
-                  <td data-label="Native work"><code>$team &lt;task&gt;</code></td>
-                  <td data-label="cmux team"><code>$team cmux</code></td>
-                </tr>
+                <tr><th scope="row">Codex</th><td data-label="Prompt"><code>$team Add a settings page and verify saving preferences</code></td></tr>
+                <tr><th scope="row">Claude Code</th><td data-label="Prompt"><code>/team Add a settings page and verify saving preferences</code></td></tr>
               </tbody>
             </table>
           </div>
-          <p><code>team cmux</code> opens a team ready for work. Append a task to hand it to the ready lead, such as <code>/team cmux Build the settings page</code>. <a href="#team-start">See cmux requirements and startup</a>.</p>
-          <p>Native work stays in your current session, with useful child agents and a fresh read-only review. Simultaneous writers use separate checkouts. Coordinated cmux teams remain experimental. <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/native-workflow-findings.md">Trial findings</a>.</p>
-        </div>
-      </section>
-
-      <section class="band intro" aria-label="Coordinated cmux teams at a glance">
-        <div>
-          <span class="stat">cmux: one project, many tabs</span>
-          <p>The lead and every worker or reviewer are native tabs in a single cmux project. Every agent has a tab you can open.</p>
-        </div>
-        <div>
-          <span class="stat">Private checkouts</span>
-          <p>Each job that writes code works in its own separate checkout. The lead assembles the reported commits into one feature worktree.</p>
-        </div>
-        <div>
-          <span class="stat">Review by the other model</span>
-          <p>Whichever model leads, fresh sessions of the opposite model review the assembled feature before it can be called ready.</p>
-        </div>
-      </section>
-
-      <section class="section layout" id="layout" aria-labelledby="layout-title">
-        <div class="section-head">
-          <p class="eyebrow">Experimental teams</p>
-          <h2 id="layout-title">A lead, its workers, and its reviewers, all as tabs you can watch and steer.</h2>
-          <p class="section-lede">
-            The launcher creates one cmux project in the sidebar and opens the lead as the first
-            agent tab. When you give the lead a task, it creates a worker or reviewer tab for each
-            job it dispatches. Each tab is a real native Codex or Claude Code session with its own
-            login, workspace-trust, and approval prompts, and you can type into any of them. Inside
-            a tab, the session can fan out into its own child agents.
-          </p>
-        </div>
-
-        <figure class="cmux-mock" aria-labelledby="mock-caption">
-          <div class="mock-window">
-            <div class="mock-sidebar">
-              <span class="mock-label">Projects</span>
-              <ul role="list">
-                <li class="is-active">Team &middot; your-project</li>
-              </ul>
-            </div>
-            <div class="mock-main">
-              <ul class="mock-tabs" role="list" aria-label="Team tabs">
-                <li class="is-active">
-                  <span class="tab-name">lead-1</span>
-                  <span class="tab-meta">Codex &middot; Astra</span>
-                </li>
-                <li>
-                  <span class="tab-name">backend-1</span>
-                  <span class="tab-meta">Codex &middot; Astra</span>
-                </li>
-                <li>
-                  <span class="tab-name">frontend-1</span>
-                  <span class="tab-meta">Claude Code &middot; Fable</span>
-                </li>
-                <li>
-                  <span class="tab-name">reviewer-1</span>
-                  <span class="tab-meta">Claude Code &middot; Fable &middot; read-only</span>
-                </li>
-              </ul>
-              <dl class="mock-pane">
-                <div>
-                  <dt>Lead owns</dt>
-                  <dd>The brief, job assignments, repair decisions, and final acceptance.</dd>
-                </div>
-                <div>
-                  <dt>Lead dispatches</dt>
-                  <dd>Worker and reviewer jobs from the command line, up to the active-job cap. Child agents inside a job are not counted. There is no background scheduler.</dd>
-                </div>
-                <div>
-                  <dt>Lead waits for</dt>
-                  <dd>Each job's own report in the mailbox, not terminal activity.</dd>
-                </div>
-              </dl>
-            </div>
-          </div>
-          <figcaption id="mock-caption">
-            Example layout with an Astra lead. Job names and the number of tabs depend on the task.
-            With a Fable lead, the reviewer tabs are fresh Astra sessions instead.
-          </figcaption>
-        </figure>
-
-        <div class="cards three tab-types">
-          <article>
-            <h3>Lead tab</h3>
-            <p>The first agent tab. Holds the brief, creates the feature worktree, dispatches jobs, and decides what gets repaired and accepted.</p>
-          </article>
-          <article>
-            <h3>Worker tabs</h3>
-            <p>One per implementation job. Each has a private, writable checkout and a scoped prompt, can split independent pieces across its own child agents, and reports its commit back to the lead.</p>
-          </article>
-          <article>
-            <h3>Reviewer tabs</h3>
-            <p>Fresh, read-only sessions of the opposite model. They see the brief, the exact candidate, and the full integrated diff, fan out child agents across independent risk areas, and return one verdict with findings.</p>
-          </article>
+          <p>The lead recommends the builder and its scope, asks you to approve or change that choice, and offers an optional adversarial agent. Then it starts the approved work.</p>
+          <p>A bare <code>/team</code> or <code>$team</code> prepares the workspace and waits for your task. Start a fresh native session if the skill is not visible.</p>
         </div>
       </section>
 
       <section class="section roles" id="roles" aria-labelledby="roles-title">
         <div class="section-head">
           <p class="eyebrow">Who does what</p>
-          <h2 id="roles-title">Astra builds the backend. Fable builds the frontend. The other model reviews.</h2>
-          <p class="section-lede">
-            Either model can lead. Whichever one does, review comes from fresh sessions of the
-            opposite model, started as separate read-only jobs even when that model also
-            implemented part of the feature.
-          </p>
+          <h2 id="roles-title">The lead reviews.<br>You choose the team.</h2>
+          <p class="section-lede">Frontend and backend routing guides the recommendation. Your task and explicit choices decide the actual assignment.</p>
         </div>
-
         <div class="table-wrap">
           <table class="routing">
-            <caption>Default routing for an experimental native team</caption>
-            <thead>
-              <tr>
-                <th scope="col">Assignment</th>
-                <th scope="col">Runtime</th>
-                <th scope="col">Model</th>
-              </tr>
-            </thead>
+            <caption>Roles in the shared skill</caption>
+            <thead><tr><th scope="col">Role</th><th scope="col">Responsibility</th><th scope="col">Selection</th></tr></thead>
             <tbody>
-              <tr>
-                <th scope="row">Lead</th>
-                <td data-label="Runtime">Codex by default, or Claude Code with <code>--leader claude</code></td>
-                <td data-label="Model">Astra or Fable</td>
-              </tr>
-              <tr>
-                <th scope="row">Backend implementation and repairs</th>
-                <td data-label="Runtime">Codex, private writable checkout</td>
-                <td data-label="Model">Astra</td>
-              </tr>
-              <tr>
-                <th scope="row">Frontend implementation and repairs</th>
-                <td data-label="Runtime">Claude Code, private writable checkout</td>
-                <td data-label="Model">Fable</td>
-              </tr>
-              <tr>
-                <th scope="row">Review when Astra leads</th>
-                <td data-label="Runtime">Fresh Claude Code sessions, read-only</td>
-                <td data-label="Model">Fable</td>
-              </tr>
-              <tr>
-                <th scope="row">Review when Fable leads</th>
-                <td data-label="Runtime">Fresh Codex sessions, read-only</td>
-                <td data-label="Model">Astra</td>
-              </tr>
+              <tr><th scope="row">Lead</th><td data-label="Responsibility">Plan, delegate, personally review, integrate, and verify.</td><td data-label="Selection">Invoking Claude or Codex</td></tr>
+              <tr><th scope="row">Frontend builder</th><td data-label="Responsibility">Implement and repair the approved UI scope.</td><td data-label="Selection">Recommend Fable; ask first</td></tr>
+              <tr><th scope="row">Backend builder</th><td data-label="Responsibility">Implement and repair the approved backend scope.</td><td data-label="Selection">Recommend Codex; ask first</td></tr>
+              <tr><th scope="row">Adversarial</th><td data-label="Responsibility">Challenge the candidate and the lead's assessment with evidence. A separate agent from both lead and builder.</td><td data-label="Selection">Optional; ask first</td></tr>
             </tbody>
           </table>
         </div>
-
         <ul class="notes">
-          <li>Every job names its model explicitly. The harness never swaps in a different model on its own.</li>
-          <li>Each job can run child agents inside its native session, using Astra at xhigh or Fable at medium with Claude Code Agent Teams. Children inherit the configured model and effort. Children report to their own job, not to the harness, and the job owns their scope, checkouts, permissions, and shutdown.</li>
-          <li>If a reviewer's native session pauses or switches models, that review is not finished. Treat its result as unaccepted until the assigned review completes and a valid verdict is imported.</li>
-          <li>Model availability depends on your own Codex and Claude accounts.</li>
+          <li>Mixed tasks may use one builder or separate frontend and backend assignments. The lead explains its recommendation before dispatch.</li>
+          <li>Both runtimes use useful native children within the approved scope and configured limits. Each parent gives them clear assignments, verifies their work, and closes them when done.</li>
+          <li>A declined adversarial check stays declined. Native children do not require a separate approval for each assignment, but cannot be used to recreate that declined role.</li>
+          <li>Unavailable models are reported, never silently substituted.</li>
         </ul>
       </section>
 
       <section class="section workflow" id="workflow" aria-labelledby="workflow-title">
         <div class="section-head">
-          <p class="eyebrow">Feature workflow</p>
-          <h2 id="workflow-title">Assemble the whole feature first. Then freeze it, review it, and repair it.</h2>
-          <p class="section-lede">
-            Reviewers always see one complete, committed candidate, never a moving target.
-            Every step below is something the lead does deliberately from the command line.
-            There is no automatic scheduler.
-          </p>
+          <p class="eyebrow">From task to result</p>
+          <h2 id="workflow-title">Clear scopes.<br>Useful evidence.</h2>
+          <p class="section-lede">Herdr provides the workspace and agent controls. The skill defines how the team works together.</p>
         </div>
-
         <ol class="steps" role="list">
-          <li>
-            <span class="step-num" aria-hidden="true">01</span>
-            <div>
-              <h3>Brief</h3>
-              <p>You give the lead a task. It writes the feature brief with acceptance criteria and creates one feature worktree on its own branch.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-num" aria-hidden="true">02</span>
-            <div>
-              <h3>Dispatch</h3>
-              <p>The lead creates worker jobs, each with a private checkout and a scoped prompt, and launches the ones whose dependencies are finished, up to the active-job cap.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-num" aria-hidden="true">03</span>
-            <div>
-              <h3>Assemble</h3>
-              <p>Workers report their commits. The lead imports each one into the feature worktree, with the allowed paths stated up front. Importing a commit does not approve it.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-num" aria-hidden="true">04</span>
-            <div>
-              <h3>Freeze</h3>
-              <p>Once the complete feature is committed, the lead takes a snapshot. That exact candidate is what reviewers and checks are measured against.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-num" aria-hidden="true">05</span>
-            <div>
-              <h3>Review and check</h3>
-              <p>Fresh reviewer sessions from the opposite model receive the brief, the candidate, and the full integrated diff. Each reviewer can fan out child agents across independent risk areas and returns one verdict. Declared checks run on an isolated checkout of the same candidate at the same time. Every finding points at source.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-num" aria-hidden="true">06</span>
-            <div>
-              <h3>Repair</h3>
-              <p>The lead collects the whole review round, batches the fixes, commits, and snapshots again. Every required reviewer and check runs again on the new candidate. Earlier approvals do not carry over.</p>
-            </div>
-          </li>
-          <li>
-            <span class="step-num" aria-hidden="true">07</span>
-            <div>
-              <h3>Eligible</h3>
-              <p>The feature is eligible once every required current reviewer verdict and check passes and all required findings are resolved with evidence. Eligible means ready for integration. It does not merge, publish, or deploy anything by itself.</p>
-            </div>
-          </li>
+          <li><span class="step-num" aria-hidden="true">01</span><div><h3>Agree on the assignment</h3><p>The lead inspects the project, recommends a builder, and asks whether to add adversarial work. Existing approval covers routine follow-ups on the same task and lineup.</p></div></li>
+          <li><span class="step-num" aria-hidden="true">02</span><div><h3>Build in parallel where it helps</h3><p>Workers get bounded scopes and completion criteria. Simultaneous writers use separate worktrees. Parents collect their native children's results.</p></div></li>
+          <li><span class="step-num" aria-hidden="true">03</span><div><h3>Review the actual result</h3><p>The lead inspects the complete candidate and source. If approved, a fresh adversarial agent challenges it. The lead evaluates findings and sends justified repairs back to the builder.</p></div></li>
+          <li><span class="step-num" aria-hidden="true">04</span><div><h3>Verify and hand back</h3><p>Run relevant checks, including browser verification for UI when available. Report the result, evidence, and remaining gaps. Leave the main tabs available for inspection.</p></div></li>
         </ol>
       </section>
 
-      <section class="section messaging" id="messaging" aria-labelledby="messaging-title">
+      <section class="section" id="steering" aria-labelledby="steering-title">
         <div class="section-head">
-          <p class="eyebrow">How the tabs talk</p>
-          <h2 id="messaging-title">Messages live in a local mailbox. A wake only says "go read it."</h2>
+          <p class="eyebrow">Stay in control</p>
+          <h2 id="steering-title">Steer through your lead.</h2>
         </div>
-
         <div class="cards three">
-          <article>
-            <h3>One mailbox, on disk</h3>
-            <p>Every message between jobs is appended to the harness's existing local mailbox, addressed to a specific job and attempt. The record survives a closed tab, and you can read any job's inbox yourself.</p>
-          </article>
-          <article>
-            <h3>The same tools in both CLIs</h3>
-            <p>Codex and Claude Code each get the same small local MCP server, bound to their own job: report ready or a result, send a message, read the inbox, reply. Your global Codex and Claude settings are left alone.</p>
-          </article>
-          <article>
-            <h3>Wakes are not replies</h3>
-            <p>After a send, cmux delivers a short wake to the recipient's tab asking it to read its inbox. The mailbox holds the real message. Text appearing in a terminal is not a reply, and a job is ready only when it reports ready itself.</p>
-          </article>
+          <article><h3>Change the requirement</h3><p>Tell the lead what changed. It updates affected workers and review criteria while preserving completed work.</p></article>
+          <article><h3>Say “pause team”</h3><p>The lead stops dispatching, asks parents to hold their children, interrupts active workers, and reports what remains active or unverified.</p></article>
+          <article><h3>Resume explicitly</h3><p>An unexplained interruption holds the assignment. The lead inspects existing work before resuming on your instruction.</p></article>
         </div>
+        <p class="section-note">Pause is an instruction the agents follow, not an enforced global stop. An idle parent does not prove its children stopped. Detaching from Herdr keeps agent processes running.</p>
       </section>
 
-      <section class="section quickstart" id="team-start" aria-labelledby="quickstart-title">
-        <div class="quickstart-copy">
-          <p class="eyebrow">Experimental cmux teams</p>
-          <h2 id="quickstart-title">Add cmux to your team command.</h2>
-          <p>After <a href="#quickstart">installing the skill</a>, use <code>/team cmux</code> in Claude Code, select <code>@team</code> and type <code>cmux</code> in Codex desktop, or use <code>$team cmux</code> in Codex CLI.</p>
-          <p>The skill starts or reuses the current project's team. You can append a task for the lead, or leave it ready for your next instruction.</p>
-          <h3>Before you start</h3>
-          <ul class="checklist">
-            <li>macOS with <a href="https://cmux.com/">cmux</a> installed</li>
-            <li>Git, plus an existing Git repository for the team to work on</li>
-            <li>Node.js 22.13.0 or newer</li>
-            <li><a href="https://learn.chatgpt.com/docs/codex/cli">Codex</a> 0.153.4 or newer and <a href="https://code.claude.com/docs/en/setup">Claude Code</a> 2.1.263 or newer, installed and signed in</li>
-            <li>Account access to the configured models, Astra and Fable by default</li>
-          </ul>
-          <p class="quickstart-note">
-            Startup must run in a cmux terminal. From a desktop session, the skill uses available
-            native computer control to open one; otherwise it gives you the command to run there.
-            Native login and trust prompts may still need your attention.
-          </p>
+      <section class="section" id="about" aria-labelledby="about-title">
+        <div class="section-head">
+          <p class="eyebrow">Small by design</p>
+          <h2 id="about-title">Reuse the tools.<br>Keep your workflow in one file.</h2>
+          <p class="section-lede">The skill reads <code>herdr --skill</code> for control instructions matched to your installed Herdr version. Native Claude and Codex own their model execution and subagents.</p>
         </div>
-
-        <div class="quickstart-main">
-          <div class="code-block" data-copy>
-            <div class="code-top">
-              <span class="code-title">Manual startup &middot; inside cmux</span>
-            </div>
-            <pre><code>cd /absolute/path/to/agent-team-harness
-node scripts/start-team.js --project /absolute/path/to/your/repo</code></pre>
-            <p class="code-status" role="status" aria-live="polite"></p>
-          </div>
-
-          <p>Use your harness clone and the absolute path to the Git repository you want the team to work on. Manual startup is also available without installing the skill.</p>
-          <h3>What happens next</h3>
-          <ol class="next-steps">
-            <li>The launcher creates the cmux project and opens the lead as the first agent tab. The skill uses your current native app as lead; manual startup defaults to Codex with Astra. Up to four jobs run at once, including the lead. Child agents inside a job are not counted.</li>
-            <li>Complete the native login and workspace-trust prompts in the lead tab so the lead is ready.</li>
-            <li>The skill hands off any task you supplied after the lead is ready. With manual startup, give the ready lead your task. It creates worker and reviewer tabs as it needs them.</li>
-            <li>Native login, workspace-trust, and approval prompts stay visible; the native permission policy remains in force.</li>
-          </ol>
-          <p>
-            Prefer a Claude Code lead with Fable? Add <code>--leader claude</code> to the last
-            command. Reviewers then come from fresh Astra sessions.
-          </p>
-          <p>
-            The <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/cmux-team.md">native teams documentation</a>
-            covers job and feature definitions, assembly, checks, review results, and how to stop or diagnose a job.
-          </p>
+        <div class="cards three">
+          <article><h3>Herdr</h3><p>Workspace, tabs, panes, and native agent control. <a href="https://herdr.dev/docs/agent-skill/">Official agent skill</a>.</p></article>
+          <article><h3>Team</h3><p>Builder approval, lead review, optional adversarial work, useful parallelism, and steering. <a href="https://github.com/andrewnova/agent-team-harness/blob/main/plugins/agent-team-harness/skills/team/SKILL.md">Read the whole file</a>.</p></article>
+          <article><h3>Project history</h3><p>The earlier cmux coordinator and legacy harness remain in the repository as historical experiments. They are not required for this workflow. <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/cmux-team.md">Historical guide</a>.</p></article>
         </div>
+        <p class="section-note">The earlier Herdr counter trial passed seven tests and browser checks. The revised skill's approval, adversarial, pause, and restart flows still need live acceptance. There is no established speed or reliability advantage over other team workflows.</p>
       </section>
     </main>
-
     <footer>
-      <span>Agent Team Harness</span>
+      <span>Team for Herdr</span>
       <span>Created by Andrew Guzman</span>
-      <span class="footer-links">
-        <a href="https://github.com/andrewnova/agent-team-harness">GitHub</a>
-        <a href="https://github.com/andrewnova/agent-team-harness/blob/main/docs/direct-sessions.md">Guide</a>
-      </span>
+      <span class="footer-links"><a href="https://github.com/andrewnova/agent-team-harness">GitHub</a><a href="https://github.com/andrewnova/agent-team-harness#quickstart">Setup guide</a><a href="https://herdr.dev/docs/">Herdr docs</a></span>
     </footer>
-
     <script src="script.js" defer></script>
   </body>
 </html>
