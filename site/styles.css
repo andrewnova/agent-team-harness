@@ -273,7 +273,7 @@ h3 {
 }
 
 .hero-figure figcaption,
-.cmux-mock figcaption {
+.team-mock figcaption {
   margin-top: 12px;
   color: var(--muted);
   font-size: 14px;
@@ -349,9 +349,9 @@ footer {
   margin-bottom: 0;
 }
 
-/* Layout section: cmux mock */
+/* Herdr role illustration */
 
-.cmux-mock {
+.team-mock {
   margin: 0 0 40px;
 }
 
@@ -515,7 +515,7 @@ footer {
   color: var(--amber);
   font-family: var(--mono);
   font-weight: 700;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .invocation tbody th {
@@ -862,4 +862,36 @@ footer {
   footer {
     flex-direction: column;
   }
+}
+
+/* Setup details and explanatory notes */
+details {
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(23, 27, 31, .78);
+}
+
+summary {
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 700;
+}
+
+details[open] summary {
+  margin-bottom: 18px;
+}
+
+details > :last-child {
+  margin-bottom: 0;
+}
+
+.section-note {
+  max-width: 840px;
+  margin: 24px 0 0;
+  font-size: 15px;
+}
+
+section[id] {
+  scroll-margin-top: 96px;
 }

@@ -1,28 +1,54 @@
 ---
 name: team
-description: Run a requested team coding workflow in the current Claude Code or Codex session, using native agents for independent work and a fresh review. Use when the user invokes team or asks for this workflow.
+description: Run a visible coding team in Herdr with approved task-based builders, parallel native subagents, lead review, and an optional separate adversarial check. Use when the user invokes team or asks for this Herdr workflow.
 ---
 
 # Team
 
-Use the task and constraints in the invoking message. A leading `cmux` after the skill name selects the coordinated mode below: `team cmux` opens a team ready for a task; `team cmux <task>` also hands off that task. Otherwise use the native workflow. Mentioning cmux as the subject of an ordinary coding task does not select coordinated mode.
+Use the user's task and constraints. The invoking native Claude Code or Codex session remains lead. Preserve model, effort, permissions, and planning-only or review-only scope. Herdr owns terminals and agent control; the lead owns assignments, review, integration, and final verification.
 
-Preserve the user's model, effort, permission settings, and requested scope, including review-only or planning-only work. In native mode, keep the current session as lead; if no task or active objective is available, ask for the task before launching agents.
+## Start in the right project
 
-## Native workflow
+Before control commands, verify `HERDR_ENV=1`. Outside Herdr, explain that this workflow starts in a native agent inside the intended project's Herdr workspace; do not spoof the environment or operate another client's focused session.
 
-1. Inspect the intended repository and its instructions. Identify the requested behavior and the checks that would demonstrate it.
-2. Keep the critical path with the lead. Delegate bounded, independent assignments through this runtime's native agent tools when that improves completion. Give each agent its scope, context, and completion criteria. Avoid duplicate assignments; a small task may need only the lead and a reviewer.
-3. Give simultaneous writers separate checkouts or worktrees. The lead integrates their results and owns verification and child cleanup. Do not create a new harness coordinator, receiver daemon, or MCP configuration for this workflow.
-4. Run the relevant checks. Give a fresh read-only reviewer the requirements, actual base, complete candidate diff, and source access. Use a native child with independent context or a fresh native session; keep the same runtime unless the user requests another. Review-only requests can go directly to this step. Do not create a second implementation writer for review.
-5. Evaluate findings, make justified repairs within scope, and rerun affected checks. Changed source needs corresponding review. A planning-only task should receive review of its plan, without implementation. Stop or close your children and report the result, verification, and material gaps.
+Read `herdr --skill` once for the installed version's control instructions. Use its CLI guidance without copying or maintaining a second command manual.
 
-Keep review tied to the delivered candidate. Commit, merge, publish, and external-service authority comes from the user's request, not from invoking this skill. If a fresh reviewer is unavailable, disclose that gap; do not describe self-review as independent.
+Resolve the intended repository and inspect its instructions and current changes. Use one workspace for that project. If the invoking workspace belongs to another project, resolve that mismatch before launching workers. Reuse the current lead and suitable agents already assigned to this project; inspect live state before creating replacements. A bare invocation prepares the workspace and waits for a task without inventing implementation work.
 
-## Explicit cmux coordination
+## Confirm the team and make work visible
 
-If the user requests the experimental coordinated cmux workflow, read the packaged [native cmux guide](../agent-team-harness/references/native-cmux.md) instead. Resolve that reference from this skill's real source location when it is symlink-installed. Use the actual harness checkout and target repository. Native sessions remain the default; do not start the legacy daemon as a fallback.
+Use separate named tabs for **Lead**, **Build**, and, only if approved, **Adversarial**. Either Codex or Claude Code can lead. Recommend Fable through Claude Code for frontend work and Codex for backend work. For a mixed task, explain whether one builder or separate frontend/backend assignments fit better. These are recommendations, not automatic assignments.
 
-- Resolve the target from the current project or the user's explicit path. `team cmux` alone authorizes startup, without inventing implementation work. Select the current native runtime as lead unless the user chooses another.
-- Run the guide's starter from a terminal inside cmux. From a desktop session outside cmux, use available authorized native computer control to open cmux and a terminal for this launch, then run the starter there. If that control is unavailable, give the exact command to run in a cmux terminal. Do not spoof cmux environment variables or weaken its socket policy.
-- Inspect the returned coordinator, job, and health. Reuse the existing lead when reported; wait for native readiness and inspect blocking login or trust prompts before claiming activation. If a task was supplied, enter it once into that exact lead's native terminal after it is ready and confirm its acknowledgment. Do not impersonate a harness job to send the user's task. Without a supplied task, leave the ready lead waiting for the user.
+Before launching or dispatching workers for a task, show the recommended builder/model and scope, ask Andrew to approve or change it, and explicitly ask whether he wants a separate adversarial check. Offer the proposed adversarial runtime as part of that choice. If declined, omit the role and dedicated adversarial work; lead review and normal verification still apply. Verify proposed models are available; do not silently substitute. Preserve native effort and permissions unless the user chooses otherwise. Existing approval covers the same task and lineup, including routine follow-ups and retries; ask again for a material change.
+
+The lead always performs the review. When requested, the adversarial role must be a separate native agent with fresh context, never the lead or the implementation author. It challenges assumptions, failure cases, and missed requirements; it does not replace the lead's judgment or implement the candidate. Do not assume its model must differ from the lead's unless the user requests that.
+
+Use returned workspace/tab/pane IDs and unique live agent names scoped to this workspace. Keep background creation unfocused. Start agents in available shell panes and inspect their actual startup UI before calling them ready. Resolve routine choices under existing authorization; report login or permission decisions that need the user.
+
+Give simultaneous writers separate Git worktrees with disjoint assignments. Create each worker tab with its worktree as cwd. Give an approved adversarial agent a separate checkout of the actual candidate. For non-Git work, use separate copies or one writer. Keep the main roles visible in Herdr; their native subagents may be visible only inside the parent CLI. Do not represent each internal subagent as a separate Herdr Agents entry.
+
+## Favor useful parallelism
+
+Speed matters. Encourage both Claude and Codex, including the lead, to use as many useful native subagents as their configured limits allow for independent parts of their respective assignments. Keep the critical path with the parent; parallelize investigation, distinct implementation scopes, and relevant checks without duplicating work or creating needless coordination. Give every child a bounded objective, context, write scope, and completion criteria; isolate simultaneous writers. Stay within approved scope and model choices. Individual native children do not require another approval, but they must not be used to perform a declined adversarial check. Parents collect results, review and verify them, and close their children when done.
+
+## Delegate and collect
+
+Each assignment states the objective, absolute working directory, write scope, relevant requirements, completion evidence, and permission to use useful native subagents. Tell workers to finish, collect their children's results, report changed files and checks, then wait. They do not re-invoke this team skill or create additional top-level Herdr teams. Use `herdr agent prompt` to submit work and bounded waits of at most 30 seconds so the lead remains responsive.
+
+Read actual replies and inspect the resulting source or artifacts. `idle` and `done` are terminal lifecycle states, not proof of task completion. A repeated request matching work already running means observing that assignment without re-prompting or interrupting its worker. A wait timeout or ambiguous result is a reason to inspect, not resend the assignment or start another writer. Use the upstream skill's file-output fallback only when terminal history cannot provide the result.
+
+## Steering and pauses
+
+Route new requirements through the lead. Send each approved affected worker a concise update and update the review and adversarial criteria. Preserve work already completed; do not restart the task merely because requirements changed. Apply the dispatch approval rule if the change needs a different builder or materially different scope.
+
+If a worker shows an unexplained interruption or the user reports pressing Esc, hold that assignment and report it. Do not automatically continue it, transfer it to another writer, or send another prompt until the user resumes it. An interruption deliberately initiated by the lead for an authorized update may be resumed by that lead.
+
+On **pause team**, stop dispatching work and have each parent hold or stop its native children. Interrupt non-lead workers that are running or awaiting approval through documented Herdr controls; never approve a tool solely to pause it. Inspect and report what stopped and what remains active, blocked, or unverified, including children. A parent appearing idle does not prove its children stopped. Resume only on the user's explicit instruction after inspecting existing work and live identities. Keep pause intent in any handoff. Esc affects a native agent; this is a behavioral convention, not an enforced global stop or a guarantee that background processes exited.
+
+## Review and finish
+
+The lead personally reviews the latest requirements, actual base, complete candidate diff, and source. If the user approved the adversarial check, give that separate agent the same materials and ask it to challenge the implementation and lead's assessment with concrete evidence, not a required number of findings. The lead evaluates its findings and owns the final decision. Review-only work ends with findings. For implementation work, have the approved builder repair justified issues, rerun affected checks, review changed source, and recheck any affected adversarial concerns. Do not invent findings to exercise a repair loop.
+
+Verify relevant behavior, including a real browser for a user-facing UI when available. Do not repeat passed checks without a change or unresolved concern. Report the result, artifact paths, checks, lead review, adversarial findings and their disposition, and remaining limitations. Commit, merge, and publication authority comes from the user's task.
+
+Leave the team's tabs available and agents idle for inspection. Stop only temporary processes this task owns, using their specific handles or verified PIDs. After a resume or restart, rediscover agents and inspect Git/work before issuing commands; never replay completed assignments based only on old names or sidebar state.
