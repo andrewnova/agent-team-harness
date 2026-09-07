@@ -2,7 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { encodeFrame, decodeFrames } = require("./claudeServer");
-const { getJob, bindJob, jobInbox, sendJobMessage, reportJob, reportJobResult } = require("../team/jobs");
+const { getJob, bindJob, jobInbox, sendJobMessage, reportJob, reportJobResult, replyTask } = require("../team/jobs");
 
 const string = { type: "string", minLength: 1 };
 const jobId = { ...string, pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$" };
@@ -12,7 +12,7 @@ function toolDefinitions() {
   return [
     { name: "team_inbox", description: "Read durable messages addressed to this job's current attempt. No broadcast or native push.", inputSchema: schema({}) },
     { name: "team_send", description: "Send a durable addressed message as this job. The parent delivers any wake.", inputSchema: schema({ to_job: jobId, body: string, kind: { enum: ["request", "notify", "checkin"], type: "string" } }, ["to_job", "body"]) },
-    { name: "team_reply", description: "Reply to an inbox message using its message or request ID. Sender and recipient attempts are checked.", inputSchema: schema({ in_reply_to: string, body: string }, ["in_reply_to", "body"]) },
+    { name: "team_reply", description: "Reply to an inbox message. For an operator task, acknowledge before starting work; set task_status completed with the final result to close the task while keeping the lead available. Attempts are checked.", inputSchema: schema({ in_reply_to: string, body: string, task_status: { type: "string", enum: ["acknowledged", "completed"] } }, ["in_reply_to", "body"]) },
     { name: "team_report", description: "Report readiness or a semantic result. Terminal reports require result and to_job or in_reply_to; they never release a still-running process or checkout.", inputSchema: schema({ status: { type: "string", enum: ["ready", "completed", "failed", "cancelled"] }, result: string, to_job: jobId, in_reply_to: string }, ["status"]) }
   ];
 }
@@ -63,6 +63,7 @@ function replyTarget(context, inReplyTo) {
   const original = jobInbox(context.root, context.job_id, context.attempt)
     .find((message) => message.id === inReplyTo || message.request_id === inReplyTo);
   if (!original) throw new Error("reply target is not in this job's current inbox");
+  if (original.metadata.origin === "operator_task") throw new Error("use team_reply for operator tasks; team_report terminal status stops this session");
   return original.metadata.from_job;
 }
 
@@ -109,6 +110,8 @@ function dispatchTool(context, name, args = {}, requestMeta) {
   if (name === "team_inbox") return { ok: true, messages: jobInbox(context.root, context.job_id, context.attempt) };
   if (name === "team_send") return { ok: true, ...afterSend(context, send(args)) };
   if (name === "team_reply") {
+    if (args.in_reply_to.startsWith("task_")) return { ok: true, ...replyTask(context.root, context.job_id, context.attempt, args) };
+    if (args.task_status) throw new Error("task_status applies only to operator tasks");
     return { ok: true, ...afterSend(context, send({ ...args, kind: "reply", to_job: replyTarget(context, args.in_reply_to) })) };
   }
   if (args.to_job && args.in_reply_to) throw new Error("report accepts either to_job or in_reply_to, not both");

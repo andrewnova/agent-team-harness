@@ -6,6 +6,8 @@ For bounded coding or review work, use [direct native sessions](direct-sessions.
 
 ## Start a team
 
+Startup and job-state mutations use separate SQLite mutexes that release when their process exits. Recovering these short metadata locks preserves active jobs, capacity, and writer claims. Competing retries serialize on the same persistent mutex. Legacy directory locks recover only when a successful process inventory proves the recorded PID absent; missing owners or live/uncertain PIDs remain blocked for inspection. Never delete locks to release a running job, and preserve the permanent `start.lock.sqlite` and `state/jobs.lock.sqlite` files. These local mutexes require a filesystem with reliable SQLite locking.
+
 Install cmux, Git, Node.js >=22.13.0, Codex CLI >=0.153.4, and Claude Code >=2.1.263 on macOS; those are the native CLI versions verified with this workflow. Sign in to both coding CLIs and confirm account access to the chosen models. The target must be an existing Git repository.
 
 ### With the team skill
@@ -18,7 +20,7 @@ After the [one-time standalone skill installation](../README.md#invoke-the-team-
 | Codex desktop | Type `@team`, select the skill suggestion, then type `cmux` |
 | Codex CLI | `$team cmux` |
 
-The skill starts or reuses that project's team and selects the current native runtime as lead unless you choose another. It checks the returned coordinator, lead job, and health, then waits for native readiness. With no task, it leaves the ready lead waiting for you. Append a task, such as `/team cmux Build the settings page`, to enter it once in that exact lead's native terminal after readiness and confirm its acknowledgment.
+The skill starts or reuses that project's team and selects the current native runtime as lead unless you choose another. It checks the returned coordinator, lead job, and health, then waits for native readiness. With no task, it leaves the ready lead waiting for you. Append a task, such as `/team cmux Build the settings page`, to persist it before launch and confirm its acknowledgment in the task record. Startup retries preserve the same submission.
 
 Startup must execute inside a cmux terminal. From a desktop session, the agent uses available authorized native computer control to open cmux and run the starter there. If that control is unavailable, it gives you the exact command to run in a cmux terminal. Native authentication, trust, and permissions remain in force; complete any blocking native prompts before activation can finish.
 
@@ -49,6 +51,21 @@ node scripts/start-team.js --project /absolute/path/to/your/repo \
   --codex-bin "$HOME/.local/bin/codex" \
   --claude-bin "$HOME/.local/bin/claude"
 ```
+
+### Durable task handoff
+
+Save the exact task as UTF-8, then start or reuse the lead:
+
+```sh
+node scripts/start-team.js --project /absolute/target/repo \
+  --task-file /absolute/task.txt --task-id settings-page
+```
+
+The starter records the immutable text/hash before launch and returns `task.record_path`, its state, and the addressed job/attempt. Without `--task-id`, the exact text determines the ID. Retry the same ID and content; changed content under that ID is rejected. A deliberately new identical task needs a new ID. A warm lead receives a wake after persistence; a cold lead reads it on readiness. Startup also discovers unfinished saved tasks when a retry omits `--task-file`, and reports them in `tasks`. Wake failures preserve the submission and can be retried.
+
+Operator tasks appear in `team_inbox` as `from: human`, with `metadata.origin: operator_task`. The lead must `team_reply` to acknowledge before beginning. Repeated reads of an acknowledged task must continue existing work, never create duplicate assignments. Finish with `team_reply({in_reply_to, body, task_status: "completed"})`; this closes the task and leaves the interactive lead available. Inspect the task record for semantic acknowledgment and the final result.
+
+If an unfinished task belonged to a stopped lead, repeating startup reports `resume_required` in its task summary and a nonzero exit. A proven-dead launcher that exited before writing `launch.json` can be recovered automatically: no native allocation was requested, and any unacknowledged task can move to the replacement. Missing/uncertain launcher identity or existing launch evidence keeps ownership reserved. Inspect its prior deliveries and existing feature/job state, then repeat with `--resume-task` when continuing is authorized. The replacement receives previous acknowledgments/results so it can resume unfinished work. Startup never infers that earlier side effects did not happen. Completed tasks are not delivered again.
 
 This startup path does not install global skills or MCP configuration. Each native session receives the team tools and its assignment directly. Login, trust, and approval prompts stay visible in its terminal. The model defaults below describe the intended routing; your accounts must support the specified IDs.
 
@@ -117,7 +134,7 @@ Both CLIs receive the same local stdio MCP server, bound to a job ID and attempt
 - `team_report({status: "ready"})` confirms agent readiness. Allocating a pane alone does not.
 - `team_send({to_job, body})` appends a durable message to the existing mailbox.
 - `team_inbox({})` reads only the current addressed inbox.
-- `team_reply({in_reply_to, body})` replies to the original sender and attempt.
+- `team_reply({in_reply_to, body})` replies to the original sender and attempt, or acknowledges an operator task. For operator completion, add `task_status: "completed"`.
 
 After a send, the MCP process submits a short cmux wake to the recipient's recorded workspace and terminal UUIDs. The wake asks the recipient to read its inbox. The mailbox contains the actual message; terminal activity and a successful wake are not semantic replies. If the recipient is not ready, delivery stays pending and its startup instructions tell it to read its inbox. A failed wake preserves the sent message and returns the delivery error; retry the wake, not the send:
 
@@ -191,6 +208,8 @@ A wait observes one attempt and leaves the job unchanged when it times out. Star
 Uncertain allocation, lost surface identity, unobservable descendants, stale results, and locked/corrupt state fail visibly. Never clear a writer claim solely because a pane disappeared. Inspect and stop the exact owned processes before repairing coordinator state or retrying a job. Native session IDs are recorded when provided by the runtime; cmux UUIDs, process identity, and attempts always govern addressing.
 
 ## Validation boundary
+
+The later [first-use experiment](first-use-acceptance.md) reached Codex-led functional acceptance, but stopped before Claude-led review and repair completed. Repeated operator intervention and a worker cleanup mistake keep this workflow experimental. Direct native sessions remain the default.
 
 Desktop activation through the team skill, including task handoff, is specified in the skill instructions but has not been tested live. Validation of the public starter does not establish that desktop flow.
 

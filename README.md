@@ -43,7 +43,7 @@ cd agent-team-harness
 ./scripts/install-team-skill.sh
 ```
 
-For an existing clone, run the installer there; update first with `git pull --ff-only` only if `git status --short` is empty. The installer links one shared skill into Codex and Claude Code, so keep the clone at that location. It preserves any existing different `team` skill and installs no CLI wrapper, daemon, or MCP configuration.
+For an existing clone, run the installer there; update first with `git pull --ff-only` only if `git status --short` is empty. The installer links both `team` and the current `agent-team-harness` guide into Codex and Claude Code, so keep the clone at that location. If an existing skill differs, run `./scripts/install-team-skill.sh --refresh --source /absolute/stable/clone` to preserve numbered backups and install both from that clone. Repeating installation is a no-op. It installs no CLI wrapper, daemon, or MCP configuration.
 
 Then open your target project and invoke the skill:
 
@@ -63,7 +63,7 @@ For the experimental coordinated workflow, put `cmux` first after the skill name
 | Codex desktop | Select `@team`, then type `cmux` |
 | Codex CLI | `$team cmux` |
 
-The skill starts or reuses the current project's team, selecting your current native runtime as lead unless you choose another. `/team cmux` waits for readiness and leaves the lead ready for your task. Append a task, such as `/team cmux Build the settings page`, to enter it once in that lead's native terminal after readiness and confirm its acknowledgment.
+The skill starts or reuses the current project's team, selecting your current native runtime as lead unless you choose another. `/team cmux` waits for readiness and leaves the lead ready for your task. Append a task, such as `/team cmux Build the settings page`, to persist it through the starter and confirm the addressed lead's acknowledgment. The task survives startup delays and retries.
 
 Startup must execute in a cmux terminal. A desktop agent uses available authorized native computer control to open one and run the starter; if that control is unavailable, it gives you the exact command to run there. Native authentication, trust, and permissions still apply. See the [cmux guide](docs/cmux-team.md) for prerequisites, direct startup, and the current validation boundary.
 

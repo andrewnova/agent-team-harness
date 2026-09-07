@@ -4,6 +4,10 @@ const crypto = require("node:crypto");
 const { isDeepStrictEqual } = require("node:util");
 const { readJson, ensureDir } = require("../fsutil");
 const mailbox = require("../mailbox");
+const tasks = require("./tasks");
+const { withLock } = require("./lock");
+const { atomicJson } = require("./atomicJson");
+const processes = require("./processes");
 
 const ACTIVE = new Set(["launching", "running", "cancelling"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
@@ -45,26 +49,11 @@ function location(root, create = false) {
 }
 
 // One short root-wide critical section covers capacity, checkout ownership, and
-// attempt fencing. A crashed holder fails closed; never steal a live writer lock.
+// attempt fencing. Recovering this metadata mutex never releases a job writer.
 function locked(root, fn) {
   const loc = location(root, true);
   const lock = path.join(path.dirname(loc.dir), "jobs.lock");
-  const deadline = Date.now() + 1000;
-  while (true) {
-    try { fs.mkdirSync(lock); break; } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      if (Date.now() >= deadline) throw new Error("job state is locked; retry after the current operation (inspect a crashed holder before removing jobs.lock)");
-      // Independent native sessions often report at once. Serialize brief
-      // contention without stealing a stale lock or asking models to retry.
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-  }
-  try {
-    fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: process.pid, created_at: now() }));
-    return fn(loc);
-  } finally {
-    fs.rmSync(lock, { recursive: true });
-  }
+  return withLock(lock, () => fn(loc));
 }
 
 function load(loc, id) {
@@ -86,20 +75,7 @@ function all(loc) {
 
 function save(loc, job) {
   const file = path.join(loc.dir, `${identifier(job.id)}.json`);
-  const temporary = `${file}.${crypto.randomUUID()}.tmp`;
-  try {
-    const fd = fs.openSync(temporary, "wx", 0o600);
-    try {
-      fs.writeFileSync(fd, `${JSON.stringify(job, null, 2)}\n`);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(temporary, file);
-  } finally {
-    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
-  }
-  return job;
+  return atomicJson(file, job);
 }
 
 function routeRuntime(leader, role) {
@@ -179,8 +155,9 @@ function current(loc, id, attempt, active = true) {
   return job;
 }
 
-function claimJob(root, id, { max_active } = {}) {
+function claimJob(root, id, { max_active, launcher_pid } = {}) {
   if (!Number.isSafeInteger(max_active) || max_active < 1) throw new Error("max_active must be a positive integer");
+  if (launcher_pid !== undefined && launcher_pid !== process.pid) throw new Error("launcher pid must identify this process");
   return locked(root, (loc) => {
     const job = load(loc, id);
     const retryable = ["failed", "cancelled"].includes(job.status) || (job.status === "completed" && job.role === "review");
@@ -203,12 +180,34 @@ function claimJob(root, id, { max_active } = {}) {
       job.previous_attempts = [...(job.previous_attempts || []), {
         attempt: job.attempt, status: job.status, result: job.result, reported_result: job.reported_result,
         workspace_id: job.workspace_id, surface_id: job.surface_id, session_id: job.session_id,
-        pid: job.pid, runner_pid: job.runner_pid, runner_identity: job.runner_identity, parent_job: job.parent_job, parent_attempt: job.parent_attempt,
+        pid: job.pid, launcher_pid: job.launcher_pid, runner_pid: job.runner_pid, runner_identity: job.runner_identity, parent_job: job.parent_job, parent_attempt: job.parent_attempt,
         process_stopped: job.process_stopped, finished_at: job.finished_at
       }];
     }
-    for (const key of ["workspace_id", "surface_id", "session_id", "pid", "runner_pid", "runner_identity", "runner_started_at", "result", "reported_result", "ready_at", "finished_at"]) delete job[key];
-    return save(loc, { ...job, ...(parentAttempt ? { parent_attempt: parentAttempt } : {}), status: "launching", attempt: job.attempt + 1, process_stopped: false, updated_at: now() });
+    for (const key of ["workspace_id", "surface_id", "session_id", "pid", "launcher_pid", "prelaunch_recovered", "runner_pid", "runner_identity", "runner_started_at", "result", "reported_result", "ready_at", "finished_at"]) delete job[key];
+    return save(loc, { ...job, ...(launcher_pid ? { launcher_pid } : {}), ...(parentAttempt ? { parent_attempt: parentAttempt } : {}), status: "launching", attempt: job.attempt + 1, process_stopped: false, updated_at: now() });
+  });
+}
+
+// launch.json must be written before any cmux native allocation is requested.
+// Its absence plus a proven-dead launcher closes the claim/build crash gap.
+// Never infer death from age, an unavailable inventory, or a reused live PID.
+function recoverUnlaunchedJob(root, id) {
+  return locked(root, (loc) => {
+    const job = load(loc, id);
+    if (job.status !== "launching" || job.runner_pid || job.pid || job.workspace_id || job.surface_id || !Number.isSafeInteger(job.launcher_pid) || job.launcher_pid < 1) return false;
+    let rows;
+    try { rows = processes.inventory(); } catch { return false; }
+    if (!rows.some((row) => row.pid === process.pid) || rows.some((row) => row.pid === job.launcher_pid)) return false;
+    let dir = loc.cwd;
+    for (const part of [".agent-team", "sessions", job.id, String(job.attempt)]) {
+      dir = path.join(dir, part);
+      try { if (fs.realpathSync(dir) !== dir) return false; } catch (error) { if (error.code !== "ENOENT") return false; }
+    }
+    try { fs.lstatSync(path.join(dir, "launch.json")); return false; } catch (error) { if (error.code !== "ENOENT") return false; }
+    save(loc, { ...job, status: "failed", prelaunch_recovered: true, process_stopped: true,
+      result: "Launcher exited before native command preparation; no native allocation was requested.", finished_at: now(), updated_at: now() });
+    return true;
   });
 }
 
@@ -404,11 +403,36 @@ function jobInbox(root, id, attempt) {
       // must fail visibly instead of turning a lost result into an empty reply.
       if (message.body_path) fs.accessSync(path.resolve(loc.cwd, message.body_path), fs.constants.R_OK);
       return mailbox.loadMessage(loc.cwd, message.id, { include_body: true });
-    });
+    }).concat(tasks.inbox(loc.cwd, job));
+  });
+}
+
+function submitTask(root, input) {
+  return locked(root, (loc) => tasks.submit(loc.cwd, input));
+}
+
+function listTasks(root) {
+  return locked(root, (loc) => tasks.list(loc.cwd));
+}
+
+function assignTask(root, id, leadId, options) {
+  return locked(root, (loc) => {
+    const previous = tasks.read(loc.cwd, id)?.deliveries.at(-1);
+    const unlaunched = previous && !previous.replies.length && load(loc, previous.job_id).prelaunch_recovered === true;
+    return tasks.assign(loc.cwd, id, load(loc, leadId), { ...options, resume: options?.resume || unlaunched });
+  });
+}
+
+function replyTask(root, id, attempt, input) {
+  return locked(root, (loc) => {
+    const job = current(loc, id, attempt);
+    if (job.role !== "lead" || job.status === "cancelling") throw new Error("only the current available lead can reply to operator tasks");
+    return tasks.reply(loc.cwd, job, input);
   });
 }
 
 module.exports = {
   routeRuntime, createJob, listJobs, getJob, claimJob, claimRunner, bindJob, cancelJob,
-  reportJob, reportJobResult, finishJob, jobFinishedMessage, sendJobMessage, jobInbox
+  reportJob, reportJobResult, finishJob, jobFinishedMessage, sendJobMessage, jobInbox,
+  submitTask, listTasks, assignTask, replyTask, recoverUnlaunchedJob
 };
