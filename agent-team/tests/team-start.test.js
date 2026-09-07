@@ -4,7 +4,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
+const { once } = require("node:events");
 const { start } = require("../src/team/start");
 const jobs = require("../src/team/jobs");
 const { getProject } = require("../src/team/project");
@@ -137,6 +138,55 @@ test("retry repairs a task handoff interrupted after queued lead creation withou
   assert.equal(restarted.task.state, "submitted");
   assert.equal(jobs.listJobs(restarted.coordinator).length, 1);
   assert.equal(JSON.parse(fs.readFileSync(restarted.task.record_path)).deliveries.length, 1);
+  assert.deepEqual(f.calls, { project: 1, session: 1 });
+});
+
+test("startup discovers a persisted undelivered task even when the retry omits its file", (t) => {
+  const f = fixture(t);
+  const taskFile = path.join(f.dir, "task.txt");
+  fs.writeFileSync(taskFile, "Keep this durable task visible");
+  const interrupted = t.mock.method(jobs, "createJob", () => { throw new Error("interrupted after task persistence"); });
+  assert.throws(() => start({ ...f.values, "task-file": taskFile }, f.context), /interrupted/);
+  interrupted.mock.restore();
+  const restarted = start(f.values, f.context);
+  assert.equal(restarted.tasks.length, 1);
+  assert.equal(restarted.tasks[0].state, "submitted");
+  assert.equal(jobs.jobInbox(restarted.coordinator, restarted.job.id, 1)[0].body, "Keep this durable task visible");
+});
+
+test("SIGKILL after the lead claim recovers startup and the saved task without repeating a native allocation", { timeout: 10000 }, async (t) => {
+  const f = fixture(t);
+  const taskFile = path.join(f.dir, "task.txt");
+  fs.writeFileSync(taskFile, "One task through a crashed launcher");
+  const child = spawn(process.execPath, ["-e", `
+    const fs = require('node:fs');
+    const { start } = require(process.argv[1]);
+    const input = JSON.parse(process.argv[2]);
+    const rename = fs.renameSync;
+    fs.renameSync = (...args) => {
+      const result = rename(...args);
+      if (args[1].includes('/state/jobs/') && JSON.parse(fs.readFileSync(args[1])).status === 'launching') {
+        process.send({phase:'claimed'});
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      }
+      return result;
+    };
+    input.context.transport = {createProject(){throw Error('unexpected native allocation')},createSession(){throw Error('unexpected native allocation')}};
+    start(input.values,input.context);
+  `, require.resolve("../src/team/start"), JSON.stringify({ values: { ...f.values, "task-file": taskFile }, context: f.context })], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const exited = once(child, "exit");
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await exited; });
+  const phase = await Promise.race([once(child, "message").then(([message]) => message), exited.then(() => { throw new Error(stderr); })]);
+  assert.equal(phase.phase, "claimed");
+  child.kill("SIGKILL");
+  await exited;
+  const restarted = start(f.values, f.context);
+  assert.equal(restarted.reused, false);
+  assert.equal(restarted.tasks[0].state, "submitted");
+  assert.equal(jobs.listJobs(restarted.coordinator).filter((job) => job.prelaunch_recovered).length, 1);
+  assert.equal(jobs.jobInbox(restarted.coordinator, restarted.job.id, 1).length, 1);
   assert.deepEqual(f.calls, { project: 1, session: 1 });
 });
 

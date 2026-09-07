@@ -12,6 +12,7 @@ const { shellQuote } = require("../bridge/claudeChannel/utils");
 const runtimePolicy = require("../../native-team.config.json");
 const tasks = require("./tasks");
 const { withLock } = require("./lock");
+const { atomicJson } = require("./atomicJson");
 
 const usage = `Start a native coding team from a terminal inside cmux.
   node scripts/start-team.js --project /absolute/path/to/repo [options]
@@ -118,26 +119,35 @@ function start(values, { platform = process.platform, env = process.env, home = 
   if (fs.realpathSync(state) !== state) throw new Error("Coordinator state must not be aliased.");
   const lock = path.join(state, "start.lock");
   return withLock(lock, () => {
+    let all = jobs.listJobs(directory);
+    const configFile = path.join(state, "start.json");
+    if (all.some((job) => ["launching", "running", "cancelling"].includes(job.status) || (job.role === "lead" && job.status === "queued"))) {
+      const saved = JSON.parse(fs.readFileSync(configFile, "utf8"));
+      if (JSON.stringify(saved) !== JSON.stringify(config)) throw new Error("Active or queued jobs use a different startup configuration. Finish or cancel those jobs before changing it.");
+    }
     // Commit the caller's task before any native session can start. A retry
     // repairs an interrupted launch using this same immutable submission.
     if (submission) jobs.submitTask(directory, submission);
     const handoff = (lead) => {
-      if (!submission) return {};
-      const result = jobs.assignTask(directory, submission.id, lead.id, { resume: Boolean(values["resume-task"]) });
-      let delivery;
-      if (result.state === "submitted" && lead.status !== "queued") {
-        try {
-          const message = jobs.jobInbox(directory, lead.id, lead.attempt).find((row) => row.task_id === submission.id);
-          delivery = native.wakeMessage(directory, message, transport);
-        } catch (error) { delivery = { status: "failed", error: error.message }; }
-      }
-      return { task: { ...tasks.summary(directory, result), ...(delivery ? { wake: delivery } : {}) } };
+      const pending = jobs.listTasks(directory).filter((task) => task.status !== "completed" || task.id === submission?.id);
+      if (!pending.length) return {};
+      const summaries = pending.map((task) => {
+        const result = jobs.assignTask(directory, task.id, lead.id, { resume: task.id === submission?.id && Boolean(values["resume-task"]) });
+        let delivery;
+        if (result.state === "submitted" && lead.status !== "queued") {
+          try {
+            const message = jobs.jobInbox(directory, lead.id, lead.attempt).find((row) => row.task_id === task.id);
+            delivery = native.wakeMessage(directory, message, transport);
+          } catch (error) { delivery = { status: "failed", error: error.message }; }
+        }
+        return { ...tasks.summary(directory, result), ...(delivery ? { wake: delivery } : {}) };
+      });
+      return { tasks: summaries, ...(submission ? { task: summaries.find((task) => task.id === submission.id) } : {}) };
     };
-    const all = jobs.listJobs(directory);
+    for (const job of all.filter((job) => job.role === "lead" && job.status === "launching")) jobs.recoverUnlaunchedJob(directory, job.id);
+    all = jobs.listJobs(directory);
     const active = all.filter((job) => ["launching", "running", "cancelling"].includes(job.status));
     if (active.length) {
-      const saved = JSON.parse(fs.readFileSync(path.join(state, "start.json"), "utf8"));
-      if (JSON.stringify(saved) !== JSON.stringify(config)) throw new Error("Active jobs use a different startup configuration. Finish or cancel those jobs before changing it.");
       const lead = active.find((job) => job.role === "lead");
       if (!lead) throw new Error("Jobs from the previous lead are still active. Finish or cancel them before starting a new lead.");
       let controllerError;
@@ -158,8 +168,7 @@ function start(values, { platform = process.platform, env = process.env, home = 
     }
     const queued = all.filter((job) => job.role === "lead" && job.status === "queued");
     if (queued.length > 1) throw new Error("Multiple queued leads require inspection before startup");
-    if (queued.length && JSON.stringify(JSON.parse(fs.readFileSync(path.join(state, "start.json"), "utf8"))) !== JSON.stringify(config)) throw new Error("Queued lead uses a different startup configuration");
-    fs.writeFileSync(path.join(state, "start.json"), JSON.stringify(config, null, 2), { mode: 0o600 });
+    if (!queued.length) atomicJson(configFile, config);
     const id = queued[0]?.id || `lead-${crypto.randomUUID().slice(0, 8)}`;
     if (!queued.length) jobs.createJob(directory, { id, leader, role: "lead", model: config[`${leader}_model`], cwd: directory, writable: true, prompt: leadPrompt(config, id), dependencies: [] });
     const task = handoff(jobs.getJob(directory, id));
@@ -177,7 +186,7 @@ function main(args) {
     const [major, minor] = process.versions.node.split(".").map(Number);
     if (major < 22 || (major === 22 && minor < 13)) throw new Error("Node.js >=22.13.0 is required.");
     const result = start(values);
-    if (result.state === "blocked" || result.task?.state === "resume_required") process.exitCode = 1;
+    if (result.state === "blocked" || result.tasks?.some((task) => task.state === "resume_required")) process.exitCode = 1;
     process.stdout.write(`${JSON.stringify({ ...result, job: { id: result.job.id, runtime: result.job.runtime, model: result.job.model, status: result.job.status, ready_at: result.job.ready_at, workspace_id: result.job.workspace_id, surface_id: result.job.surface_id } }, null, 2)}\n`);
   } catch (error) { process.stderr.write(`Startup failed: ${error.message}\n`); process.exitCode = 1; }
 }

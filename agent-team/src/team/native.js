@@ -117,7 +117,7 @@ function buildNativeCommand(root, job, options = {}) {
 }
 
 function launchJob(root, id, { max_active, transport = createTransport(), ...options } = {}) {
-  let job = jobs.claimJob(root, id, { max_active });
+  let job = jobs.claimJob(root, id, { max_active, launcher_pid: process.pid });
   let command;
   try { command = buildNativeCommand(root, job, options); } catch (error) {
     jobs.finishJob(root, id, job.attempt, { status: "failed", result: error.message, process_stopped: true });

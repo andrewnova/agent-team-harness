@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { atomicJson } = require("./atomicJson");
 
 function validate(id, body) {
   if (typeof id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(id)) throw new Error("task id must be a path-safe identifier");
@@ -33,16 +34,7 @@ function read(root, id) {
 }
 
 function save(root, task) {
-  const target = file(root, task.id);
-  const temporary = `${target}.${crypto.randomUUID()}.tmp`;
-  try {
-    const fd = fs.openSync(temporary, "wx", 0o600);
-    try { fs.writeFileSync(fd, `${JSON.stringify(task, null, 2)}\n`); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.renameSync(temporary, target);
-    const dir = fs.openSync(path.dirname(target), "r");
-    try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
-  } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
-  return task;
+  return atomicJson(file(root, task.id), task);
 }
 
 function submit(root, { id, body }) {
@@ -61,7 +53,8 @@ function assign(root, id, job, { resume = false } = {}) {
   if (!task) throw new Error("unknown task id");
   if (task.status === "completed") return { task, state: "completed" };
   const attempt = job.status === "queued" ? job.attempt + 1 : job.attempt;
-  if (job.role !== "lead" || !["queued", "launching", "running"].includes(job.status) || job.reported_result) throw new Error("task recipient must be an available lead");
+  if (job.role !== "lead") throw new Error("task recipient must be a lead");
+  if (!["queued", "launching", "running"].includes(job.status) || job.reported_result) return { task, state: "recipient_unavailable" };
   const previous = task.deliveries.at(-1);
   if (previous && (previous.job_id !== job.id || previous.attempt !== attempt)) {
     if (!resume) return { task, state: "resume_required" };
@@ -72,9 +65,12 @@ function assign(root, id, job, { resume = false } = {}) {
   return { task: save(root, task), state: "submitted" };
 }
 
+function list(root) {
+  return fs.readdirSync(directory(root)).filter((name) => name.endsWith(".json")).sort().map((name) => read(root, name.slice(0, -5)));
+}
+
 function inbox(root, job, { includeCompleted = false } = {}) {
-  return fs.readdirSync(directory(root)).filter((name) => name.endsWith(".json")).sort().flatMap((name) => {
-    const task = read(root, name.slice(0, -5));
+  return list(root).flatMap((task) => {
     const delivery = task.deliveries.at(-1);
     if ((!includeCompleted && task.status === "completed") || delivery?.job_id !== job.id || delivery.attempt !== job.attempt) return [];
     return [{ id: delivery.message_id, request_id: delivery.message_id, from: "human", to: job.runtime, kind: "request",
@@ -104,4 +100,4 @@ function summary(root, result) {
     record_path: file(root, result.task.id), delivery: result.task.deliveries.at(-1) || null };
 }
 
-module.exports = { validate, submit, assign, inbox, reply, summary };
+module.exports = { validate, read, list, submit, assign, inbox, reply, summary };
