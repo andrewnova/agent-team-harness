@@ -44,15 +44,25 @@ test("legacy skill reference keeps daemon work mailbox-first and nonblocking", (
   assert.match(skill, /--allow-degraded-claude/);
 });
 
-test("README links to a runnable native starter and preserves legacy documentation", () => {
+test("README links to a runnable Herdr skill installer and preserves legacy documentation", () => {
   const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
-  const entry = readme.match(/node (scripts\/[a-z-]+\.js) --project/);
-  assert.ok(entry, "quickstart must identify the shipped starter");
-  const result = require("node:child_process").spawnSync(process.execPath, [path.join(root, entry[1]), "--help"], { encoding: "utf8" });
+  const entry = readme.match(/\.\/(scripts\/[a-z-]+\.sh)/);
+  assert.ok(entry, "quickstart must identify the shipped skill installer");
+  const result = require("node:child_process").spawnSync("/bin/bash", [path.join(root, entry[1]), "--help"], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  for (const option of ["--project", "--leader", "--max-active"]) assert.ok(result.stdout.includes(option));
+  assert.ok(result.stdout.includes("--refresh"));
+  assert.ok(result.stdout.includes("Herdr"));
   for (const name of ["cmux-team.md", "legacy-workflow.md"]) {
     assert.ok(readme.includes(`docs/${name}`));
     assert.ok(fs.existsSync(path.join(root, "docs", name)));
   }
+});
+
+test("historical cmux documentation retains a runnable manual starter", () => {
+  const guide = fs.readFileSync(path.join(root, "docs", "cmux-team.md"), "utf8");
+  const entry = guide.match(/node (scripts\/[a-z-]+\.js) --project/);
+  assert.ok(entry, "historical guide must identify the retained manual starter");
+  const result = require("node:child_process").spawnSync(process.execPath, [path.join(root, entry[1]), "--help"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  for (const option of ["--project", "--leader", "--max-active"]) assert.ok(result.stdout.includes(option));
 });
