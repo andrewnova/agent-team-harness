@@ -5,6 +5,7 @@ const { isDeepStrictEqual } = require("node:util");
 const { readJson, ensureDir } = require("../fsutil");
 const mailbox = require("../mailbox");
 const tasks = require("./tasks");
+const { withLock } = require("./lock");
 
 const ACTIVE = new Set(["launching", "running", "cancelling"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
@@ -46,26 +47,11 @@ function location(root, create = false) {
 }
 
 // One short root-wide critical section covers capacity, checkout ownership, and
-// attempt fencing. A crashed holder fails closed; never steal a live writer lock.
+// attempt fencing. Recovering this metadata mutex never releases a job writer.
 function locked(root, fn) {
   const loc = location(root, true);
   const lock = path.join(path.dirname(loc.dir), "jobs.lock");
-  const deadline = Date.now() + 1000;
-  while (true) {
-    try { fs.mkdirSync(lock); break; } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      if (Date.now() >= deadline) throw new Error("job state is locked; retry after the current operation (inspect a crashed holder before removing jobs.lock)");
-      // Independent native sessions often report at once. Serialize brief
-      // contention without stealing a stale lock or asking models to retry.
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-  }
-  try {
-    fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: process.pid, created_at: now() }));
-    return fn(loc);
-  } finally {
-    fs.rmSync(lock, { recursive: true });
-  }
+  return withLock(lock, () => fn(loc));
 }
 
 function load(loc, id) {
