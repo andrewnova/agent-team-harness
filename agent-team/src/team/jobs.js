@@ -4,6 +4,7 @@ const crypto = require("node:crypto");
 const { isDeepStrictEqual } = require("node:util");
 const { readJson, ensureDir } = require("../fsutil");
 const mailbox = require("../mailbox");
+const tasks = require("./tasks");
 
 const ACTIVE = new Set(["launching", "running", "cancelling"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
@@ -404,11 +405,28 @@ function jobInbox(root, id, attempt) {
       // must fail visibly instead of turning a lost result into an empty reply.
       if (message.body_path) fs.accessSync(path.resolve(loc.cwd, message.body_path), fs.constants.R_OK);
       return mailbox.loadMessage(loc.cwd, message.id, { include_body: true });
-    });
+    }).concat(tasks.inbox(loc.cwd, job));
+  });
+}
+
+function submitTask(root, input) {
+  return locked(root, (loc) => tasks.submit(loc.cwd, input));
+}
+
+function assignTask(root, id, leadId, options) {
+  return locked(root, (loc) => tasks.assign(loc.cwd, id, load(loc, leadId), options));
+}
+
+function replyTask(root, id, attempt, input) {
+  return locked(root, (loc) => {
+    const job = current(loc, id, attempt);
+    if (job.role !== "lead" || job.status === "cancelling") throw new Error("only the current available lead can reply to operator tasks");
+    return tasks.reply(loc.cwd, job, input);
   });
 }
 
 module.exports = {
   routeRuntime, createJob, listJobs, getJob, claimJob, claimRunner, bindJob, cancelJob,
-  reportJob, reportJobResult, finishJob, jobFinishedMessage, sendJobMessage, jobInbox
+  reportJob, reportJobResult, finishJob, jobFinishedMessage, sendJobMessage, jobInbox,
+  submitTask, assignTask, replyTask
 };

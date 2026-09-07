@@ -8,6 +8,7 @@ const { execFileSync } = require("node:child_process");
 const { start } = require("../src/team/start");
 const jobs = require("../src/team/jobs");
 const { getProject } = require("../src/team/project");
+const mcp = require("../src/mcp/teamServer");
 
 function fixture(t) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "team-start-")));
@@ -30,6 +31,98 @@ function fixture(t) {
     context: { platform: "darwin", env: { CMUX_WORKSPACE_ID: crypto.randomUUID() }, home: path.join(dir, "home"), transport }
   };
 }
+
+for (const leader of ["codex", "claude"]) {
+  test(`${leader} startup persists one task before launch, reuses it before readiness and records acknowledgment`, (t) => {
+    const f = fixture(t);
+    const taskFile = path.join(f.dir, "task with spaces.txt");
+    const body = "Implement the requested page.\nPreserve quotes: '$HOME' and `literal`.\n";
+    fs.writeFileSync(taskFile, body);
+    const values = { ...f.values, leader, "task-file": taskFile, "task-id": "first-task" };
+    const create = f.transport.createSession;
+    f.transport.createSession = (input) => {
+      const job = jobs.listJobs(input.cwd)[0];
+      assert.equal(jobs.jobInbox(input.cwd, job.id, job.attempt)[0].body, body);
+      return create(input);
+    };
+    const first = start(values, f.context);
+    const second = start(values, f.context);
+    assert.equal(second.job.id, first.job.id);
+    assert.equal(second.task.state, "submitted");
+    assert.equal(second.task.wake.reason, "recipient_not_ready");
+    assert.equal(fs.readdirSync(path.dirname(first.task.record_path)).filter((name) => name.endsWith(".json")).length, 1);
+    const context = mcp.createContext({ root: first.coordinator, job_id: first.job.id, attempt: 1 });
+    const message = mcp.dispatchTool(context, "team_inbox").messages[0];
+    assert.equal(message.from, "human");
+    assert.equal(message.metadata.from_job, undefined);
+    assert.equal(mcp.dispatchTool(context, "team_reply", { in_reply_to: message.id, body: "I will handle this task" }).status, "acknowledged");
+    mcp.dispatchTool(context, "team_report", { status: "ready" });
+    const warm = start(values, f.context);
+    assert.equal(warm.ready, true);
+    assert.equal(warm.task.state, "acknowledged");
+    assert.equal(warm.task.wake, undefined);
+    assert.deepEqual(f.calls, { project: 1, session: 1 });
+    const finished = { in_reply_to: message.id, body: "Implemented and verified", task_status: "completed" };
+    mcp.dispatchTool(context, "team_reply", finished);
+    assert.equal(mcp.dispatchTool(context, "team_reply", finished).idempotent, true);
+    assert.equal(jobs.getJob(first.coordinator, first.job.id).status, "running");
+    assert.deepEqual(mcp.dispatchTool(context, "team_inbox").messages, []);
+    assert.equal(start(values, f.context).task.state, "completed");
+    fs.writeFileSync(taskFile, "Changed task");
+    assert.throws(() => start(values, f.context), /different content/);
+    assert.equal(JSON.parse(fs.readFileSync(first.task.record_path)).body, body);
+  });
+}
+
+test("a stopped lead's unfinished task requires explicit resume and rejects the stale acknowledgment", (t) => {
+  const f = fixture(t);
+  const taskFile = path.join(f.dir, "task.txt");
+  fs.writeFileSync(taskFile, "Complete one implementation");
+  const values = { ...f.values, "task-file": taskFile };
+  const first = start(values, f.context);
+  const message = jobs.jobInbox(first.coordinator, first.job.id, 1)[0];
+  jobs.replyTask(first.coordinator, first.job.id, 1, { in_reply_to: message.id, body: "Work started" });
+  jobs.finishJob(first.coordinator, first.job.id, 1, { status: "cancelled", process_stopped: true });
+  const replacement = start(values, f.context);
+  assert.equal(replacement.task.state, "resume_required");
+  assert.deepEqual(jobs.jobInbox(first.coordinator, replacement.job.id, 1), []);
+  const resumed = start({ ...values, "resume-task": true }, f.context);
+  assert.equal(resumed.job.id, replacement.job.id);
+  const pending = jobs.jobInbox(first.coordinator, replacement.job.id, 1)[0];
+  assert.equal(pending.previous_deliveries[0].replies[0].body, "Work started");
+  assert.notEqual(pending.id, message.id);
+  assert.throws(() => jobs.replyTask(first.coordinator, first.job.id, 1, { in_reply_to: message.id, body: "Old process" }), /active/);
+  assert.throws(() => jobs.replyTask(first.coordinator, replacement.job.id, 1, { in_reply_to: message.id, body: "Wrong delivery" }), /current inbox/);
+  assert.equal(JSON.parse(fs.readFileSync(first.task.record_path)).deliveries.length, 2);
+});
+
+test("failed wake preserves the operator submission and retry uses the same addressed message", (t) => {
+  const f = fixture(t);
+  const first = start(f.values, f.context);
+  jobs.reportJob(first.coordinator, first.job.id, 1, { status: "ready" });
+  const taskFile = path.join(f.dir, "task.txt");
+  fs.writeFileSync(taskFile, "New warm task");
+  const values = { ...f.values, "task-file": taskFile };
+  f.transport.sendText = () => { throw new Error("native wake unavailable"); };
+  const result = start(values, f.context);
+  assert.equal(result.task.wake.status, "failed");
+  const addressed = jobs.jobInbox(first.coordinator, first.job.id, 1)[0];
+  f.transport.sendText = () => ({ surface_id: first.job.surface_id });
+  const retried = start(values, f.context);
+  assert.equal(retried.task.wake.status, "submitted");
+  assert.equal(retried.task.delivery.message_id, addressed.id);
+  assert.equal(jobs.jobInbox(first.coordinator, first.job.id, 1).length, 1);
+});
+
+test("invalid task flags and empty body fail before coordinator creation", (t) => {
+  const f = fixture(t);
+  const taskFile = path.join(f.dir, "empty.txt");
+  fs.writeFileSync(taskFile, "\n");
+  assert.throws(() => start({ ...f.values, "task-id": "unused" }, f.context), /require --task-file/);
+  assert.throws(() => start({ ...f.values, "task-file": taskFile }, f.context), /non-empty/);
+  assert.throws(() => start({ ...f.values, "task-file": "relative" }, f.context), /absolute/);
+  assert.equal(fs.existsSync(f.context.home), false);
+});
 
 test("public starter creates an isolated coordinator and preserves paths with spaces", (t) => {
   const f = fixture(t);

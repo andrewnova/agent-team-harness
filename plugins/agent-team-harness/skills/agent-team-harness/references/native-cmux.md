@@ -8,7 +8,7 @@ From a terminal inside cmux:
 node /absolute/harness/scripts/start-team.js --project /absolute/target/repo
 ```
 
-Use `--leader claude` for a Claude lead. The starter prints the coordinator path, lead job ID, and health. Repeating it inspects the active attempt. Inspect native trust, login, or approval prompts when blocked; do not silently switch models or workflows. Keep the user's normal native permission policy.
+Use `--leader claude` for a Claude lead. The starter prints the coordinator path, lead job ID, and health. To hand off a task, write its exact text to UTF-8 and add `--task-file /absolute/task.txt`, optionally `--task-id a-stable-id`. The starter persists it before launch and returns its record path; verify the lead's semantic acknowledgment there. Retry the same ID/content without pasting another task into the terminal. A stopped recipient requires explicit `--resume-task` after inspecting prior progress; completed tasks are not replayed. Repeating it inspects the active attempt. Inspect native trust, login, or approval prompts when blocked; do not silently switch models or workflows. Keep the user's normal native permission policy.
 
 The default cap is four harness jobs including the lead. Native child agents belong to their parent and are not included in this cap. Split substantial independent assignments; more agents are not an acceptance criterion. Each simultaneous writer needs a separate checkout.
 
