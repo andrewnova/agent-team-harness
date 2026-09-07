@@ -209,6 +209,8 @@ Uncertain allocation, lost surface identity, unobservable descendants, stale res
 
 ## Validation boundary
 
+The later [first-use experiment](first-use-acceptance.md) reached Codex-led functional acceptance, but stopped before Claude-led review and repair completed. Repeated operator intervention and a worker cleanup mistake keep this workflow experimental. Direct native sessions remain the default.
+
 Desktop activation through the team skill, including task handoff, is specified in the skill instructions but has not been tested live. Validation of the public starter does not establish that desktop flow.
 
 Hermetic tests cover routing, concurrent ownership, attempt fencing, addressed MCP messages, launch failures, source-bound review/check evidence, and CLI behavior. Live proof must separately establish model availability, native readiness, the two-way semantic exchange, direct steering, child-agent behavior inside a job, and shutdown on the installed CLIs. Successful unit tests do not establish those live properties.
